@@ -6,19 +6,21 @@ An on-prem AI SOC analyst that turns thousands of security alerts into a few exp
 
 Small companies run Linux servers and Windows endpoints, often with Wazuh as their only security tool and no 24/7 SOC. Existing AI SOC tools are enterprise-priced SaaS that require shipping raw logs to a vendor cloud. Real attacks stay buried in uncorrelated alerts.
 
-## How it works (planned)
+## How it works
 
-- Ingest Wazuh alerts and archives, Windows EVTX and Sysmon, and Linux auth.log, journald, and auditd.
-- Normalize sources into OCSF events and keep them in a local store.
-- Correlate deterministically by host, user, IP, process, and time window, and map to MITRE ATT&CK to form candidate incidents.
-- Triage candidate incidents on-prem with Muse Glimmer through an async batch queue.
-- Pseudonymize incidents before any external reasoning call.
-- Reason with Muse Spark for verdict, timeline, response in English or Spanish, and tool calls into the store.
-- Propose Sigma and Wazuh XML rules, backtest them against the data, and wait for human approval.
-- Review incidents in a web UI (planned) and check changes with an eval harness (planned).
+Corvus is not a SIEM. It plugs into the SIEM the organization already runs (Wazuh): the SIEM detects atomic events and stores logs; Corvus consumes alerts, correlates them into attack chains, reasons over them, and pushes learned rules back. Design: `docs/architecture.md`. Threat model: `docs/threat-model.md`.
+
+- Consume Wazuh alerts and archives through a `SiemAdapter`; Linux events arrive as Wazuh data, Windows coverage via Wazuh agents and public EVTX datasets through replay. No raw log parsing in hackathon scope.
+- Normalize into OCSF events. No local event store: PostgreSQL is the system of record (incidents, queue, checkpoints, rules) and the SIEM stays the log store, queried on demand.
+- Correlate deterministically by host, user, IP, process, and time window, map to MITRE ATT&CK, and set an explainable severity floor.
+- Triage each cluster on-prem with Muse Glimmer through an async batch queue. Glimmer alone sees raw evidence.
+- Pseudonymize condensed incidents before any external reasoning call.
+- Reason with Muse Spark in a bounded agent loop (`get_events`, `get_attack_technique`) for verdict, timeline, and response in English or Spanish.
+- Draft Sigma rules, backtest them, deploy to Wazuh in shadow mode, and wait for human approval.
+- Review incidents in the web UI and check changes with the eval harness.
 
 ```
-sources -> normalizers -> OCSF store -> correlation plus ATT&CK -> Glimmer triage -> pseudonymizer -> Spark reasoning -> proposed rules plus human approval
+Wazuh alerts/archives -> SiemAdapter -> OCSF -> correlation plus ATT&CK -> Glimmer triage -> pseudonymizer -> Spark reasoning -> Sigma rule -> backtest -> Wazuh shadow -> human approval
 ```
 
 ## Why Meta models
@@ -30,7 +32,7 @@ sources -> normalizers -> OCSF store -> correlation plus ATT&CK -> Glimmer triag
 
 ## How we measure it
 
-Ground truth comes from public attack datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES, AIT Log Data Set) and attack chains replayed live with Atomic Red Team in our own lab. Metrics are attack chains detected, alert-to-incident reduction, false positives, and rules that catch what was missed without new false positives.
+Ground truth comes from public attack datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) and Atomic Red Team chains in our own lab. Metrics are attack chains detected, alert-to-incident reduction, false positives (the primary gate), rule precision, injection robustness, cost, and latency. Every published number carries its n, window, and producing script.
 
 Results: TBD - published here as they are measured.
 

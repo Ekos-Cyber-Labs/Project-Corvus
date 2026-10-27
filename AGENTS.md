@@ -3,23 +3,27 @@
 Project Corvus is an on-prem AI SOC analyst for small teams with no 24/7 SOC that cannot ship logs to a vendor cloud.
 It was built during the Meta Global AI Developer Hackathon (Oct 27 - Nov 4, 2026). All product code is written in that window, so keep commit history honest.
 
+Corvus is NOT a SIEM. It plugs into the SIEM the organization already runs (Wazuh in hackathon scope): the SIEM detects atomic events and stores logs; Corvus consumes SIEM alerts through a `SiemAdapter`, queries the SIEM for context on demand, correlates alerts into attack chains deterministically, reasons over them with AI, and pushes learned rules back to the SIEM. Full design: `docs/architecture.md`. Threat model: `docs/threat-model.md`.
+
 ## Pipeline
 
-Sources (Wazuh alerts/archives, Windows EVTX/Sysmon, Linux auth.log/journald/auditd) go through normalizers into OCSF events and a store.
-Deterministic correlation (host, user, IP, process, time window) plus MITRE ATT&CK mapping produces candidate incidents.
-On-prem Muse Glimmer triages via an async batch queue, then a pseudonymizer runs before Muse Spark reasoning.
-Muse Spark returns verdict, timeline, response in English or Spanish, and tool calls into the store.
-Proposed Sigma and Wazuh XML rules are backtested against the data and need human approval.
-A web UI and an eval harness against ground truth sit alongside this.
+Linux events arrive as Wazuh alerts and archives (no raw log parsing in hackathon scope). Windows coverage comes from Wazuh agents and public EVTX datasets via replay.
+Alerts flow through the adapter into OCSF events; there is no local event store — PostgreSQL is the system of record (incidents, queue, checkpoints, agent steps, rules, dispositions, budgets), and the SIEM remains the log store queried on demand.
+Deterministic correlation (host, user, IP, process, time window) plus MITRE ATT&CK mapping produces candidate incidents with an explainable severity floor.
+On-prem Muse Glimmer triages each cluster via an async batch queue (it alone sees raw evidence), then a pseudonymizer runs before Muse Spark reasoning.
+Muse Spark runs a bounded agent loop (`get_events`, `get_attack_technique`) and returns verdict, timeline, response in English or Spanish.
+Proposed Sigma rules are backtested, deployed to Wazuh in shadow mode, and need human approval.
+A reduced web UI and an eval harness with an honest results table (every number carries n, window, producing script) sit alongside this.
 
-## Layout (proposed)
+## Layout
 
-- `corvus/connectors` — source ingestion.
-- `corvus/normalize` — source-specific normalizers to OCSF.
-- `corvus/store` — event and incident storage.
+- `corvus/adapters` — `siem.py` interface, `wazuh/`, `replay/`.
+- `corvus/normalize` — OCSF models and mappers.
+- `corvus/state` — Postgres schema, migrations, queue.
 - `corvus/correlate` — deterministic correlation and ATT&CK mapping.
-- `corvus/llm` — clients, prompts, JSON schemas, pseudonymizer.
-- `corvus/rules` — proposed detection rules and backtesting.
+- `corvus/llm` — clients, prompts, schemas, agent loop (`call.py`).
+- `corvus/guardrails` — validators, pseudonymizer, egress filter.
+- `corvus/learning` — rule generation, verification, shadow, promotion, lifecycle.
 - `corvus/api` — API backing the UI.
 - `ui/` — web UI.
 - `eval/` — eval harness and ground truth.
@@ -28,28 +32,50 @@ A web UI and an eval harness against ground truth sit alongside this.
 
 ## Commands
 
-TODO until the skeleton exists. Do not invent commands.
+- `make install` — install dependencies with uv (dev group included).
+- `make lint` — ruff check, ruff format check, mypy.
+- `make test` — pytest (`DATABASE_URL` enables the Postgres migration test).
+- `make up` / `make down` — start / stop `postgres`, `corvus-api`, `corvus-worker`.
+- `corvus version` — print the package version.
+- `corvus db migrate` — apply pending SQL migrations (reads `$DATABASE_URL`).
+- `CORVUS_ENV_FILE=/path/outside/repo.env docker compose up --build` — secrets
+  come from the file outside the repository, never from committed files.
 
 ## Hard rules
 
-1. Use only public datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES, AIT Log Data Set) or our own lab data. Never use real customer logs, company names, or people.
+1. Use only public datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) or our own lab data. Never use real customer logs, company names, or people.
 2. Never commit datasets. Use download scripts with checksums and license notes. Fixtures use RFC 5737 IPs and `example.com`.
 3. Read secrets only from environment variables such as `META_API_KEY`. Never put secrets in code, fixtures, logs, or test output.
 4. Send Muse Spark only condensed, pseudonymized incidents. Raw events never leave the on-prem path. Every Muse Spark call goes through the pseudonymizer.
 5. Keep correlation and scoring deterministic and explainable. Models triage, summarize, and narrate; they never silently decide scores.
 6. Run the eval harness for any change to normalizers, correlation, prompts, or models, and report the metric delta. False positives are the primary gate; detected attack chains must not regress.
 7. Agents never commit, amend, or push. The maintainer commits.
+8. Do not implement anything under Roadmap in docs/architecture.md unless the maintainer explicitly asks.
+9. MEMORY.md is committed to a public repository. Write in it only what could appear in the README: no IP addresses or hostnames of real infrastructure, no personal names, no secrets or key names with values, no paths outside this repository, no lab credentials, no content from datasets beyond file counts. Before writing to MEMORY.md, re-read this rule.
 
 ## Models
 
 Clients are OpenAI-compatible. Switching models is `base_url` plus model name.
 - On-prem triage: Muse Glimmer 30B, FP8 on vLLM, served as model `glimmer` at `GLIMMER_BASE_URL` (default `http://127.0.0.1:8001/v1`).
 - Reasoning: `muse-spark-1.3` at `META_BASE_URL=https://api.meta.ai/v1` with `META_API_KEY`.
-- Both models reason by default and reasoning tokens count against `max_tokens`. A low limit returns HTTP 200 with null content. Use `max_tokens >= 1500` and treat empty content as an error.
-- Glimmer reasoning arrives in `message.reasoning`. vLLM reports `reasoning_tokens` 0 even though the tokens are counted in `completion_tokens`.
-- Set Glimmer depth in the system message; triage uses `Reasoning strength: low`.
+- Both models reason by default and reasoning tokens count against `max_tokens`. A low limit returns HTTP 200 with null content. Use `max_tokens >= 1500` (Glimmer default 4200) and treat empty content as an error.
+- Glimmer reasoning arrives in `message.reasoning`. vLLM reports `reasoning_tokens` 0 even though the tokens are counted in `completion_tokens`; `call.py` requests `return_token_ids` and splits generated tokens by channel headers, so `llm_attempts` carries exact counts.
+- Set Glimmer depth in the system message. Reasoning strength (`low|medium|high`, default medium) is a per-purpose setting chosen by the evaluation harness, not by cost alone.
 - Glimmer does about 7 tokens/s per request and about 70 tokens/s at 16 concurrent, roughly 1-1.5 min per cluster. Keep triage as an async batch queue with up to 16 in flight, never per-event synchronous calls.
-- Validate all model output as JSON against a schema. Retry once, then record a failure in the eval.
+- All model output is validated by the self-correction loop in `corvus/llm/call.py`: validators run in order (syntax, schema, semantics, policy, security); on failure the output is discarded and the model is re-asked with a structured error, up to 3 attempts (attempt 3 escalates: temperature 0, more reasoning, simplified schema), then falls back to the other model per routing profile, then to the deterministic result marked "AI analysis failed". Security failures are never retried. Every attempt is recorded in `llm_attempts` and measured in the eval.
+
+## Roles
+
+Project-local skills under `.agents/skills/`:
+
+- `platform-engineer` — skeleton, packaging, Compose, Postgres, queue, API plumbing, config, health.
+- `detection-engineer` — adapters, normalizers, correlation, ATT&CK mapping, Sigma to Wazuh XML.
+- `llm-engineer` — clients, prompts, schemas, Glimmer queue, Spark agent loop, routing, pseudonymizer.
+- `security-reviewer` — threat model, guardrails, injection, egress, secrets, UI safety, rule poisoning.
+- `eval-engineer` — harness, ground truth, metrics, train/test split, reports.
+- `frontend-engineer` — React + Vite UI served by FastAPI.
+
+Every prompt names the role it works under. Changes under `corvus/llm`, `corvus/guardrails`, `corvus/learning`, `corvus/api`, or `ui/` finish with a `security-reviewer` pass.
 
 ## Conventions
 
@@ -57,3 +83,34 @@ Clients are OpenAI-compatible. Switching models is `base_url` plus model name.
 - Write code, comments, and docs in English.
 - Use OCSF classes 3002 Authentication, 1007 Process Activity, 4001 Network Activity, 1001 File System Activity, 1006 Scheduled Job Activity, and 2004 Detection Finding. Keep the raw event attached to every OCSF record.
 - Ship every normalizer with a fixture-based test.
+
+## Working agreements
+
+- One small module per prompt with input/output types and edge cases named.
+- A hand-written fixture before the code; tests derived from it.
+- No new dependencies, no ORM, no invented commands.
+- For any library whose API you are not certain of (pySigma, python-evtx/evtx in particular), inspect the installed package API and run a minimal check before using it; never write API names from memory.
+- Always paste the actual test and lint output; never claim success from reading code.
+- Integration tests must actually run in this development environment: if Postgres or another dependency is unreachable, stop and say so instead of reporting skipped tests as success.
+- Changes to normalizers, correlation, or prompts report the eval delta.
+
+## Known pitfalls (check before finishing)
+
+- Graceful shutdown on SIGTERM.
+- Lease expiry races and idempotent job handling.
+- Bounded queues.
+- Backoff with jitter.
+- Timezone-aware UTC datetimes.
+- Null vs missing fields.
+- XML namespaces.
+- Parquet types.
+- SKIP LOCKED ordering and short transactions.
+- Idempotent migrations.
+- Streams always closed.
+- Tool loops bounded.
+- Strict JSON validation.
+- Secrets never logged.
+- Prompts assembled with delimited, escaped untrusted data.
+- No timing-dependent tests.
+- Fakes at the HTTP boundary instead of deep mocks.
+- UI without effect loops or stale closures.
