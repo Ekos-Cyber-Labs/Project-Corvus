@@ -32,7 +32,7 @@ Wazuh alerts/archives -> SiemAdapter -> OCSF -> correlation plus ATT&CK -> Glimm
 
 ## How we measure it
 
-Ground truth comes from public attack datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) and Atomic Red Team chains in our own lab. Metrics are attack chains detected, alert-to-incident reduction, false positives (the primary gate), rule precision, injection robustness, cost, and latency. Every published number carries its n, window, and producing script.
+Ground truth comes from public attack datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) and Atomic Red Team chains in our own lab. Datasets are fetched reproducibly at pinned revisions with SHA-256 checksums (`scripts/fetch_datasets.py`, see `datasets/README.md`) into git-ignored `data/`; `eval/ground_truth.py` derives per-file ATT&CK labels into `data/ground_truth.json` (technique-level from OTRF metadata, tactic-level from EVTX folders). Metrics are attack chains detected, alert-to-incident reduction, false positives (the primary gate), rule precision, injection robustness, cost, and latency. Every published number carries its n, window, and producing script.
 
 Results: TBD - published here as they are measured.
 

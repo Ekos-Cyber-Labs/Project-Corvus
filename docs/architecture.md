@@ -130,7 +130,12 @@ require a human. Promotion is not a model tool.
 Every reported number carries its `n`, time window and producing script
 (e.g. `eval/run.py <args>`). False positives are the primary gate; detected
 attack chains must not regress on any change to normalizers, correlation,
-prompts or models. See `eval/` (design; harness ships the table).
+prompts or models. Dataset plumbing is implemented: `scripts/fetch_datasets.py`
+downloads the pinned OTRF and EVTX-ATTACK-SAMPLES revisions into git-ignored
+`data/`, verified against `datasets/checksums.txt`; `eval/ground_truth.py`
+writes `data/ground_truth.json` (per-file `dataset` / `techniques` /
+`tactics` / `label_source`; EVTX labels are tactic-level, OTRF labels are
+technique-level from metadata). Details: `datasets/README.md`.
 
 ### Supporting pieces (in scope)
 

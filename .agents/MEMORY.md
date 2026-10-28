@@ -82,3 +82,10 @@ rules back to Wazuh (shadow first, human approval).
   integration tests in `tests/test_queue.py`, with the shared
   Postgres guard in `tests/conftest.py`, and verified with
   `make lint` and the full `make test`. Awaiting maintainer commit.
+- 2026-10-28: added reproducible eval dataset plumbing
+  (`datasets/README.md` with pinned revisions and SHA-256 checksums,
+  `scripts/fetch_datasets.py`, `eval/ground_truth.py`): 279
+  EVTX-ATTACK-SAMPLES samples (tactic-level labels, technique tokens
+  kept when present) and 165 OTRF atomic Windows files (technique
+  labels from metadata). Data lives under git-ignored `data/` only.
+  Awaiting maintainer commit.
