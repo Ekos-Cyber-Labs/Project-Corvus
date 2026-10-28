@@ -222,7 +222,8 @@ technique-level from metadata). Details: `datasets/README.md`.
   Sigma rules on the same data. `[ROADMAP]` Splunk and Elastic adapters.
 - Normalization: everything inside Corvus is OCSF (pinned version). Classes:
   Authentication 3002, Process Activity 1007, Network Activity 4001, File
-  System Activity 1001, Scheduled Job Activity 1006, Detection Finding 2004.
+  System Activity 1001, Scheduled Job Activity 1006, Script Activity 1009,
+  Detection Finding 2004.
   All times UTC. Raw event kept on every record.
 - State: PostgreSQL is the system of record — incidents, durable work queue
   (`SELECT ... FOR UPDATE SKIP LOCKED`), ingestion checkpoints, agent steps,

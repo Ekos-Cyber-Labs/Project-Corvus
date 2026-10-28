@@ -113,5 +113,15 @@ rules back to Wazuh (shadow first, human approval).
   share under 5% on the representative files; the full census confirms
   it on every file). Later fix: channel-less records count under the
   `System.Provider` name instead of `unknown`, and Windows LogonType
-  12/13 map straight to OCSF `logon_type_id` 12/13. Awaiting maintainer
-  commit.
+  12/13 map straight to OCSF `logon_type_id` 12/13.
+- 2026-10-28: extended the Windows normalizer for the multi-stage chain:
+  Sysmon 10 maps to Process Activity with activity Open (source process
+  as `actor.process`, GrantedAccess verbatim in `actual_permissions`,
+  CallTrace kept in `unmapped` — the pinned 1.4.0 schema has no typed
+  slot for it), and PowerShell 4104 maps to the new Script Activity
+  class (1009, Execute; script text, block id, PowerShell type id
+  typed, message numbers in `unmapped`). Class/activity ids read from
+  the `ocsf-schema` v1.4.0 tag, not from memory. Census over every
+  replay file (857022 records): 259479 Sysmon 10 and 804 script-block
+  records newly map, zero leftovers in either bucket, everything else
+  unchanged. Awaiting maintainer commit.

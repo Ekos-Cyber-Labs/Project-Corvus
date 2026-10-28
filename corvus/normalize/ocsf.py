@@ -55,6 +55,8 @@ __all__ = [
     "ProcessActivity",
     "Product",
     "ScheduledJobActivity",
+    "Script",
+    "ScriptActivity",
     "User",
     "canonicalize_host",
     "canonicalize_ip",
@@ -411,6 +413,12 @@ class ProcessActivity(OcsfEventBase):
     category_uid: Literal[1] = 1
     activity_id: int = 1
     process: Process | None = None
+    # Pinned OCSF 1.4.0 ``process_activity.actual_permissions`` ("the
+    # permissions that were granted in a platform-native format",
+    # ``dictionary.json`` types it integer_t). Corvus keeps the original
+    # hex string (e.g. a Sysmon GrantedAccess mask) instead of coercing it,
+    # so the evidence stays verbatim.
+    actual_permissions: str | None = None
 
 
 class NetworkActivity(OcsfEventBase):
@@ -450,6 +458,48 @@ class ScheduledJobActivity(OcsfEventBase):
     job: Job | None = None
 
 
+class Script(BaseModel):
+    """OCSF script object: a script executed by a shell or engine.
+
+    Field meanings from the pinned OCSF 1.4.0 schema (``objects/script.json``
+    in ``ocsf-schema`` tag ``v1.4.0``): ``uid`` is the engine's execution id
+    (the PowerShell ``ScriptBlockId``), ``type_id`` 2 with ``type``
+    ``"PowerShell"`` names the PowerShell engine.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    uid: str | None = None
+    name: str | None = None
+    script_content: str | None = None
+    type: str | None = None
+    type_id: int | None = None
+
+    @field_validator("type_id")
+    @classmethod
+    def _check_type(cls, value: int | None) -> int | None:
+        # Enum from objects/script.json attributes.type_id.enum: 0 Unknown,
+        # 1 Windows Command Prompt, 2 PowerShell, 3 Python, 4 JavaScript,
+        # 5 VBScript, 6 Unix Shell, 7 VBA, 99 Other.
+        if value is not None and value not in (0, 1, 2, 3, 4, 5, 6, 7, 99):
+            raise ValueError("type_id must be one of 0-7 or 99 (Other)")
+        return value
+
+
+class ScriptActivity(OcsfEventBase):
+    """OCSF 1009 Script Activity (category 1, System Activity).
+
+    Class and activity from the pinned OCSF 1.4.0 schema
+    (``events/system/script_activity.json``: uid 9 under the system category,
+    activity 1 Execute).
+    """
+
+    class_uid: Literal[1009] = 1009
+    category_uid: Literal[1] = 1
+    activity_id: int = 1
+    script: Script | None = None
+
+
 class DetectionFinding(OcsfEventBase):
     """OCSF 2004 Detection Finding (category 2, Findings)."""
 
@@ -464,6 +514,7 @@ OcsfEvent = Annotated[
     | NetworkActivity
     | FileSystemActivity
     | ScheduledJobActivity
+    | ScriptActivity
     | DetectionFinding,
     Field(discriminator="class_uid"),
 ]

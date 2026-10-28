@@ -81,6 +81,10 @@ _SOURCE_CATEGORY: dict[tuple[str, str], SourceCategory] = {
         "Microsoft Windows",
         "Microsoft-Windows-TaskScheduler/Operational",
     ): "endpoint process",
+    (
+        "Microsoft Windows",
+        "Microsoft-Windows-PowerShell/Operational",
+    ): "endpoint process",
 }
 
 #: OCSF class -> inventory category fallback for unmapped sources.
@@ -90,6 +94,7 @@ _CLASS_CATEGORY: dict[int, SourceCategory] = {
     4001: "network",
     1001: "endpoint process",
     1006: "endpoint process",
+    1009: "endpoint process",
     2004: "other",
 }
 

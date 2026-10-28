@@ -120,10 +120,10 @@ def flat_taskscheduler_106() -> dict[str, Any]:
     }
 
 
-def flat_unmapped(*, event_id: int = 4688) -> dict[str, Any]:
-    """Flat Security record with no mapping (process creation is out of scope)."""
+def flat_unmapped(*, event_id: int = 4688, channel: str = "Security") -> dict[str, Any]:
+    """Flat record with no mapping (process creation is out of scope)."""
     return {
-        "Channel": "Security",
+        "Channel": channel,
         "EventID": event_id,
         "EventIdx": 108,
         "Hostname": "web01.example.com",
@@ -176,6 +176,70 @@ def evtx_sysmon_process() -> dict[str, Any]:
             },
         }
     }
+
+
+def flat_sysmon_access() -> dict[str, Any]:
+    """Flat Sysmon event 10 (one process opening a handle to another)."""
+    return {
+        "Channel": "Microsoft-Windows-Sysmon/Operational",
+        "EventID": 10,
+        "EventIdx": 112,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "UtcTime": SYS_UTCTIME,
+        "ProcessGuid": "{aaaaaaaa-1111-2222-3333-444444444444}",
+        "ProcessId": 888,
+        "Image": "C:\\Windows\\System32\\lsass.exe",
+        "User": "EXAMPLE\\jdoe",
+        "TargetProcessGUID": "{aaaaaaaa-1111-2222-3333-444444444444}",
+        "TargetProcessId": 888,
+        "TargetImage": "C:\\Windows\\System32\\lsass.exe",
+        "SourceProcessGUID": "{bbbbbbbb-5555-6666-7777-888888888888}",
+        "SourceProcessId": 4321,
+        "SourceThreadId": 5678,
+        "SourceImage": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "GrantedAccess": "0x1010",
+        "CallTrace": (
+            "C:\\Windows\\SYSTEM32\\ntdll.dll+9e0c0|"
+            "C:\\Windows\\System32\\KERNELBASE.dll+2a1b3"
+        ),
+    }
+
+
+def flat_powershell_script() -> dict[str, Any]:
+    """Flat PowerShell Operational 4104 (script block logging, one message)."""
+    return {
+        "Channel": "Microsoft-Windows-PowerShell/Operational",
+        "EventID": 4104,
+        "EventIdx": 113,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "User": "EXAMPLE\\jdoe",
+        "ScriptBlockText": "Get-Process | Where-Object { $_.CPU -gt 10 }",
+        "ScriptBlockId": "{cccccccc-9999-aaaa-bbbb-cccccccccccc}",
+        "MessageNumber": 1,
+        "MessageTotal": 1,
+    }
+
+
+def flat_powershell_script_split() -> list[dict[str, Any]]:
+    """One 4104 script block split across three messages (hand-made parts)."""
+    block = "{dddddddd-0000-1111-2222-333333333333}"
+    parts = (
+        "$data = Get-Process |",
+        "Where-Object { $_.CPU -gt 10 } |",
+        "Select-Object Name, CPU",
+    )
+    records = []
+    for number, text in enumerate(parts, start=1):
+        record = flat_powershell_script()
+        record["EventIdx"] = 113 + number
+        record["ScriptBlockId"] = block
+        record["ScriptBlockText"] = text
+        record["MessageNumber"] = number
+        record["MessageTotal"] = 3
+        records.append(record)
+    return records
 
 
 def evtx_rpc_no_channel() -> dict[str, Any]:

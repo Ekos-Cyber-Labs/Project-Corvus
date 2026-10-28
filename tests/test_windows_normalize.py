@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from corvus.normalize.windows import (
+    POWERSHELL_CHANNEL,
     SECURITY_CHANNEL,
     SYSMON_CHANNEL,
     TASKSCHEDULER_CHANNEL,
@@ -404,12 +405,14 @@ def test_replay_products_land_in_the_source_category_map() -> None:
         _normalize_record(fx.flat_sysmon_process()),
         _normalize_record(fx.flat_security_logon(success=True)),
         _normalize_record(fx.flat_taskscheduler_106()),
+        _normalize_record(fx.flat_powershell_script()),
     ]
     inventory = FakeAdapter(events).describe_sources()
     by_source = {entry.source: entry.category for entry in inventory.sources}
     assert by_source[f"Sysmon:{SYSMON_CHANNEL}"] == "endpoint process"
     assert by_source[f"Microsoft Windows:{SECURITY_CHANNEL}"] == "authentication"
     assert by_source[f"Microsoft Windows:{TASKSCHEDULER_CHANNEL}"] == "endpoint process"
+    assert by_source[f"Microsoft Windows:{POWERSHELL_CHANNEL}"] == "endpoint process"
 
 
 def test_lowercase_channel_maps_with_canonical_log_name() -> None:
@@ -569,3 +572,93 @@ def test_iter_dataset_file_streams_with_stats(tmp_path: Path) -> None:
         e.metadata.uid for e in collected.events
     ]
     assert collected.unmapped == stats.unmapped
+
+
+def test_sysmon_10_maps_to_process_open() -> None:
+    event = _normalize_record(fx.flat_sysmon_access())
+    assert event.class_uid == 1007
+    assert event.activity_id == 3
+    assert event.metadata.log_name == SYSMON_CHANNEL
+    assert event.metadata.product.name == "Sysmon"
+    assert event.time == fx.SYS_MS
+    assert event.actor is not None and event.actor.process is not None
+    assert event.actor.process.pid == 4321
+    assert event.actor.process.name == "powershell.exe"
+    assert event.process is not None
+    assert event.process.pid == 888
+    assert event.process.name == "lsass.exe"
+    assert event.process.file is not None
+    assert event.process.file.path == "C:\\Windows\\System32\\lsass.exe"
+    assert event.actual_permissions == "0x1010"
+    assert isinstance(event.actual_permissions, str)
+    assert "CallTrace" in event.unmapped
+    _check_no_drop(
+        fx.flat_sysmon_access(),
+        FLAT_ENVELOPE,
+        {
+            "Image",
+            "ProcessId",
+            "User",
+            "SourceImage",
+            "SourceProcessId",
+            "TargetImage",
+            "TargetProcessId",
+            "GrantedAccess",
+            "UtcTime",
+        },
+    )
+
+
+def test_powershell_4104_maps_to_script_activity() -> None:
+    event = _normalize_record(fx.flat_powershell_script())
+    assert event.class_uid == 1009
+    assert event.category_uid == 1
+    assert event.activity_id == 1
+    assert event.metadata.log_name == POWERSHELL_CHANNEL
+    assert event.metadata.product.name == "Microsoft Windows"
+    assert event.time == fx.SYS_MS
+    assert event.script is not None
+    assert event.script.script_content == "Get-Process | Where-Object { $_.CPU -gt 10 }"
+    assert event.script.uid == "{cccccccc-9999-aaaa-bbbb-cccccccccccc}"
+    assert event.script.type_id == 2
+    assert event.script.type == "PowerShell"
+    assert event.unmapped["MessageNumber"] == 1
+    assert event.unmapped["MessageTotal"] == 1
+    _check_no_drop(
+        fx.flat_powershell_script(),
+        FLAT_ENVELOPE,
+        {"User", "ScriptBlockText", "ScriptBlockId"},
+    )
+
+
+def test_powershell_split_script_block_keeps_every_message() -> None:
+    events = [_normalize_record(record) for record in fx.flat_powershell_script_split()]
+    assert len(events) == 3
+    assert {event.script.uid for event in events} == {
+        "{dddddddd-0000-1111-2222-333333333333}"
+    }
+    assert [event.unmapped["MessageNumber"] for event in events] == [1, 2, 3]
+    assert all(event.unmapped["MessageTotal"] == 3 for event in events)
+    assert "".join(event.script.script_content for event in events) == (
+        "$data = Get-Process |Where-Object { $_.CPU -gt 10 } |Select-Object Name, CPU"
+    )
+
+
+def test_unmapped_ids_still_count_per_channel_and_id(tmp_path: Path) -> None:
+    """New mappings do not change counting for other event ids."""
+    lines = [
+        json.dumps(fx.flat_sysmon_access()),
+        json.dumps(fx.flat_powershell_script()),
+        json.dumps(fx.flat_unmapped(event_id=7, channel=SYSMON_CHANNEL)),
+        json.dumps(fx.flat_unmapped(event_id=4105, channel=POWERSHELL_CHANNEL)),
+        json.dumps(fx.flat_unmapped()),
+    ]
+    archive = _write_zip(tmp_path / "mixed2.zip", {"events.json": lines})
+    result = read_dataset_file(archive, dataset_rel="mixed2.zip")
+    assert len(result.events) == 2
+    assert {event.class_uid for event in result.events} == {1007, 1009}
+    assert result.unmapped == {
+        (SYSMON_CHANNEL, 7): 1,
+        (POWERSHELL_CHANNEL, 4105): 1,
+        ("Security", 4688): 1,
+    }

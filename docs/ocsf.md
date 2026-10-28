@@ -6,7 +6,7 @@ Everything inside Corvus is OCSF at the version pinned by
 schema (schema.ocsf.io). Every event's `metadata.version` defaults to that
 constant, so a version bump is a one-line change.
 
-Shared rules for all six classes:
+Shared rules for all seven classes:
 
 - `type_uid` is computed as `class_uid * 100 + activity_id`. It is a
   read-only computed field: any `type_uid` present in input is ignored and
@@ -38,10 +38,11 @@ Detection Finding has no mapper yet.
 | OCSF class | class_uid | category_uid | Activity IDs we use | Source |
 |---|---|---|---|---|
 | Authentication | 3002 | 3 | 1 Logon, 2 Logoff, 3 Authentication Ticket, 4 Service Ticket Request, 5 Service Ticket Renew, 6 Preauth | `windows.py` (Security 4624/4625) |
-| Process Activity | 1007 | 1 | 1 Launch, 2 Terminate, 3 Open, 4 Inject, 5 Set User ID | `windows.py` (Sysmon 1) |
+| Process Activity | 1007 | 1 | 1 Launch, 2 Terminate, 3 Open, 4 Inject, 5 Set User ID | `windows.py` (Sysmon 1, Sysmon 10 as Open) |
 | Network Activity | 4001 | 4 | 1 Open, 2 Close, 3 Reset, 4 Fail, 5 Refuse, 6 Traffic, 7 Listen | `windows.py` (Sysmon 3) |
 | File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open | `windows.py` (Sysmon 11) |
 | Scheduled Job Activity | 1006 | 1 | 1 Create, 2 Update, 3 Delete, 4 Enable, 5 Disable, 6 Start | `windows.py` (Security 4698, TaskScheduler 106) |
+| Script Activity | 1009 | 1 | 1 Execute | `windows.py` (PowerShell 4104) |
 | Detection Finding | 2004 | 2 | 1 Create, 2 Update, 3 Close |  |
 
 Other activity IDs pass through unchanged; the table lists the schema
@@ -61,7 +62,13 @@ values Corvus mappers may emit.
   stays in `unmapped`).
 - Process Activity carries `process` (`pid`, `name`, `cmd_line`, `file`,
   `parent_process`); the actor may additionally carry the process object
-  for process events.
+  for process events. For handle opens it also carries `actual_permissions`
+  (the platform-native granted access mask, kept as the original hex
+  string).
+- Script Activity carries `script` (`uid` holding the PowerShell
+  `ScriptBlockId`, `script_content`, `type_id` 2 / `type` `"PowerShell"`);
+  `MessageNumber` / `MessageTotal` stay in `unmapped`, and the messages of
+  a split block share the script `uid` for downstream grouping.
 - Network Activity carries `action` / `action_id` (0 Unknown, 1 Allowed,
   2 Denied, 99 Other) alongside the endpoints.
 - File System Activity carries `file` (`path`, `name`; `name` is derived

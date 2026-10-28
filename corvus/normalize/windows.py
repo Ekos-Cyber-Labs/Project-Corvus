@@ -17,10 +17,12 @@ it per ``(channel, event id)``, never dropping it silently):
 
 - Sysmon event 1 -> Process Activity (1007)
 - Sysmon event 3 -> Network Activity (4001)
+- Sysmon event 10 -> Process Activity (1007), activity Open
 - Sysmon event 11 -> File System Activity (1001)
 - Security 4624 / 4625 -> Authentication (3002), success / failure
 - Security 4698 and Microsoft-Windows-TaskScheduler/Operational 106
   -> Scheduled Job Activity (1006)
+- Microsoft-Windows-PowerShell/Operational 4104 -> Script Activity (1009)
 
 All times become timezone-aware UTC (naive Windows timestamps are assumed
 to be UTC); a mapped event whose time cannot be parsed is counted as
@@ -58,10 +60,13 @@ from corvus.normalize.ocsf import (
     ProcessActivity,
     Product,
     ScheduledJobActivity,
+    Script,
+    ScriptActivity,
     User,
 )
 
 __all__ = [
+    "POWERSHELL_CHANNEL",
     "SECURITY_CHANNEL",
     "SYSMON_CHANNEL",
     "TASKSCHEDULER_CHANNEL",
@@ -87,6 +92,7 @@ __all__ = [
 SYSMON_CHANNEL = "Microsoft-Windows-Sysmon/Operational"
 SECURITY_CHANNEL = "Security"
 TASKSCHEDULER_CHANNEL = "Microsoft-Windows-TaskScheduler/Operational"
+POWERSHELL_CHANNEL = "Microsoft-Windows-PowerShell/Operational"
 
 #: Lowercased channel spellings seen in replay files -> canonical spelling.
 #: Matching is case-insensitive; ``metadata.log_name`` always carries the
@@ -95,6 +101,7 @@ _CHANNEL_ALIASES = {
     SYSMON_CHANNEL.lower(): SYSMON_CHANNEL,
     SECURITY_CHANNEL.lower(): SECURITY_CHANNEL,
     TASKSCHEDULER_CHANNEL.lower(): TASKSCHEDULER_CHANNEL,
+    POWERSHELL_CHANNEL.lower(): POWERSHELL_CHANNEL,
 }
 
 #: Envelope keys of a flat record that are placed structurally (channel,
@@ -516,6 +523,87 @@ def _map_sysmon_network(fields: dict[str, Any], ctx: _Ctx) -> NetworkActivity:
     )
 
 
+def _map_sysmon_access(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
+    """Map Sysmon event 10 (process handle open) to Process Activity.
+
+    Activity 3 Open per the pinned OCSF 1.4.0 schema
+    (``events/system/process_activity.json`` activity enum). The opening
+    process (``SourceImage``/``SourceProcessId``) becomes ``actor.process``
+    and the target (``TargetImage``/``TargetProcessId``) becomes
+    ``process``. ``GrantedAccess`` is kept verbatim as the typed
+    ``actual_permissions`` (the schema's platform-native slot, per that
+    same file). ``CallTrace`` has no typed OCSF 1.4.0 slot — the full
+    ``process`` object attribute list in ``objects/process.json`` carries
+    nothing like it — so it stays in ``unmapped``, as do the GUIDs and
+    the source thread id.
+    """
+    source_image = _text(fields.pop("SourceImage", None))
+    source_pid = _pid(fields.pop("SourceProcessId", None))
+    target_image = _text(fields.pop("TargetImage", None))
+    target_pid = _pid(fields.pop("TargetProcessId", None))
+    granted = _text(fields.pop("GrantedAccess", None))
+    user, domain = _split_account(_text(fields.pop("User", None)))
+    fields.pop("UtcTime", None)
+    source: Process | None = None
+    if source_pid is not None or source_image is not None:
+        source = Process(
+            pid=source_pid,
+            name=_basename(source_image),
+            file=File(path=source_image) if source_image is not None else None,
+        )
+    target: Process | None = None
+    if target_pid is not None or target_image is not None:
+        target = Process(
+            pid=target_pid,
+            name=_basename(target_image),
+            file=File(path=target_image) if target_image is not None else None,
+        )
+    return ProcessActivity(
+        time=ctx.time_ms,
+        metadata=_metadata(ctx),
+        activity_id=3,
+        device=_device(ctx),
+        actor=_actor(user, domain, source),
+        process=target,
+        actual_permissions=granted,
+        unmapped=fields,
+    )
+
+
+def _map_powershell_script(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
+    """Map PowerShell Operational 4104 (script block logging).
+
+    Class 1009, activity 1 Execute per the pinned OCSF 1.4.0 schema
+    (``events/system/script_activity.json``: uid 9 under the system
+    category). The typed script fields follow ``objects/script.json``,
+    where ``uid`` is documented as the PowerShell ``ScriptBlockId``.
+    ``MessageNumber``/``MessageTotal`` have no typed slot and stay in
+    ``unmapped``. Each record maps to its own event; the messages of a
+    split block share the script ``uid`` for downstream grouping.
+    """
+    content = _text(fields.pop("ScriptBlockText", None))
+    block_id = _text(fields.pop("ScriptBlockId", None))
+    user, domain = _split_account(_text(fields.pop("User", None)))
+    fields.pop("TimeCreated", None)
+    script: Script | None = None
+    if content is not None or block_id is not None:
+        script = Script(
+            uid=block_id,
+            script_content=content,
+            type="PowerShell",
+            type_id=2,
+        )
+    return ScriptActivity(
+        time=ctx.time_ms,
+        metadata=_metadata(ctx),
+        activity_id=1,
+        device=_device(ctx),
+        actor=_actor(user, domain),
+        script=script,
+        unmapped=fields,
+    )
+
+
 def _map_sysmon_file(fields: dict[str, Any], ctx: _Ctx) -> FileSystemActivity:
     """Map Sysmon event 11 (file creation) to File System Activity.
 
@@ -612,11 +700,13 @@ def _map_task_106(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
 _MAPPERS: dict[tuple[str, int], Callable[[dict[str, Any], _Ctx], OcsfEvent]] = {
     (SYSMON_CHANNEL, 1): _map_sysmon_process,
     (SYSMON_CHANNEL, 3): _map_sysmon_network,
+    (SYSMON_CHANNEL, 10): _map_sysmon_access,
     (SYSMON_CHANNEL, 11): _map_sysmon_file,
     (SECURITY_CHANNEL, 4624): lambda f, c: _map_logon(f, c, success=True),
     (SECURITY_CHANNEL, 4625): lambda f, c: _map_logon(f, c, success=False),
     (SECURITY_CHANNEL, 4698): _map_task_4698,
     (TASKSCHEDULER_CHANNEL, 106): _map_task_106,
+    (POWERSHELL_CHANNEL, 4104): _map_powershell_script,
 }
 
 
