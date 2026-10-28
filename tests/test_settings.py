@@ -31,9 +31,21 @@ def test_dotenv_file_in_cwd_is_ignored(
         get_settings()
 
 
+def test_missing_database_url_fails_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("GLIMMER_BASE_URL", "http://glimmer-host:8001/v1")
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+    assert "DATABASE_URL" in str(excinfo.value)
+
+
 def test_minimal_environment_constructs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GLIMMER_BASE_URL", "http://glimmer-host:8001/v1")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://127.0.0.1:55432/corvus")
     monkeypatch.delenv("MODEL_PROFILE", raising=False)
     settings = get_settings()
     assert settings.glimmer_base_url == "http://glimmer-host:8001/v1"
+    assert settings.database_url == "postgresql://127.0.0.1:55432/corvus"
     assert settings.model_profile == "hybrid"

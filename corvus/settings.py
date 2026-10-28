@@ -11,10 +11,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore")
 
-    database_url: str = Field(
-        default="postgresql://corvus:corvus@localhost:5432/corvus",
-        validation_alias="DATABASE_URL",
-    )
+    database_url: str = Field(validation_alias="DATABASE_URL")
     glimmer_base_url: str = Field(validation_alias="GLIMMER_BASE_URL")
     meta_base_url: str = Field(
         default="https://api.meta.ai/v1",

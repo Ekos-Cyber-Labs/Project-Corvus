@@ -36,3 +36,17 @@ rules back to Wazuh (shadow first, human approval).
   `muse skills validate --json` clean, zero diagnostics); created this
   file. Working tree (verified): `M AGENTS.md`, `M README.md`,
   `?? .agents/`, `?? MEMORY.md`, `?? docs/`. Awaiting maintainer commit.
+- 2026-10-27: added the runnable skeleton (environment-only settings,
+  `/health` reporting `degraded` when the database or Glimmer is
+  unreachable, SQL migrations under a Postgres advisory lock, Compose
+  taking all secrets from the external env file) with tests for each
+  behavior. Verified with `make lint` and `make test` (9 passed,
+  including the live migration test; figures produced by those
+  commands). Skeleton committed by the maintainer.
+- 2026-10-28: reviewed the OCSF models against the OCSF 1.4.0 schema
+  (`corvus/normalize/ocsf.py`, `docs/ocsf.md`): schema-named `actor.user`,
+  `metadata.product`/`log_name`, `process.file`; year-2000 time floor with
+  an epoch-seconds error; `severity_id` 99; per-endpoint entity keys; the
+  network `action_id`; `OcsfEvent` as a discriminated union. Verified with
+  `make lint` and the full `make test`, including the live migration test.
+  Awaiting maintainer commit.

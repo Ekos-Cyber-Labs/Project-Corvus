@@ -1,0 +1,75 @@
+# OCSF events in Corvus
+
+Everything inside Corvus is OCSF at the version pinned by
+`OCSF_SCHEMA_VERSION` in [ocsf.py](../corvus/normalize/ocsf.py)
+(currently `1.4.0`). Field names and activity IDs match the OCSF 1.4.0
+schema (schema.ocsf.io). Every event's `metadata.version` defaults to that
+constant, so a version bump is a one-line change.
+
+Shared rules for all six classes:
+
+- `type_uid` is computed as `class_uid * 100 + activity_id`. It is a
+  read-only computed field: any `type_uid` present in input is ignored and
+  recomputed, so dumped events always validate back with a matching id.
+- `time` is UTC epoch milliseconds and must be on or after 2000-01-01
+  (`946684800000`). A timezone-aware `datetime` is converted; a naive
+  `datetime` is rejected; an integer below the floor is rejected as looking
+  like epoch seconds.
+- `severity_id` follows the OCSF enum 0 Unknown, 1 Informational, 2 Low,
+  3 Medium, 4 High, 5 Critical, 6 Fatal, plus 99 Other.
+- `raw_data` keeps the original event as a JSON string; `unmapped` holds
+  anything a mapper could not place (counted, never dropped silently).
+- `entity_keys` is a Corvus extension with canonical, lowercased keys for
+  deterministic correlation: `user` as `domain\user`, `host` as the short
+  hostname, `ip` as the device address, plus `src_ip` / `dst_ip` from the
+  endpoints. All classes compute them with the one shared
+  `compute_entity_keys` function from the actor, device and endpoint
+  fields, so a placeholder device address never hides an endpoint address.
+
+## Classes and activity IDs
+
+The Source column names the mapper that produces each class; it is empty
+until the mappers land.
+
+| OCSF class | class_uid | category_uid | Activity IDs we use | Source |
+|---|---|---|---|---|
+| Authentication | 3002 | 3 | 1 Logon, 2 Logoff, 3 Authentication Ticket, 4 Service Ticket Request, 5 Service Ticket Renew, 6 Preauth |  |
+| Process Activity | 1007 | 1 | 1 Launch, 2 Terminate, 3 Open, 4 Inject, 5 Set User ID |  |
+| Network Activity | 4001 | 4 | 1 Open, 2 Close, 3 Reset, 4 Fail, 5 Refuse, 6 Traffic, 7 Listen |  |
+| File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open |  |
+| Scheduled Job Activity | 1006 | 1 | 1 Create, 2 Update, 3 Delete, 4 Enable, 5 Disable, 6 Start |  |
+| Detection Finding | 2004 | 2 | 1 Create, 2 Update, 3 Close |  |
+
+Other activity IDs pass through unchanged; the table lists the schema
+values Corvus mappers may emit.
+
+## Class-specific fields
+
+- Authentication carries `status` (for example `Success` / `Failure`) and
+  `status_id` (0 Unknown, 1 Success, 2 Failure, 99 Other), which feed the
+  success-vs-attempt factor of the severity floor.
+- Process Activity carries `process` (`pid`, `name`, `cmd_line`, `file`,
+  `parent_process`); the actor may additionally carry the process object
+  for process events.
+- Network Activity carries `action` / `action_id` (0 Unknown, 1 Allowed,
+  2 Denied, 99 Other) alongside the endpoints.
+- File System Activity carries `file` (`path`, `name`; `name` is derived
+  from `path` when missing).
+- Scheduled Job Activity carries `job` (`name`, `cmd_line`).
+- All classes may carry `device` (`hostname`, `ip`), `actor` with `user`
+  (`name`, `domain`), and `src_endpoint` / `dst_endpoint` (`ip`, `port`).
+
+## Canonicalization
+
+Placeholders (`-`, `n/a`, `unknown`, case-insensitive) count as missing
+everywhere.
+
+- User: `EXAMPLE\JDoe`, `example\jdoe`, UPN `JDOE@EXAMPLE.COM` /
+  `jdoe@example.com`, and bare `jdoe` with domain `example.com` all map to
+  one key each (`example\jdoe`, `example.com\jdoe`). No domain means the
+  bare lowercased name.
+- Host: `WEB01`, `web01.example.com` and ` WEB01.EXAMPLE.COM ` all map to
+  `web01`. A trailing `$` (machine account) is stripped. A value that
+  parses as an IP address yields no host key; the address belongs in `ip`.
+- IP: must be a valid address (IPv4-mapped IPv6 unwraps to IPv4);
+  anything else yields no key.

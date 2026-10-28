@@ -43,11 +43,21 @@ Work in progress, built during the Meta Global AI Developer Hackathon.
 Run the skeleton stack:
 
 - Copy `.env.example` to a file outside the repository (e.g.
-  `/run/corvus/corvus.env`) and fill in secrets.
+  `/run/corvus/corvus.env`) and fill in secrets. Compose refuses to
+  start when `CORVUS_ENV_FILE` is unset; services read every value
+  from that file.
 - `CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose up --build -d`
+- Apply database migrations with `corvus db migrate` (reads
+  `DATABASE_URL`; safe to re-run, concurrent runners are serialized).
 - Health (database plus model reachability): `curl http://127.0.0.1:8000/health`
+  reports `degraded` when the database or the on-prem Glimmer model is
+  unreachable; Muse Spark reachability is informational only.
+- Settings come from the process environment only (`GLIMMER_BASE_URL`
+  is required); no `.env` file inside the repository is ever read.
 - From the dev machine Postgres is at `127.0.0.1:55432`; the test
-  recipe is under `AGENTS.md` Commands.
+  recipe is under `AGENTS.md` Commands. The skeleton was verified
+  with `make lint` and the full `make test`, including the live
+  migration test.
 
 ## Built during the hackathon
 
