@@ -150,3 +150,27 @@ rules back to Wazuh (shadow first, human approval).
   links carry the new `otrf-folder` ground-truth source (tactic
   only). Verified with `make lint` and `make test`. Awaiting
   maintainer commit.
+- 2026-10-27: ran `corvus replay load data` over the fetched datasets
+  (440 of 444 ground-truth files loaded; 4 skipped by suffix policy,
+  125 loaded with zero mapped events) and saved the counts-only census
+  as `eval/reports/day1_replay_load.md` (per-class totals, top unmapped
+  buckets, full file-level coverage, in-band counts, co-occurrence
+  ranking led by Sysmon 12/13/7; registry target corrected to the win
+  extension classes 201001/201002). Counts reproduce with
+  `uv run python eval/replay_census.py` (fixture-tested).
+  Awaiting maintainer commit.
+- 2026-10-27: validation pass on the day-1 report, recorded here.
+  Registry targets verified against the upstream v1.4.0 win extension
+  files (201001/201002 with `reg_key`/`reg_value` attributes; 2004 is
+  findings-only). Reach relabeled as file-level co-occurrence in both
+  places, run date fixed. `ruff check`, `ruff format --check`, and
+  `mypy` green via the venv binaries (`uv` cache unwritable in this
+  sandbox); `pytest` 143 passed with only the Postgres-guarded tests
+  failing (no database reachable). Awaiting maintainer commit.
+- 2026-10-27: fixed report recommendation 2 (Sysmon 7 image load goes
+  to Module Activity 1005, activity 1 Load, not 1007; class and
+  `module.file` verified against the v1.4.0 `module_activity` event and
+  `module` object files) and changed the census usage to
+  `uv run python eval/replay_census.py` in the module and the report.
+  `ruff check` and `ruff format --check` green on the changed files.
+  Awaiting maintainer commit.
