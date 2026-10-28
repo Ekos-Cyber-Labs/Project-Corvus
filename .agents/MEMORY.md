@@ -1,5 +1,7 @@
 # MEMORY.md — Project Corvus durable notes
 
+> 📓 Also on purpose: this is the agent's notebook between coding sessions. Public by design, boring by rule (see rule 9 in AGENTS.md).
+
 ## Positioning
 
 Corvus is NOT a SIEM. It plugs into the SIEM the org already runs (Wazuh in
