@@ -50,3 +50,13 @@ rules back to Wazuh (shadow first, human approval).
   network `action_id`; `OcsfEvent` as a discriminated union. Verified with
   `make lint` and the full `make test`, including the live migration test.
   Awaiting maintainer commit.
+- 2026-10-28: hardened the `SiemAdapter` contract
+  (`corvus/adapters/siem.py`): strict `Entity` filters that reject
+  placeholders, paged `stream_alerts` resuming on `(time, uid)` with a
+  per-event uid requirement, a source-grouped inventory from an explicit
+  category map with an `other` fallback, a type-checked Protocol assertion
+  so `make lint` fails on drift, and the `update_list` roadmap note. The
+  fixture uses real telemetry source names with a shared-timestamp pair.
+  Verified with `make lint` and `make test` (only the Postgres-backed
+  migration test could not run here; no database reachable). Awaiting
+  maintainer commit.
