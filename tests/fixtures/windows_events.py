@@ -178,6 +178,27 @@ def evtx_sysmon_process() -> dict[str, Any]:
     }
 
 
+def evtx_rpc_no_channel() -> dict[str, Any]:
+    """Nested ``.evtx`` JSON shape of a channel-less ETW RPC event."""
+    return {
+        "Event": {
+            "System": {
+                "Provider": {"#attributes": {"Name": "Microsoft-Windows-RPC"}},
+                "EventID": 5,
+                "Channel": None,
+                "Computer": "web01.example.com",
+                "EventRecordID": 202,
+                "TimeCreated": {"#attributes": {"SystemTime": SYS_UTC}},
+            },
+            "EventData": {
+                "ProcNum": "0x0",
+                "Protocol": "ncacn_ip_tcp",
+                "NetworkAddress": "192.0.2.10",
+            },
+        }
+    }
+
+
 def flat_lowercase_channel_logon() -> dict[str, Any]:
     """Flat Security 4624 with a lowercase channel spelling, as in OTRF."""
     record = flat_security_logon(success=True)

@@ -56,7 +56,9 @@ values Corvus mappers may emit.
   0 Unknown, 1 System, 2 Interactive, 3 Network, 4 Batch, 5 OS Service,
   7 Unlock, 8 Network Cleartext, 9 New Credentials, 10 Remote Interactive,
   11 Cached Interactive, 12 Cached Remote Interactive, 13 Cached Unlock,
-  99 Other; the raw value stays in `unmapped`).
+  99 Other; Windows 0 becomes 1, 12 and 13 pass straight through, and
+  anything else without an OCSF counterpart becomes 99; the raw value
+  stays in `unmapped`).
 - Process Activity carries `process` (`pid`, `name`, `cmd_line`, `file`,
   `parent_process`); the actor may additionally carry the process object
   for process events.
@@ -81,7 +83,8 @@ winlogbeat layout (`log_name` / `event_id` with the payload nested under
   and `metadata.log_name` always carries the canonical spelling
   (`Security`, `Microsoft-Windows-Sysmon/Operational`,
   `Microsoft-Windows-TaskScheduler/Operational`), so downstream grouping
-  stays deterministic.
+  stays deterministic. Records with no channel (ETW traces converted to
+  `.evtx`) count under the `System.Provider` name instead of `unknown`.
 - `metadata.product` names the producing product (`Sysmon` for the
   Sysmon channel, `Microsoft Windows` otherwise).
 - `metadata.uid` is opaque: the truncated SHA-256 of the dataset-relative

@@ -110,7 +110,8 @@ rules back to Wazuh (shadow first, human approval).
   `iter_dataset_file` streams events with caller-owned stats while
   `read_dataset_file` stays a thin wrapper. Verified with `make lint`
   and the unit plus live-replay integration tests (per-format unknown
-  share under 5% on the representative files; the full census shows
-  `.evtx` far above it because channel-less RPC provider records are
-  out of scope and stay counted, never mapped). Awaiting maintainer
+  share under 5% on the representative files; the full census confirms
+  it on every file). Later fix: channel-less records count under the
+  `System.Provider` name instead of `unknown`, and Windows LogonType
+  12/13 map straight to OCSF `logon_type_id` 12/13. Awaiting maintainer
   commit.

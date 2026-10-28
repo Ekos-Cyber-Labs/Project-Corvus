@@ -250,6 +250,41 @@ def test_object_event_id_counts_under_its_text() -> None:
     assert event_id == 1
 
 
+def test_evtx_missing_channel_counts_under_provider_name() -> None:
+    """Channel-less ETW records count under the System.Provider name."""
+    channel, event_id, record_id, fields, computer, raw_time = extract_evtx_parts(
+        fx.evtx_rpc_no_channel()
+    )
+    assert channel == "Microsoft-Windows-RPC"
+    assert event_id == 5
+    with pytest.raises(UnmappedEvent) as excinfo:
+        normalize_event(
+            channel=channel,
+            event_id=event_id,
+            fields=sanitize_record(fields),
+            computer=computer,
+            uid=make_uid(UID_BASE, record_id),
+            raw_time=raw_time,
+            raw_record=sanitize_record(fx.evtx_rpc_no_channel()["Event"]),
+        )
+    assert excinfo.value.key == ("Microsoft-Windows-RPC", 5)
+
+
+def test_logon_type_12_and_13_pass_straight_through() -> None:
+    """Windows LogonType 12/13 keep their OCSF ids; the rest become 99."""
+    for logon_type, expected_id, expected_name in (
+        (12, 12, "Cached Remote Interactive"),
+        (13, 13, "Cached Unlock"),
+        (42, 99, "Other"),
+    ):
+        record = fx.flat_security_logon(success=True)
+        record["LogonType"] = logon_type
+        event = _normalize_record(record)
+        assert event.logon_type_id == expected_id
+        assert event.logon_type == expected_name
+        assert event.unmapped["LogonType"] == logon_type
+
+
 def test_uid_is_stable_and_unique() -> None:
     assert make_uid("rel#path", 7) == make_uid("rel#path", 7)
     assert make_uid("rel#path", 7) != make_uid("rel#path", 8)

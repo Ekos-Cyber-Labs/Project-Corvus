@@ -393,7 +393,8 @@ def _initiating_process(image: str | None, pid: int | None) -> Process | None:
 
 
 #: Windows LogonType -> OCSF ``logon_type_id``. Windows 0 (System) is OCSF 1;
-#: anything outside the Windows set maps to OCSF 99 (Other).
+#: 12 and 13 pass straight through to the same OCSF ids; anything else
+#: without an OCSF counterpart maps to OCSF 99 (Other).
 _WINDOWS_TO_OCSF_LOGON_TYPE = {
     0: 1,
     2: 2,
@@ -405,6 +406,8 @@ _WINDOWS_TO_OCSF_LOGON_TYPE = {
     9: 9,
     10: 10,
     11: 11,
+    12: 12,
+    13: 13,
 }
 
 #: Captions of the pinned OCSF 1.4.0 ``logon_type_id`` enum (``dictionary.json``
@@ -665,13 +668,29 @@ def _canonical_channel(value: object) -> str:
     return "unknown"
 
 
+def _provider_name(system: dict[str, Any]) -> str | None:
+    """Return the ``System.Provider`` name, or None when it is missing."""
+    provider = system.get("Provider")
+    if isinstance(provider, str):
+        return provider.strip() or None
+    if isinstance(provider, dict):
+        attributes = provider.get("#attributes")
+        if isinstance(attributes, dict):
+            name = attributes.get("Name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    return None
+
+
 def extract_evtx_parts(
     data: dict[str, Any],
 ) -> tuple[str, int, object, dict[str, Any], str | None, object]:
     """Split a parsed ``.evtx`` JSON record into normalizer inputs.
 
     Returns ``(channel, event_id, record_id, fields, computer, raw_time)``.
-    Raises :class:`UnmappedEvent` ``("unknown", 0)`` when the envelope is
+    Records with no channel (ETW traces converted to ``.evtx``) count under
+    the ``System.Provider`` name instead of ``"unknown"``. Raises
+    :class:`UnmappedEvent` ``("unknown", 0)`` when the envelope is
     not an event at all (still counted, never lost).
     """
     event = data.get("Event")
@@ -680,7 +699,10 @@ def extract_evtx_parts(
     system = event.get("System")
     if not isinstance(system, dict):
         raise UnmappedEvent("unknown", 0)
-    channel = _canonical_channel(system.get("Channel"))
+    raw_channel = system.get("Channel")
+    if not (isinstance(raw_channel, str) and raw_channel.strip()):
+        raw_channel = _provider_name(system)
+    channel = _canonical_channel(raw_channel)
     event_id = _coerce_event_id(system.get("EventID"))
     record_id = system.get("EventRecordID")
     eventdata = event.get("EventData")
