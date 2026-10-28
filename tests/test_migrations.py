@@ -248,7 +248,7 @@ def test_migration_002_constraints() -> None:
             "VALUES (%s, 'tp', 'analyst-1')",
             (incident_id,),
         )
-        with pytest.raises(errors.ForeignKeyViolation):
+        with pytest.raises(errors.RestrictViolation):
             _execute(test_url, "DELETE FROM incidents WHERE id = %s", (incident_id,))
     finally:
         _drop_database(admin_url, name)

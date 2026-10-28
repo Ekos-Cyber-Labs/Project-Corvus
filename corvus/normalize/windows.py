@@ -331,7 +331,7 @@ def _port(value: object) -> int | None:
         return None
     try:
         number = int(str(value).strip())
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
     return number if 0 <= number <= 65535 else None
 
@@ -342,7 +342,7 @@ def _pid(value: object) -> int | None:
         return None
     try:
         number = int(str(value).strip())
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
     return number if number >= 0 else None
 
@@ -362,7 +362,7 @@ def _coerce_event_id(value: object) -> int:
         return _coerce_event_id(text)
     try:
         return int(str(value).strip())
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return 0
 
 
@@ -513,7 +513,7 @@ def _logon_type_id(value: object) -> tuple[int | None, str | None]:
         return None, None
     try:
         number = int(str(value).strip())
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None, None
     mapped = _WINDOWS_TO_OCSF_LOGON_TYPE.get(number, 99)
     return mapped, _LOGON_TYPE_CAPTIONS[mapped]
@@ -586,7 +586,7 @@ def _service_start_type(value: object) -> tuple[int | None, str | None]:
         return None, None
     try:
         number: int | None = int(text, 0)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         number = None
     if number is not None:
         mapped = _SCM_START_TYPE_TO_OCSF.get(number)
@@ -613,7 +613,7 @@ def _service_type(value: object) -> tuple[int | None, str | None]:
         return None, None
     try:
         number: int | None = int(text, 0)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         number = None
     if number is not None:
         mapped = _SCM_SERVICE_TYPE_TO_OCSF.get(number)
@@ -1663,7 +1663,7 @@ def _iter_json_lines(
     for raw_line in stream:
         try:
             line = raw_line.decode("utf-8")
-        except (UnicodeDecodeError, AttributeError):
+        except UnicodeDecodeError, AttributeError:
             stats.count("unknown", 0)
             continue
         lineno += 1
@@ -1679,7 +1679,7 @@ def _iter_json_lines(
             continue
         try:
             parts = extract_json_parts(record, lineno)
-        except (ValueError, TypeError, AttributeError):
+        except ValueError, TypeError, AttributeError:
             stats.count("unknown", 0)
             continue
         event = _normalize_parts(parts, record, uid_base, stats)
@@ -1710,7 +1710,7 @@ def _iter_evtx(source: Path, rel: str, stats: WindowsReadStats) -> Iterator[Ocsf
         except UnmappedEvent as exc:
             stats.count(*exc.key)
             continue
-        except (ValueError, TypeError, AttributeError, KeyError):
+        except ValueError, TypeError, AttributeError, KeyError:
             stats.count("unknown", 0)
             continue
         event = _normalize_parts(parts, raw_record, rel, stats)

@@ -13,7 +13,7 @@
     },
     "emulation_plan": {
       "repo": "mitre-attack/attack-arsenal",
-      "rev": "8b290be3b53fcccd477eb79f2bcedbbc158c966c",
+      "rev": "201db70f403676cc8ec090035f17d98cf9995244",
       "path": "adversary_emulation/APT29/Emulation_Plan/Day 1",
       "license": "Apache-2.0"
     }

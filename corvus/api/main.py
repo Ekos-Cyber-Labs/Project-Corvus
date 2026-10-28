@@ -2,7 +2,7 @@
 
 from typing import Any
 
-import httpx
+import httpx2
 import psycopg
 from fastapi import FastAPI
 from pydantic import ValidationError
@@ -36,7 +36,7 @@ def check_endpoint(name: str, base_url: str | None) -> dict[str, Any]:
         return {"reachable": False, "detail": f"{name} URL is not set"}
     url = base_url.rstrip("/") + "/models"
     try:
-        response = httpx.get(url, timeout=3.0)
+        response = httpx2.get(url, timeout=3.0)
         return {
             "reachable": response.status_code < 500,
             "detail": f"HTTP {response.status_code}",

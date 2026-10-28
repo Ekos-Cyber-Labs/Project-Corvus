@@ -47,6 +47,11 @@ Run the skeleton stack:
   start when `CORVUS_ENV_FILE` is unset; services read every value
   from that file.
 - `CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose up --build -d`
+  (Postgres 18: the image stores data at `/var/lib/postgresql/18/docker`
+  and the Compose volume mounts `/var/lib/postgresql`. A volume created by
+  Postgres 16 cannot be reused by 18: recreate the development volume
+  with `docker compose down -v` before the first 18 start. Pre-release,
+  there is no data to migrate.)
 - Apply database migrations with `corvus db migrate` (reads
   `DATABASE_URL`; idempotent plain SQL in `corvus/state/migrations/`,
   safe to re-run, concurrent runners are serialized).
@@ -71,3 +76,4 @@ This repo uses only public datasets or lab-generated data. It contains no custom
 ## License
 
 AGPL-3.0 (see [LICENSE](LICENSE)). Maintained by Ekos Cyber Labs.
+Third-party components keep their own licenses: `httpx2` is BSD-3-Clause (see https://github.com/pydantic/httpx2).

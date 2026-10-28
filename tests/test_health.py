@@ -40,7 +40,7 @@ def test_meta_401_counts_as_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Response:
         status_code = 401
 
-    monkeypatch.setattr(main.httpx, "get", lambda *args, **kwargs: _Response())
+    monkeypatch.setattr(main.httpx2, "get", lambda *args, **kwargs: _Response())
     assert main.check_endpoint("meta", "http://meta-host/v1") == {
         "reachable": True,
         "detail": "HTTP 401",
@@ -51,8 +51,8 @@ def test_endpoint_connection_error_is_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _boom(*args: object, **kwargs: object) -> object:
-        raise main.httpx.ConnectError("refused")
+        raise main.httpx2.ConnectError("refused")
 
-    monkeypatch.setattr(main.httpx, "get", _boom)
+    monkeypatch.setattr(main.httpx2, "get", _boom)
     result = main.check_endpoint("glimmer", "http://127.0.0.1:9/v1")
     assert result["reachable"] is False

@@ -56,7 +56,7 @@ def test_chain_is_ordered_day1_only_with_window() -> None:
     assert CHAIN["label_level"] == "chain"
     assert CHAIN["event_level_precision_computable"] is False
     assert CHAIN["sources"]["emulation_plan"]["rev"] == (
-        "8b290be3b53fcccd477eb79f2bcedbbc158c966c"
+        "201db70f403676cc8ec090035f17d98cf9995244"
     )
     assert CHAIN["sources"]["emulation_plan"]["license"] == "Apache-2.0"
     assert CHAIN["sources"]["dataset"]["license"] == "MIT"

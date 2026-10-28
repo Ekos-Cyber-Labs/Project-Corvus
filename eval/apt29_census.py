@@ -114,7 +114,7 @@ def run_census(dataset: Path, chain: dict[str, Any]) -> dict[str, Any]:
                 for lineno, raw_line in enumerate(stream, start=1):
                     try:
                         record = json.loads(raw_line.decode("utf-8"))
-                    except (ValueError, UnicodeDecodeError):
+                    except ValueError, UnicodeDecodeError:
                         unmapped[("unknown", 0)] += 1
                         records += 1
                         continue
@@ -125,7 +125,7 @@ def run_census(dataset: Path, chain: dict[str, Any]) -> dict[str, Any]:
                     records += 1
                     try:
                         parts = extract_json_parts(record, lineno)
-                    except (ValueError, TypeError, AttributeError):
+                    except ValueError, TypeError, AttributeError:
                         unmapped[("unknown", 0)] += 1
                         continue
                     channel, event_id, record_id, fields, computer, raw_time = parts

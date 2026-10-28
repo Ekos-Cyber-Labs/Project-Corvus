@@ -138,8 +138,15 @@ the environment, never stored.
   `eval/apt29_day1_ground_truth.json` (committed), built from the
   public MITRE emulation plan: `mitre-attack/attack-arsenal`,
   `adversary_emulation/APT29/Emulation_Plan/Day 1`, pinned at
-  `8b290be3b53fcccd477eb79f2bcedbbc158c966c`, Apache-2.0 (read from
-  upstream `LICENSE.txt`). Each step carries its own time window,
+  `201db70f403676cc8ec090035f17d98cf9995244` (current `master` as of
+  2021-04-20, `git ls-remote` HEAD on 2026-10-28), Apache-2.0 (read from
+  upstream `LICENSE.txt`). The 14 commits between the previous pin
+  (`8b290be3b53fcccd477eb79f2bcedbbc158c966c`) and this one touch only
+  `CALDERA_DIY`, the APT29 PDF, Day 2 and the APT29 README (verified via
+  the GitHub compare API on 2026-10-28); the Day 1 `README.md` is
+  byte-identical at both commits (SHA-256
+  `de01c8d36ab8228704f843fd80c5e0d1d9f15d64c48fadc8f318ab45fea1a107`,
+  15456 bytes, fetched at both revisions and compared). Each step carries its own time window,
   lowercase anchors, the plan's technique ids (`plan_techniques`),
   current ids resolved against ATT&CK v20.0 revoked-by relationships
   (`techniques`; for example plan T1122 resolves to T1546.015, not
