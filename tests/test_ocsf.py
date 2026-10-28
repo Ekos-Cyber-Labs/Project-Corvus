@@ -15,7 +15,10 @@ from corvus.normalize.ocsf import (
     OcsfEvent,
     Process,
     ProcessActivity,
+    RegistryKeyActivity,
+    RegistryValueActivity,
     ScheduledJobActivity,
+    WindowsServiceActivity,
 )
 
 SAMPLE_TIME = datetime(2026, 10, 27, 12, 0, 0, tzinfo=UTC)
@@ -50,6 +53,9 @@ def test_each_class_constructs_with_expected_uids() -> None:
         (NetworkActivity(time=SAMPLE_MS, metadata=_metadata()), 4001, 4),
         (FileSystemActivity(time=SAMPLE_MS, metadata=_metadata()), 1001, 1),
         (ScheduledJobActivity(time=SAMPLE_MS, metadata=_metadata()), 1006, 1),
+        (RegistryKeyActivity(time=SAMPLE_MS, metadata=_metadata()), 201001, 1),
+        (RegistryValueActivity(time=SAMPLE_MS, metadata=_metadata()), 201002, 1),
+        (WindowsServiceActivity(time=SAMPLE_MS, metadata=_metadata()), 201004, 1),
         (DetectionFinding(time=SAMPLE_MS, metadata=_metadata()), 2004, 2),
     ]
     for event, class_uid, category_uid in cases:
@@ -287,6 +293,9 @@ def test_discriminated_union_parses_each_class_from_dict() -> None:
         (4001, 4, NetworkActivity),
         (1001, 1, FileSystemActivity),
         (1006, 1, ScheduledJobActivity),
+        (201001, 1, RegistryKeyActivity),
+        (201002, 1, RegistryValueActivity),
+        (201004, 1, WindowsServiceActivity),
         (2004, 2, DetectionFinding),
     ]
     for class_uid, category_uid, cls in cases:

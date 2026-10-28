@@ -292,6 +292,123 @@ def flat_service_install(*, channel: str = "System") -> dict[str, Any]:
         "TimeCreated": SYS_UTC,
         "ServiceName": "ExampleSupport",
         "ImagePath": "C:\\Windows\\System32\\examplesup.exe",
+        "StartType": "auto start",
+        "ServiceType": "user mode service",
+        "AccountName": "jdoe",
+        "Domain": "EXAMPLE",
+        "UserID": "S-1-5-21-1111-2222-3333-1001",
+    }
+
+
+def flat_security_service() -> dict[str, Any]:
+    """Flat Security 4697 (a service was installed)."""
+    return {
+        "Channel": "Security",
+        "EventID": 4697,
+        "EventIdx": 118,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "ServiceName": "ExampleSupport",
+        "ServiceFileName": "C:\\Windows\\System32\\examplesup.exe",
+        "ServiceStartType": "2",
+        "ServiceType": "0x10",
+        "ServiceAccount": "LocalSystem",
+        "SubjectUserName": "jdoe",
+        "SubjectDomainName": "EXAMPLE",
+    }
+
+
+def _nxlog_message(*, operation: str, target: str) -> str:
+    """NXLog-rendered record text: the op lives on the EventType line.
+
+    Flat NXLog Sysmon records carry ``EventType: INFO`` (the severity)
+    in the field; the real operation is only on this ``Message`` line.
+    """
+    return (
+        "Registry object added or deleted:\r\n"
+        "RuleName: -\r\n"
+        f"EventType: {operation}\r\n"
+        f"UtcTime: {SYS_UTCTIME}\r\n"
+        "ProcessGuid: {11111111-2222-3333-4444-555555555555}\r\n"
+        "ProcessId: 4321\r\n"
+        "Image: C:\\Windows\\regedit.exe\r\n"
+        f"TargetObject: {target}\r\n"
+    )
+
+
+def flat_sysmon_registry_key(*, event_type: str = "CreateKey") -> dict[str, Any]:
+    """Flat Sysmon event 12 (registry key created or deleted).
+
+    Mirrors the real flat layout: ``EventType`` is the ``INFO``
+    severity and the operation is the ``Message`` ``EventType:`` line.
+    """
+    target = "HKLM\\SOFTWARE\\ExampleCorp\\ExampleApp"
+    return {
+        "Channel": "Microsoft-Windows-Sysmon/Operational",
+        "EventID": 12,
+        "EventIdx": 119,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "UtcTime": SYS_UTCTIME,
+        "EventType": "INFO",
+        "TargetObject": target,
+        "ProcessGuid": "{11111111-2222-3333-4444-555555555555}",
+        "ProcessId": 4321,
+        "Image": "C:\\Windows\\regedit.exe",
+        "UserID": "S-1-5-18",
+        "AccountName": "SYSTEM",
+        "Domain": "NT AUTHORITY",
+        "RuleName": "-",
+        "Message": _nxlog_message(operation=event_type, target=target),
+    }
+
+
+def flat_sysmon_registry_value() -> dict[str, Any]:
+    """Flat Sysmon event 13 (registry value set on a Run key).
+
+    Mirrors the real flat layout: ``EventType`` is the ``INFO``
+    severity and ``SetValue`` is the ``Message`` ``EventType:`` line.
+    """
+    target = "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\ExampleApp"
+    return {
+        "Channel": "Microsoft-Windows-Sysmon/Operational",
+        "EventID": 13,
+        "EventIdx": 120,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "UtcTime": SYS_UTCTIME,
+        "EventType": "INFO",
+        "TargetObject": target,
+        "Details": "C:\\Tools\\example.exe",
+        "ProcessGuid": "{11111111-2222-3333-4444-555555555555}",
+        "ProcessId": 4321,
+        "Image": "C:\\Windows\\regedit.exe",
+        "UserID": "S-1-5-18",
+        "AccountName": "SYSTEM",
+        "Domain": "NT AUTHORITY",
+        "RuleName": "-",
+        "Message": _nxlog_message(operation="SetValue", target=target),
+    }
+
+
+def flat_sysmon_registry_rename() -> dict[str, Any]:
+    """Flat Sysmon event 14 (registry key renamed)."""
+    return {
+        "Channel": "Microsoft-Windows-Sysmon/Operational",
+        "EventID": 14,
+        "EventIdx": 121,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "UtcTime": SYS_UTCTIME,
+        "TargetObject": "HKLM\\SOFTWARE\\ExampleCorp\\OldName",
+        "NewName": "HKLM\\SOFTWARE\\ExampleCorp\\NewName",
+        "ProcessGuid": "{11111111-2222-3333-4444-555555555555}",
+        "ProcessId": 4321,
+        "Image": "C:\\Windows\\regedit.exe",
+        "UserID": "S-1-5-18",
+        "AccountName": "SYSTEM",
+        "Domain": "NT AUTHORITY",
+        "EventTypeOrignal": "INFO",
     }
 
 
@@ -393,3 +510,166 @@ def winlog_sysmon_file() -> dict[str, Any]:
             },
         },
     }
+
+
+def _winlog_envelope(
+    *,
+    channel: str,
+    event_id: int,
+    record_id: int,
+    computer: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Wrap a flat-style payload in the newer nested winlog layout."""
+    return {
+        "@timestamp": SYS_UTC,
+        "host": {"name": computer},
+        "winlog": {
+            "channel": channel,
+            "computer_name": computer,
+            "event_id": event_id,
+            "record_id": record_id,
+            "provider_name": channel,
+            "event_data": payload,
+        },
+    }
+
+
+def winlog_sysmon_registry_key() -> dict[str, Any]:
+    """Newer nested winlog layout of a Sysmon event 12.
+
+    Here ``EventType`` is real (no NXLog severity overwrite), so the
+    payload carries the operation in the field and no ``Message``.
+    """
+    flat = flat_sysmon_registry_key()
+    payload = {
+        key: flat[key]
+        for key in (
+            "TargetObject",
+            "ProcessGuid",
+            "ProcessId",
+            "Image",
+            "UserID",
+            "AccountName",
+            "Domain",
+            "RuleName",
+            "UtcTime",
+        )
+    }
+    payload["EventType"] = "CreateKey"
+    return _winlog_envelope(
+        channel="Microsoft-Windows-Sysmon/Operational",
+        event_id=12,
+        record_id=304,
+        computer="web01.example.com",
+        payload=payload,
+    )
+
+
+def winlog_sysmon_registry_value() -> dict[str, Any]:
+    """Newer nested winlog layout of a Sysmon event 13.
+
+    Here ``EventType`` is real (no NXLog severity overwrite), so the
+    payload carries the operation in the field and no ``Message``.
+    """
+    flat = flat_sysmon_registry_value()
+    payload = {
+        key: flat[key]
+        for key in (
+            "TargetObject",
+            "Details",
+            "ProcessGuid",
+            "ProcessId",
+            "Image",
+            "UserID",
+            "AccountName",
+            "Domain",
+            "RuleName",
+            "UtcTime",
+        )
+    }
+    payload["EventType"] = "SetValue"
+    return _winlog_envelope(
+        channel="Microsoft-Windows-Sysmon/Operational",
+        event_id=13,
+        record_id=305,
+        computer="web01.example.com",
+        payload=payload,
+    )
+
+
+def winlog_sysmon_registry_rename() -> dict[str, Any]:
+    """Newer nested winlog layout of a Sysmon event 14."""
+    flat = flat_sysmon_registry_rename()
+    payload = {
+        key: flat[key]
+        for key in (
+            "TargetObject",
+            "NewName",
+            "ProcessGuid",
+            "ProcessId",
+            "Image",
+            "UserID",
+            "AccountName",
+            "Domain",
+            "EventTypeOrignal",
+            "UtcTime",
+        )
+    }
+    return _winlog_envelope(
+        channel="Microsoft-Windows-Sysmon/Operational",
+        event_id=14,
+        record_id=306,
+        computer="web01.example.com",
+        payload=payload,
+    )
+
+
+def winlog_security_service() -> dict[str, Any]:
+    """Newer nested winlog layout of a Security 4697 service install."""
+    flat = flat_security_service()
+    payload = {
+        key: flat[key]
+        for key in (
+            "ServiceName",
+            "ServiceFileName",
+            "ServiceStartType",
+            "ServiceType",
+            "ServiceAccount",
+            "SubjectUserName",
+            "SubjectDomainName",
+            "TimeCreated",
+        )
+    }
+    return _winlog_envelope(
+        channel="Security",
+        event_id=4697,
+        record_id=307,
+        computer="web01.example.com",
+        payload=payload,
+    )
+
+
+def winlog_system_service() -> dict[str, Any]:
+    """Newer nested winlog layout of a System 7045 service install."""
+    flat = flat_service_install(channel="System")
+    payload = {
+        key: flat[key]
+        for key in (
+            "ServiceName",
+            "ImagePath",
+            "StartType",
+            "ServiceType",
+            "AccountName",
+            "Domain",
+            "UserID",
+            "TimeCreated",
+        )
+    }
+    return _winlog_envelope(
+        channel="System",
+        event_id=7045,
+        record_id=308,
+        computer="web01.example.com",
+        payload=payload,
+    )

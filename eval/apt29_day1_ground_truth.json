@@ -171,10 +171,22 @@
         [
           1007,
           1
+        ],
+        [
+          201001,
+          1
+        ],
+        [
+          201001,
+          4
+        ],
+        [
+          201002,
+          2
         ]
       ],
       "match_kind": "direct",
-      "note": "Plan 3.A-3.C: monkey.png steganography payload (T1027), Folder shell-open registry keys (plan T1122, revoked by current T1546.015 Component Object Model Hijacking; plan T1088 -> current T1548.002 for the sdclt UAC bypass), sdclt launch, registry cleanup (T1112). Plan T1043 is deprecated with no replacement and is dropped, not substituted. Registry writes are Sysmon 12/13, unmapped; script/process anchor hits are mapped.",
+      "note": "Plan 3.A-3.C: monkey.png steganography payload (T1027), Folder shell-open registry keys (plan T1122, revoked by current T1546.015 Component Object Model Hijacking; plan T1088 -> current T1548.002 for the sdclt UAC bypass), sdclt launch, registry cleanup (T1112). Plan T1043 is deprecated with no replacement and is dropped, not substituted. Registry writes are Sysmon 12/13, mapped to Registry Key/Value Activity (201001/201002); the shell-open keys are created (02:57:20), set (02:58:20) and deleted (02:59:16) as mapped registry events alongside the mapped script/process hits.",
       "window": {
         "start": "2020-05-02T02:57:01Z",
         "end": "2020-05-02T03:08:53Z"
@@ -265,10 +277,26 @@
         [
           1007,
           1
+        ],
+        [
+          201004,
+          1
+        ],
+        [
+          201001,
+          1
+        ],
+        [
+          201001,
+          4
+        ],
+        [
+          201002,
+          2
         ]
       ],
       "match_kind": "direct",
-      "note": "Plan 5.A/5.B Invoke-Persistence: service install (plan T1050 -> current T1543.003) and startup persistence (plan T1060 -> current T1547.001). Install records Security 4697, System 7045 and Sysmon 13 service-key writes are unmapped; the Invoke-Persistence script block (4104) is mapped.",
+      "note": "Plan 5.A/5.B Invoke-Persistence: service install (plan T1050 -> current T1543.003) and startup persistence (plan T1060 -> current T1547.001). Install records Security 4697 and System 7045 map to Windows Service Activity (201004) and the Sysmon 12/13 service-key writes to Registry Key/Value Activity (201001/201002); the 9 install anchor hits are mapped in-window alongside the mapped Invoke-Persistence script block (4104).",
       "window": {
         "start": "2020-05-02T03:04:16Z",
         "end": "2020-05-02T03:04:24Z"

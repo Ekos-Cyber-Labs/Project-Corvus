@@ -176,3 +176,25 @@ rules back to Wazuh (shadow first, human approval).
   Awaiting maintainer commit.
 - 2026-10-28: Day-1 review lessons folded into `AGENTS.md` and the role skills
   under `.agents/skills/`.
+- 2026-10-28: mapped the last two win-extension classes
+  (`corvus/normalize/windows.py`, `corvus/normalize/ocsf.py`):
+  Sysmon 12/14 to Registry Key Activity (201001, Create/Delete/Rename)
+  and Sysmon 13 to Registry Value Activity (201002, Set), Security
+  4697 and System 7045 to Windows Service Activity (201004, Create);
+  Sysmon 7 stays unmapped and counted. Day-1 census (196081 records):
+  registry and service events newly map (per-activity counts
+  corrected in the next entry); steps 3 and 5 keep `direct` with
+  registry/service anchors in mapped events, and
+  `eval/reports/apt29_day1_replay_load.md` was regenerated from the
+  census. Verified with the lint gate and the full suite (only the
+  Postgres-guarded tests failing, no database reachable). Awaiting
+  maintainer commit.
+- 2026-10-28: review fixes on that mapping. Flat NXLog records carry
+  `EventType` INFO (the severity), so the Sysmon 12 op is read from
+  the `Message` `EventType:` line, falling back to Create; Sysmon 12
+  DeleteValue is a Registry Value Activity Delete, not a key record.
+  Day-1 per-activity counts: key Create 60094 / Delete 876, value Set
+  17541 / Delete 181, all reported in the regenerated day-1 report.
+  Verified with the lint gate and the full suite (only the
+  Postgres-guarded tests failing, no database reachable). Awaiting
+  maintainer commit.

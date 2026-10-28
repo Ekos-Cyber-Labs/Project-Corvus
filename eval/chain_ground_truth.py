@@ -18,7 +18,8 @@ from the class table alone):
 
 - ``direct``: at least one mapped event inside the step window whose
   text fields (process and parent path, command line, script
-  content, file path) contain a step anchor, case-insensitive.
+  content, file path, registry key/value path/name/data, service
+  name/command line) contain a step anchor, case-insensitive.
 - ``indirect``: no mapped anchor hit, but at least one
   technique-relevant class/activity event inside the step window.
 - ``none``: neither.
@@ -154,9 +155,10 @@ def census_time_ms(event: Any) -> int:
 def event_text_fields(event: Any) -> str:
     """Lowercased anchor-search text of a mapped event.
 
-    Process and parent path, command line, script content and file
-    path only — never the whole raw record, so ingestion metadata
-    cannot manufacture an anchor hit.
+    Process and parent path, command line, script content, file path,
+    registry key/value path/name/data, and service name/command line
+    only — never the whole raw record, so ingestion metadata cannot
+    manufacture an anchor hit.
     """
     parts: list[str] = []
 
@@ -180,6 +182,19 @@ def event_text_fields(event: Any) -> str:
     script = getattr(event, "script", None)
     if script is not None:
         parts.append(getattr(script, "script_content", None) or "")
+    for key_attr in ("reg_key", "prev_reg_key"):
+        key_obj = getattr(event, key_attr, None)
+        if key_obj is not None:
+            parts.append(getattr(key_obj, "path", None) or "")
+    value_obj = getattr(event, "reg_value", None)
+    if value_obj is not None:
+        parts.append(getattr(value_obj, "path", None) or "")
+        parts.append(getattr(value_obj, "name", None) or "")
+        parts.append(getattr(value_obj, "data", None) or "")
+    service_obj = getattr(event, "win_service", None)
+    if service_obj is not None:
+        parts.append(getattr(service_obj, "name", None) or "")
+        parts.append(getattr(service_obj, "cmd_line", None) or "")
     return " ".join(parts).lower()
 
 

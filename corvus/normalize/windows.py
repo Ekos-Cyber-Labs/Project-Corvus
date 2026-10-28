@@ -27,17 +27,21 @@ it per ``(channel, event id)``, never dropping it silently):
   Windows PowerShell 800 -> Script Activity (1009). Windows
   PowerShell 600 (provider lifecycle, no executed content) stays
   unmapped and is counted per ``(channel, event id)``.
-- Security 4697 and System 7045 (service installed) stay unmapped:
-  the pinned OCSF 1.4.0 win extension defines Windows Service
-  Activity (``windows_service_activity``, attribute ``win_service``)
-  for them, and that class is not mapped yet. Mapping them to
-  Scheduled Job Activity (1006) would mislabel the record in the
-  meantime. They are counted per ``(channel, event id)``.
-- Sysmon 12/13/14 (registry) stay unmapped: the pinned OCSF 1.4.0
-  win extension defines Registry Key Activity and Registry Value
-  Activity (``registry_key_activity`` / ``registry_value_activity``)
-  for them, and those classes are not mapped yet. Counted, never
-  dropped.
+- Sysmon event 12 -> Registry Key Activity (201001, CreateKey to
+  activity 1 Create, DeleteKey to 4 Delete) and Registry Value
+  Activity (201002, DeleteValue to 4 Delete, CreateValue/SetValue to
+  2 Set). NXLog replaces the ``EventType`` field with the record
+  severity, so the operation is read from the ``Message``
+  ``EventType:`` line, falling back to Create.
+- Sysmon event 13 -> Registry Value Activity (201002), activity 2 Set
+- Sysmon event 14 -> Registry Key Activity (201001), activity 5 Rename
+- Security 4697 and System 7045 (service installed) -> Windows
+  Service Activity (201004), activity 1 Create. Mapping them to
+  Scheduled Job Activity (1006) would mislabel the record, so they
+  were counted unmapped until this class was added.
+- Sysmon 7 (image load) stays unmapped and is counted per
+  ``(channel, event id)``: its target class is Module Activity, not
+  one of the classes mapped here.
 
 All times become timezone-aware UTC (naive Windows timestamps are assumed
 to be UTC); a mapped event whose time cannot be parsed is counted as
@@ -48,6 +52,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tarfile
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
@@ -74,10 +79,16 @@ from corvus.normalize.ocsf import (
     Process,
     ProcessActivity,
     Product,
+    RegistryKeyActivity,
+    RegistryValueActivity,
+    RegKey,
+    RegValue,
     ScheduledJobActivity,
     Script,
     ScriptActivity,
     User,
+    WindowsServiceActivity,
+    WinService,
 )
 
 __all__ = [
@@ -424,6 +435,23 @@ def _initiating_process(image: str | None, pid: int | None) -> Process | None:
     )
 
 
+def _take_text(fields: dict[str, Any], key: str) -> str | None:
+    """Pop ``key`` and return its text, restoring placeholders to ``unmapped``.
+
+    Like :func:`_text`, but a present-but-placeholder value is put back
+    instead of dropped, so evidence fields (registry paths, service
+    names) never vanish: every input field still ends up typed or in
+    ``unmapped``. A missing key (or an explicit null) stays missing.
+    """
+    if key not in fields:
+        return None
+    raw = fields.pop(key)
+    text = _text(raw)
+    if text is None and raw is not None:
+        fields[key] = raw
+    return text
+
+
 #: Windows LogonType -> OCSF ``logon_type_id``. Windows 0 (System) is OCSF 1;
 #: 12 and 13 pass straight through to the same OCSF ids; anything else
 #: without an OCSF counterpart maps to OCSF 99 (Other).
@@ -476,6 +504,113 @@ def _logon_type_id(value: object) -> tuple[int | None, str | None]:
         return None, None
     mapped = _WINDOWS_TO_OCSF_LOGON_TYPE.get(number, 99)
     return mapped, _LOGON_TYPE_CAPTIONS[mapped]
+
+
+#: Captions of the pinned OCSF 1.4.0 win ``service_start_type_id`` enum
+#: (``extensions/windows/dictionary.json``
+#: ``attributes.service_start_type_id.enum`` in ``ocsf-schema`` tag
+#: ``v1.4.0``).
+_START_TYPE_CAPTIONS = {
+    0: "Unknown",
+    1: "Boot",
+    2: "System",
+    3: "Auto",
+    4: "Demand",
+    5: "Disabled",
+    99: "Other",
+}
+
+#: Service Control Manager numeric start type -> OCSF
+#: ``service_start_type_id`` (Security 4697 ``ServiceStartType``). SCM
+#: numbers boot 0 through disabled 4, one below the OCSF ids.
+_SCM_START_TYPE_TO_OCSF = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5}
+
+#: System 7045 ``StartType`` words (lowercased) -> OCSF id.
+_START_TYPE_WORDS = {
+    "boot start": 1,
+    "system start": 2,
+    "auto start": 3,
+    "demand start": 4,
+    "disabled": 5,
+}
+
+#: Captions of the pinned OCSF 1.4.0 win ``service_type_id`` enum
+#: (``extensions/windows/dictionary.json``
+#: ``attributes.service_type_id.enum``).
+_SERVICE_TYPE_CAPTIONS = {
+    0: "Unknown",
+    1: "Kernel Driver",
+    2: "File System Driver",
+    3: "Own Process",
+    4: "Share Process",
+    99: "Other",
+}
+
+#: SCM numeric service type -> OCSF ``service_type_id`` (Security 4697
+#: ``ServiceType``, a hex bitmask: 0x1 kernel, 0x2 file system driver,
+#: 0x10 own process, 0x20 share process).
+_SCM_SERVICE_TYPE_TO_OCSF = {1: 1, 2: 2, 16: 3, 32: 4}
+
+#: System 7045 ``ServiceType`` words (lowercased) -> OCSF id. A
+#: user-mode service owns or shares a process indistinguishably here,
+#: so it maps to 99 Other with the raw words kept.
+_SERVICE_TYPE_WORDS = {"kernel mode driver": 1, "file system driver": 2}
+
+
+def _service_start_type(value: object) -> tuple[int | None, str | None]:
+    """Map a service start type to ``(service_start_type_id, service_start_type)``.
+
+    Accepts SCM numbers (Security 4697 ``ServiceStartType``) and System
+    7045 words (``"auto start"``). Unknown values become 99 Other with
+    the raw string, per the sibling convention (Other carries the
+    event-source value); unusable values become ``(None, None)``. The
+    caller reads the raw with ``.get`` so it stays in ``unmapped``.
+    """
+    if isinstance(value, bool) or value is None:
+        return None, None
+    text = str(value).strip()
+    if not text or text.lower() in PLACEHOLDERS:
+        return None, None
+    try:
+        number: int | None = int(text, 0)
+    except (ValueError, TypeError):
+        number = None
+    if number is not None:
+        mapped = _SCM_START_TYPE_TO_OCSF.get(number)
+        if mapped is not None:
+            return mapped, _START_TYPE_CAPTIONS[mapped]
+        return 99, text
+    mapped = _START_TYPE_WORDS.get(text.lower())
+    if mapped is not None:
+        return mapped, _START_TYPE_CAPTIONS[mapped]
+    return 99, text
+
+
+def _service_type(value: object) -> tuple[int | None, str | None]:
+    """Map a service type to ``(service_type_id, service_type)``.
+
+    Same contract as :func:`_service_start_type`: SCM numbers or hex
+    (Security 4697 ``ServiceType``) and System 7045 words, unknown to
+    99 Other with the raw string, unusable to ``(None, None)``.
+    """
+    if isinstance(value, bool) or value is None:
+        return None, None
+    text = str(value).strip()
+    if not text or text.lower() in PLACEHOLDERS:
+        return None, None
+    try:
+        number: int | None = int(text, 0)
+    except (ValueError, TypeError):
+        number = None
+    if number is not None:
+        mapped = _SCM_SERVICE_TYPE_TO_OCSF.get(number)
+        if mapped is not None:
+            return mapped, _SERVICE_TYPE_CAPTIONS[mapped]
+        return 99, text
+    mapped = _SERVICE_TYPE_WORDS.get(text.lower())
+    if mapped is not None:
+        return mapped, _SERVICE_TYPE_CAPTIONS[mapped]
+    return 99, text
 
 
 def _map_sysmon_process(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
@@ -698,6 +833,208 @@ def _map_sysmon_file(fields: dict[str, Any], ctx: _Ctx) -> FileSystemActivity:
     )
 
 
+#: Line-anchored Sysmon operation inside an NXLog-rendered ``Message``.
+_MESSAGE_EVENT_TYPE = re.compile(r"^EventType:\s*(\w+)", re.MULTILINE)
+
+#: Operations a Sysmon registry record may carry, in the ``EventType``
+#: field or on the ``Message`` ``EventType:`` line.
+_REGISTRY_OPS = frozenset(
+    {
+        "CreateKey",
+        "DeleteKey",
+        "CreateValue",
+        "DeleteValue",
+        "SetValue",
+        "RenameKey",
+    }
+)
+
+
+def _registry_op(fields: dict[str, Any]) -> str | None:
+    """Return the Sysmon registry operation, or None when unknown.
+
+    NXLog replaces the ``EventType`` field with the record severity
+    (``INFO`` on every flat day-1 Sysmon 12/13 record); the real
+    operation then lives only on the ``Message`` ``EventType: <op>``
+    line. Prefer a known ``EventType`` value, else the ``Message``
+    line. Both stay in ``unmapped``: this reads without popping.
+    """
+    event_type = _text(fields.get("EventType"))
+    if event_type in _REGISTRY_OPS:
+        return event_type
+    message = fields.get("Message")
+    if isinstance(message, str):
+        found = _MESSAGE_EVENT_TYPE.search(message)
+        if found is not None and found.group(1) in _REGISTRY_OPS:
+            return found.group(1)
+    return None
+
+
+def _registry_actor(
+    fields: dict[str, Any], image: str | None, pid: int | None
+) -> Actor | None:
+    """Build the actor for a Sysmon registry record.
+
+    Registry events carry no ``User`` key (unlike Sysmon 1/3/10/11);
+    the NXLog ``AccountName``/``Domain`` pair names the writer
+    (``SYSTEM`` / ``NT AUTHORITY`` on every day-1 record). ``UserID``
+    (a SID) has no typed OCSF slot and stays in ``unmapped``.
+    """
+    name = _take_text(fields, "AccountName")
+    domain = _take_text(fields, "Domain")
+    return _actor(name, domain, _initiating_process(image, pid))
+
+
+def _registry_value(target: str | None, data: str | None = None) -> RegValue | None:
+    """Build a ``reg_value`` with the name derived from the path.
+
+    The value name is the last backslash component of ``TargetObject``
+    (mirroring the ``File.name`` derivation); the path stays verbatim.
+    """
+    if target is not None:
+        return RegValue(
+            name=target.replace("/", "\\").rsplit("\\", 1)[-1] or None,
+            path=target,
+            data=data,
+        )
+    if data is not None:
+        return RegValue(data=data)
+    return None
+
+
+def _map_sysmon_registry_key(
+    fields: dict[str, Any], ctx: _Ctx
+) -> RegistryKeyActivity | RegistryValueActivity:
+    """Map Sysmon event 12 (registry object added or deleted).
+
+    Classes 201001/201002 per the pinned OCSF 1.4.0 win extension
+    (``extensions/windows/events/registry_key_activity.json``: uid 1,
+    and ``registry_value_activity.json``: uid 2, both ``extends``
+    system). The operation comes from the ``EventType`` field or, when
+    NXLog replaced it with the severity, from the ``Message``
+    ``EventType:`` line (see :func:`_registry_op`); both stay in
+    ``unmapped``. ``CreateKey`` -> Key 1 Create, ``DeleteKey`` -> Key
+    4 Delete, ``DeleteValue`` -> Value 4 Delete (a value delete is a
+    value record, per ``registry_value_activity.json``),
+    ``CreateValue``/``SetValue`` -> Value 2 Set, ``RenameKey`` -> Key
+    5 Rename, and anything unknown -> Key 1 Create. ``TargetObject``
+    becomes ``reg_key.path`` / ``reg_value.path`` verbatim. The
+    initiating process (``Image``/``ProcessId``) becomes
+    ``actor.process``; ``ProcessGuid``, ``RuleName``, ``EventType``,
+    ``Message`` and the rest stay in ``unmapped``.
+    """
+    op = _registry_op(fields)
+    target = _take_text(fields, "TargetObject")
+    image = _take_text(fields, "Image")
+    pid = _pid(fields.pop("ProcessId", None))
+    fields.pop("UtcTime", None)
+    actor = _registry_actor(fields, image, pid)
+    device = _device(ctx)
+    if op == "DeleteValue":
+        return RegistryValueActivity(
+            time=ctx.time_ms,
+            metadata=_metadata(ctx),
+            activity_id=4,
+            device=device,
+            actor=actor,
+            reg_value=_registry_value(target),
+            unmapped=fields,
+        )
+    if op in ("CreateValue", "SetValue"):
+        return RegistryValueActivity(
+            time=ctx.time_ms,
+            metadata=_metadata(ctx),
+            activity_id=2,
+            device=device,
+            actor=actor,
+            reg_value=_registry_value(target),
+            unmapped=fields,
+        )
+    if op == "RenameKey":
+        return RegistryKeyActivity(
+            time=ctx.time_ms,
+            metadata=_metadata(ctx),
+            activity_id=5,
+            device=device,
+            actor=actor,
+            reg_key=RegKey(path=target) if target is not None else None,
+            unmapped=fields,
+        )
+    return RegistryKeyActivity(
+        time=ctx.time_ms,
+        metadata=_metadata(ctx),
+        activity_id=4 if op == "DeleteKey" else 1,
+        device=device,
+        actor=actor,
+        reg_key=RegKey(path=target) if target is not None else None,
+        unmapped=fields,
+    )
+
+
+def _map_sysmon_registry_value(
+    fields: dict[str, Any], ctx: _Ctx
+) -> RegistryValueActivity:
+    """Map Sysmon event 13 (registry value set) to Registry Value Activity.
+
+    Class 201002 per the pinned OCSF 1.4.0 win extension
+    (``extensions/windows/events/registry_value_activity.json``: uid 2,
+    ``extends`` system). Event 13 sets one value, so the activity is 2
+    Set from that file's enum; ``EventType`` (``SetValue``, or the
+    NXLog ``INFO`` filler) stays in ``unmapped``. ``TargetObject``
+    becomes ``reg_value.path`` verbatim with the value name derived as
+    its last backslash component (mirroring the ``File.name``
+    derivation); ``Details`` becomes ``reg_value.data`` verbatim.
+    """
+    target = _take_text(fields, "TargetObject")
+    data = _take_text(fields, "Details")
+    image = _take_text(fields, "Image")
+    pid = _pid(fields.pop("ProcessId", None))
+    fields.pop("UtcTime", None)
+    value = _registry_value(target, data)
+    return RegistryValueActivity(
+        time=ctx.time_ms,
+        metadata=_metadata(ctx),
+        activity_id=2,
+        device=_device(ctx),
+        actor=_registry_actor(fields, image, pid),
+        reg_value=value,
+        unmapped=fields,
+    )
+
+
+def _map_sysmon_registry_rename(
+    fields: dict[str, Any], ctx: _Ctx
+) -> RegistryKeyActivity:
+    """Map Sysmon event 14 (registry object renamed) to Registry Key Activity.
+
+    Class 201001 per the pinned OCSF 1.4.0 win extension
+    (``extensions/windows/events/registry_key_activity.json``), activity
+    5 Rename from that file's enum, so no ``EventType`` is needed:
+    ``NewName`` is the post-rename path (``reg_key``) and
+    ``TargetObject`` the pre-rename path (``prev_reg_key``, "the
+    registry key before the mutation" in that file); without
+    ``NewName`` the target is the key. Any ``EventType`` or NXLog
+    ``EventTypeOrignal`` filler stays in ``unmapped``.
+    """
+    target = _take_text(fields, "TargetObject")
+    new_name = _take_text(fields, "NewName")
+    image = _take_text(fields, "Image")
+    pid = _pid(fields.pop("ProcessId", None))
+    fields.pop("UtcTime", None)
+    key = new_name if new_name is not None else target
+    prev = target if new_name is not None and target != new_name else None
+    return RegistryKeyActivity(
+        time=ctx.time_ms,
+        metadata=_metadata(ctx),
+        activity_id=5,
+        device=_device(ctx),
+        actor=_registry_actor(fields, image, pid),
+        reg_key=RegKey(path=key) if key is not None else None,
+        prev_reg_key=RegKey(path=prev) if prev is not None else None,
+        unmapped=fields,
+    )
+
+
 def _map_logon(fields: dict[str, Any], ctx: _Ctx, *, success: bool) -> Authentication:
     """Map Security 4624/4625 (logon success/failure) to Authentication.
 
@@ -769,14 +1106,112 @@ def _map_task_106(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
     )
 
 
+def _service_event(
+    fields: dict[str, Any], ctx: _Ctx, service: WinService | None, actor: Actor | None
+) -> WindowsServiceActivity:
+    """Build one Windows Service Activity (201004, Create) event."""
+    fields.pop("TimeCreated", None)
+    return WindowsServiceActivity(
+        time=ctx.time_ms,
+        metadata=_metadata(ctx),
+        activity_id=1,
+        device=_device(ctx),
+        actor=actor,
+        win_service=service,
+        unmapped=fields,
+    )
+
+
+def _map_service_4697(fields: dict[str, Any], ctx: _Ctx) -> WindowsServiceActivity:
+    """Map Security 4697 (a service was installed) to Service Activity.
+
+    Class 201004 per the pinned OCSF 1.4.0 win extension
+    (``extensions/windows/events/windows_service_activity.json``: uid 4,
+    ``extends`` system), activity 1 Create from that file's enum.
+    ``ServiceName`` becomes ``win_service.name``,
+    ``ServiceFileName`` becomes ``cmd_line``,
+    ``ServiceStartType`` (an SCM number) and ``ServiceType`` (a hex
+    bitmask) become the typed id/caption pairs, and
+    ``ServiceAccount`` becomes ``service_start_name``; the raw type
+    values stay in ``unmapped``. ``SubjectUserName`` /
+    ``SubjectDomainName`` name the installer and become the actor.
+    """
+    name = _take_text(fields, "ServiceName")
+    cmd_line = _take_text(fields, "ServiceFileName")
+    start_type_id, start_type = _service_start_type(fields.get("ServiceStartType"))
+    type_id, service_type = _service_type(fields.get("ServiceType"))
+    start_name = _take_text(fields, "ServiceAccount")
+    actor_name = _take_text(fields, "SubjectUserName")
+    actor_domain = _take_text(fields, "SubjectDomainName")
+    service: WinService | None = None
+    if (
+        name is not None
+        or cmd_line is not None
+        or start_name is not None
+        or start_type_id is not None
+        or type_id is not None
+    ):
+        service = WinService(
+            name=name,
+            cmd_line=cmd_line,
+            service_start_name=start_name,
+            service_start_type=start_type,
+            service_start_type_id=start_type_id,
+            service_type=service_type,
+            service_type_id=type_id,
+        )
+    return _service_event(fields, ctx, service, _actor(actor_name, actor_domain))
+
+
+def _map_service_7045(fields: dict[str, Any], ctx: _Ctx) -> WindowsServiceActivity:
+    """Map System 7045 (a service was installed) to Service Activity.
+
+    Same class and activity as Security 4697. ``ServiceName`` becomes
+    ``win_service.name`` and ``ImagePath`` becomes ``cmd_line``;
+    ``StartType`` words (``"auto start"``) and ``ServiceType`` words
+    (``"user mode service"``) become the typed id/caption pairs. This
+    layout carries no service-account field, so ``service_start_name``
+    stays empty; ``AccountName`` / ``Domain`` name the installing
+    subject (the same account as the matching 4697 installer) and
+    become the actor, while ``UserID`` stays in ``unmapped``.
+    """
+    name = _take_text(fields, "ServiceName")
+    cmd_line = _take_text(fields, "ImagePath")
+    start_type_id, start_type = _service_start_type(fields.get("StartType"))
+    type_id, service_type = _service_type(fields.get("ServiceType"))
+    actor_name = _take_text(fields, "AccountName")
+    actor_domain = _take_text(fields, "Domain")
+    service: WinService | None = None
+    if (
+        name is not None
+        or cmd_line is not None
+        or start_type_id is not None
+        or type_id is not None
+    ):
+        service = WinService(
+            name=name,
+            cmd_line=cmd_line,
+            service_start_type=start_type,
+            service_start_type_id=start_type_id,
+            service_type=service_type,
+            service_type_id=type_id,
+        )
+    return _service_event(fields, ctx, service, _actor(actor_name, actor_domain))
+
+
 _MAPPERS: dict[tuple[str, int], Callable[[dict[str, Any], _Ctx], OcsfEvent]] = {
     (SYSMON_CHANNEL, 1): _map_sysmon_process,
     (SYSMON_CHANNEL, 3): _map_sysmon_network,
     (SYSMON_CHANNEL, 10): _map_sysmon_access,
     (SYSMON_CHANNEL, 11): _map_sysmon_file,
+    (SYSMON_CHANNEL, 12): _map_sysmon_registry_key,
+    (SYSMON_CHANNEL, 13): _map_sysmon_registry_value,
+    (SYSMON_CHANNEL, 14): _map_sysmon_registry_rename,
     (SECURITY_CHANNEL, 4624): lambda f, c: _map_logon(f, c, success=True),
     (SECURITY_CHANNEL, 4625): lambda f, c: _map_logon(f, c, success=False),
+    (SECURITY_CHANNEL, 4697): _map_service_4697,
     (SECURITY_CHANNEL, 4698): _map_task_4698,
+    (SYSTEM_CHANNEL, 7045): _map_service_7045,
     (TASKSCHEDULER_CHANNEL, 106): _map_task_106,
     (POWERSHELL_CHANNEL, 4104): _map_powershell_script,
     (POWERSHELL_CHANNEL, 4103): _map_powershell_module,

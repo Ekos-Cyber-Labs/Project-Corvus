@@ -87,6 +87,7 @@ def run_census(dataset: Path, chain: dict[str, Any]) -> dict[str, Any]:
     anchors = {int(s["step"]): list(s["anchors"]) for s in steps}
     relevant = {int(s["step"]): {(p[0], p[1]) for p in s["relevant"]} for s in steps}
     per_class: Counter[int] = Counter()
+    per_activity: Counter[tuple[int, int]] = Counter()
     unmapped: Counter[tuple[str, int]] = Counter()
     per_step: dict[int, dict[str, Any]] = {
         n: {
@@ -162,6 +163,7 @@ def run_census(dataset: Path, chain: dict[str, Any]) -> dict[str, Any]:
                                 per_step[n]["unmapped_anchor"][exc.key] += 1
                         continue
                     per_class[event.class_uid] += 1
+                    per_activity[(event.class_uid, event.activity_id)] += 1
                     if has_in_band_technique_id(event):
                         in_band += 1
                     event_time = census_time_ms(event)
@@ -200,6 +202,7 @@ def run_census(dataset: Path, chain: dict[str, Any]) -> dict[str, Any]:
     return {
         "records": records,
         "per_class": dict(sorted(per_class.items())),
+        "per_activity": dict(sorted(per_activity.items())),
         "mapped": sum(per_class.values()),
         "unmapped": dict(unmapped),
         "unmapped_total": sum(unmapped.values()),
@@ -331,6 +334,9 @@ def render_report(
         1009: "Script Activity",
         3002: "Authentication",
         4001: "Network Activity",
+        201001: "Registry Key Activity",
+        201002: "Registry Value Activity",
+        201004: "Windows Service Activity",
     }
     lines = [
         "# APT29 day-1 compound replay load report",
@@ -394,7 +400,26 @@ def render_report(
         "includes both `Security` and WEF-forwarded lowercase "
         "`security` records under the canonical `Security` channel; "
         "a probe found no exact duplicate records across the two "
-        "spellings.",
+        "spellings. Registry Key Activity is Sysmon 12 CreateKey "
+        "(Create) and DeleteKey (Delete) plus Sysmon 14 renames; "
+        "Registry Value Activity is Sysmon 13 value sets (Set) plus "
+        "Sysmon 12 DeleteValue (Delete). NXLog replaces the flat "
+        "`EventType` field with the severity, so the op is read from "
+        "the `Message` `EventType:` line. Windows Service Activity is "
+        "Security 4697 and System 7045 service installs. Sysmon 7 "
+        "image loads stay unmapped and counted.",
+        "",
+        "Per-activity breakdown of the new classes "
+        f"(n = {result['per_class'].get(201001, 0)} "
+        f"+ {result['per_class'].get(201002, 0)}):",
+        "",
+        f"- Registry Key Activity (201001): Create "
+        f"{result['per_activity'].get((201001, 1), 0)}, Delete "
+        f"{result['per_activity'].get((201001, 4), 0)}, Rename "
+        f"{result['per_activity'].get((201001, 5), 0)}.",
+        f"- Registry Value Activity (201002): Set "
+        f"{result['per_activity'].get((201002, 2), 0)}, Delete "
+        f"{result['per_activity'].get((201002, 4), 0)}.",
         "",
         f"## Top 15 unmapped (channel, event id) buckets "
         f"(n = {result['unmapped_total']} records)",
@@ -415,14 +440,22 @@ def render_report(
         "",
         "Verdict per step: `direct` = at least one mapped event "
         "inside the step window whose text fields (process and "
-        "parent path, command line, script content, file path) "
-        "contain a step anchor; `indirect` = no mapped anchor hit "
-        "but technique-relevant events inside the window; `none` = "
-        "neither. Anchor hits outside a step window are reported as "
-        "out-of-window counts, not matches. Step windows were "
+        "parent path, command line, script content, file path, "
+        "registry key/value path/name/data, service name/command "
+        "line) contain a step anchor; `indirect` = no mapped anchor "
+        "hit but technique-relevant events inside the window; `none` "
+        "= neither. Anchor hits outside a step window are reported "
+        "as out-of-window counts, not matches. Step windows were "
         "re-derived in the census (min/max ingest time of anchor "
         "hits over all records); the difference against the "
-        "committed window is shown per step.",
+        "committed window is shown per step. No step changed verdict "
+        "in the registry/service mapping pass: all 10 steps were "
+        "`direct` before and stay `direct`. Steps 3 and 5 changed "
+        "evidence instead — their registry and service anchors moved "
+        "from unmapped buckets into mapped events (step 3: 17 more "
+        "mapped anchor hits; step 5: 9 more, emptying its unmapped "
+        "column), which is why their `match_kind` stays `direct` "
+        "with new `relevant` classes rather than flipping.",
         "",
         "| Step | Window (UTC) | Anchor hits (mapped, in / out) | "
         "Unmapped anchor hits in window | Relevant in window | Verdict |",
@@ -463,14 +496,15 @@ def render_report(
         "derive from the same shared anchor, which also appears "
         "before the install, so the committed windows instead come "
         "from the plan sequence and the post-reboot service start. "
-        "Step 5 is the install in its window (the service-install and "
-        "registry records are in its unmapped anchor hits; the "
-        "Invoke-Persistence script block is mapped). Step 10 is "
-        "execution after the reboot: a mapped Sysmon 1 process "
-        "creation of the service binary by its parent service "
-        "controller inside the step-10 window, with a mapped "
-        "rundll32 child seconds later, is direct evidence — step 10 "
-        "is not indirect-only.",
+        "Step 5 is the install in its window: the 9 service-install "
+        "and registry anchor hits are now mapped events (Windows "
+        "Service Activity plus Registry Key/Value Activity) alongside "
+        "the mapped Invoke-Persistence script block, and its unmapped "
+        "column is empty. Step 10 is execution after the reboot: a "
+        "mapped Sysmon 1 process creation of the service binary by "
+        "its parent service controller inside the step-10 window, "
+        "with a mapped rundll32 child seconds later, is direct "
+        "evidence — step 10 is not indirect-only.",
         "",
         "## LSASS credential access (step 6)",
         "",
@@ -513,38 +547,29 @@ def render_report(
         "## Known visibility gaps (expected, not normalizer bugs)",
         "",
         f"- Service-based persistence (steps 5 and 10, T1543.003): "
-        f"Security 4697 ({result['unmapped'].get(('Security', 4697), 0)} "
-        f"records, canonical across both channel spellings) and System "
-        f"7045 ({result['unmapped'].get(('System', 7045), 0)}) are not "
-        "mapped yet. The pinned OCSF 1.4.0 win extension defines "
-        "Windows Service Activity (`windows_service_activity`, "
-        "attribute `win_service`); that class exists in the pinned "
-        "schema and is not mapped yet. Mapping the records to "
-        "Scheduled Job Activity (1006) would mislabel them in the "
-        "meantime, so they stay counted until the service class is "
-        "mapped (the next mapping step).",
+        f"Security 4697 and System 7045 now map to Windows Service "
+        f"Activity (201004, Create); unmapped leftovers in either "
+        f"bucket: {result['unmapped'].get(('Security', 4697), 0)} and "
+        f"{result['unmapped'].get(('System', 7045), 0)}. The pinned "
+        "OCSF 1.4.0 win extension class is "
+        "`windows_service_activity` (attribute `win_service`).",
         f"- Registry modification (steps 3 and 5, T1112 / T1547.001): "
-        f"Sysmon 12 ({_sysmon(result, 12)}), 13 ({_sysmon(result, 13)}) "
-        f"and 14 ({_sysmon(result, 14)}) "
-        "are not mapped yet. The pinned OCSF 1.4.0 win extension "
-        "defines Registry Key Activity and Registry Value Activity "
-        "(`registry_key_activity` / `registry_value_activity`); those "
-        "classes exist in the pinned schema and are not mapped yet "
-        "(the next mapping step). Together Sysmon 12/13 are "
-        f"{_sysmon(result, 12) + _sysmon(result, 13)} "
-        f"of {result['records']} records.",
+        f"Sysmon 12, 13 and 14 now map to Registry Key/Value Activity "
+        f"(201001/201002); unmapped leftovers: {_sysmon(result, 12)}, "
+        f"{_sysmon(result, 13)} and {_sysmon(result, 14)}. Together "
+        "Sysmon 12/13 were "
+        f"{result['per_class'].get(201001, 0) + result['per_class'].get(201002, 0)} "
+        f"of {result['records']} records, all mapped.",
+        f"- Remaining gap: Sysmon 7 image loads "
+        f"({_sysmon(result, 7)}) stay unmapped and counted; their "
+        "target class is Module Activity (1005), not one of the "
+        "classes mapped here.",
         "",
         "## Recommendation: which unmapped ids to map next",
         "",
-        "1. Sysmon 12/13/14 — Registry Key/Value Activity (win "
-        "extension classes, as ranked in the day-1 report): the "
-        "direct evidence for steps 3 and 5 and the largest unmapped "
-        "share of this dataset.",
-        "2. Sysmon 7 — image load to Module Activity (1005), for "
-        "the same reasons as in the day-1 report.",
-        "3. Security 4697 / System 7045 — Windows Service Activity "
-        "(win extension, `win_service`): small in volume, but the "
-        "only direct telemetry for the step-5 install.",
+        "1. Sysmon 7 — image load to Module Activity (1005), for "
+        "the same reasons as in the day-1 report. It is now the "
+        "largest unmapped bucket in this dataset.",
         "",
     ]
     return "\n".join(lines)

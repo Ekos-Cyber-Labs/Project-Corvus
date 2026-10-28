@@ -436,6 +436,9 @@ def test_replay_products_land_in_the_source_category_map() -> None:
         _normalize_record(fx.flat_security_logon(success=True)),
         _normalize_record(fx.flat_taskscheduler_106()),
         _normalize_record(fx.flat_powershell_script()),
+        _normalize_record(fx.flat_sysmon_registry_value()),
+        _normalize_record(fx.flat_security_service()),
+        _normalize_record(fx.flat_service_install(channel="System")),
     ]
     inventory = FakeAdapter(events).describe_sources()
     by_source = {entry.source: entry.category for entry in inventory.sources}
@@ -443,6 +446,11 @@ def test_replay_products_land_in_the_source_category_map() -> None:
     assert by_source[f"Microsoft Windows:{SECURITY_CHANNEL}"] == "authentication"
     assert by_source[f"Microsoft Windows:{TASKSCHEDULER_CHANNEL}"] == "endpoint process"
     assert by_source[f"Microsoft Windows:{POWERSHELL_CHANNEL}"] == "endpoint process"
+    assert by_source[f"Microsoft Windows:{SYSTEM_CHANNEL}"] == "endpoint process"
+    classes = {entry.source: entry.classes for entry in inventory.sources}
+    assert 201002 in classes[f"Sysmon:{SYSMON_CHANNEL}"]
+    assert 201004 in classes[f"Microsoft Windows:{SECURITY_CHANNEL}"]
+    assert classes[f"Microsoft Windows:{SYSTEM_CHANNEL}"] == [201004]
 
 
 def test_lowercase_channel_maps_with_canonical_log_name() -> None:
@@ -730,22 +738,308 @@ def test_windows_powershell_600_stays_unmapped() -> None:
     assert excinfo.value.key == (WINDOWS_POWERSHELL_CHANNEL, 600)
 
 
-def test_service_install_stays_unmapped_not_scheduled_job() -> None:
-    """7045/4697 are a reported gap, never mislabelled as Scheduled Job."""
-    with pytest.raises(UnmappedEvent) as system_exc:
-        _normalize_record(fx.flat_service_install(channel="System"))
-    assert system_exc.value.key == (SYSTEM_CHANNEL, 7045)
-    with pytest.raises(UnmappedEvent) as security_exc:
-        _normalize_record(fx.flat_service_install(channel="Security"))
-    assert security_exc.value.key == (SECURITY_CHANNEL, 4697)
+def test_sysmon_12_create_maps_to_registry_key_activity() -> None:
+    event = _normalize_record(fx.flat_sysmon_registry_key())
+    assert event.class_uid == 201001
+    assert event.category_uid == 1
+    assert event.activity_id == 1
+    assert event.type_uid == 20100101
+    assert event.metadata.log_name == SYSMON_CHANNEL
+    assert event.metadata.product.name == "Sysmon"
+    assert event.time == fx.SYS_MS
+    assert event.reg_key is not None
+    assert event.reg_key.path == "HKLM\\SOFTWARE\\ExampleCorp\\ExampleApp"
+    assert event.prev_reg_key is None
+    assert event.actor is not None and event.actor.user is not None
+    assert event.actor.user.name == "SYSTEM"
+    assert event.actor.user.domain == "NT AUTHORITY"
+    assert event.actor.process is not None
+    assert event.actor.process.pid == 4321
+    assert event.actor.process.name == "regedit.exe"
+    assert event.unmapped["EventType"] == "INFO"
+    assert "EventType: CreateKey" in event.unmapped["Message"]
+    assert event.unmapped["RuleName"] == "-"
+    assert event.entity_keys.user == "nt authority\\system"
+    assert event.entity_keys.host == "web01"
+    _check_no_drop(
+        fx.flat_sysmon_registry_key(),
+        FLAT_ENVELOPE,
+        {
+            "TargetObject",
+            "Image",
+            "ProcessId",
+            "AccountName",
+            "Domain",
+            "UtcTime",
+        },
+    )
+
+
+def test_sysmon_12_deletekey_maps_to_delete() -> None:
+    """The op comes from the Message line when EventType is INFO."""
+    event = _normalize_record(fx.flat_sysmon_registry_key(event_type="DeleteKey"))
+    assert event.class_uid == 201001
+    assert event.activity_id == 4
+    assert event.reg_key is not None
+    assert event.reg_key.path == "HKLM\\SOFTWARE\\ExampleCorp\\ExampleApp"
+    assert event.unmapped["EventType"] == "INFO"
+    # Other NXLog files keep a real EventType field: same outcome.
+    field_op = fx.flat_sysmon_registry_key()
+    field_op["EventType"] = "DeleteKey"
+    del field_op["Message"]
+    event = _normalize_record(field_op)
+    assert event.class_uid == 201001
+    assert event.activity_id == 4
+
+
+def test_sysmon_12_deletevalue_maps_to_registry_value_delete() -> None:
+    """A value delete is a Registry Value Activity, not a key record."""
+    event = _normalize_record(fx.flat_sysmon_registry_key(event_type="DeleteValue"))
+    assert event.class_uid == 201002
+    assert event.activity_id == 4
+    assert event.type_uid == 20100204
+    assert event.reg_value is not None
+    assert event.reg_value.path == "HKLM\\SOFTWARE\\ExampleCorp\\ExampleApp"
+    assert event.reg_value.name == "ExampleApp"
+    assert event.unmapped["EventType"] == "INFO"
+
+
+def test_sysmon_12_filler_event_type_defaults_to_create() -> None:
+    """INFO with no Message op stays Create with the raw value kept."""
+    record = fx.flat_sysmon_registry_key()
+    record["Message"] = "Registry object added or deleted:\r\nRuleName: -\r\n"
+    event = _normalize_record(record)
+    assert event.class_uid == 201001
+    assert event.activity_id == 1
+    assert event.reg_key is not None
+    assert event.unmapped["EventType"] == "INFO"
+
+
+def test_sysmon_12_other_known_ops_route_to_their_class() -> None:
+    """Defensive branches: value ops to Value, RenameKey to Key Rename."""
+    value = _normalize_record(fx.flat_sysmon_registry_key(event_type="SetValue"))
+    assert value.class_uid == 201002
+    assert value.activity_id == 2
+    rename = _normalize_record(fx.flat_sysmon_registry_key(event_type="RenameKey"))
+    assert rename.class_uid == 201001
+    assert rename.activity_id == 5
+
+
+def test_sysmon_13_maps_to_registry_value_activity() -> None:
+    event = _normalize_record(fx.flat_sysmon_registry_value())
+    assert event.class_uid == 201002
+    assert event.category_uid == 1
+    assert event.activity_id == 2
+    assert event.type_uid == 20100202
+    assert event.metadata.log_name == SYSMON_CHANNEL
+    assert event.time == fx.SYS_MS
+    assert event.reg_value is not None
+    assert (
+        event.reg_value.path
+        == "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\ExampleApp"
+    )
+    assert event.reg_value.name == "ExampleApp"
+    assert event.reg_value.data == "C:\\Tools\\example.exe"
+    assert event.actor is not None and event.actor.process is not None
+    assert event.actor.process.pid == 4321
+    assert event.unmapped["EventType"] == "INFO"
+    assert "EventType: SetValue" in event.unmapped["Message"]
+    _check_no_drop(
+        fx.flat_sysmon_registry_value(),
+        FLAT_ENVELOPE,
+        {
+            "TargetObject",
+            "Details",
+            "Image",
+            "ProcessId",
+            "AccountName",
+            "Domain",
+            "UtcTime",
+        },
+    )
+
+
+def test_sysmon_14_maps_to_registry_rename() -> None:
+    event = _normalize_record(fx.flat_sysmon_registry_rename())
+    assert event.class_uid == 201001
+    assert event.activity_id == 5
+    assert event.metadata.log_name == SYSMON_CHANNEL
+    assert event.reg_key is not None
+    assert event.reg_key.path == "HKLM\\SOFTWARE\\ExampleCorp\\NewName"
+    assert event.prev_reg_key is not None
+    assert event.prev_reg_key.path == "HKLM\\SOFTWARE\\ExampleCorp\\OldName"
+    assert event.unmapped["EventTypeOrignal"] == "INFO"
+    _check_no_drop(
+        fx.flat_sysmon_registry_rename(),
+        FLAT_ENVELOPE,
+        {
+            "TargetObject",
+            "NewName",
+            "Image",
+            "ProcessId",
+            "AccountName",
+            "Domain",
+            "UtcTime",
+        },
+    )
+
+
+def test_security_4697_maps_to_windows_service_activity() -> None:
+    event = _normalize_record(fx.flat_security_service())
+    assert event.class_uid == 201004
+    assert event.category_uid == 1
+    assert event.activity_id == 1
+    assert event.type_uid == 20100401
+    assert event.metadata.log_name == SECURITY_CHANNEL
+    assert event.metadata.product.name == "Microsoft Windows"
+    assert event.time == fx.SYS_MS
+    assert event.win_service is not None
+    assert event.win_service.name == "ExampleSupport"
+    assert event.win_service.cmd_line == "C:\\Windows\\System32\\examplesup.exe"
+    assert event.win_service.service_start_name == "LocalSystem"
+    assert event.win_service.service_start_type_id == 3
+    assert event.win_service.service_start_type == "Auto"
+    assert event.win_service.service_type_id == 3
+    assert event.win_service.service_type == "Own Process"
+    assert event.actor is not None and event.actor.user is not None
+    assert event.actor.user.name == "jdoe"
+    assert event.actor.user.domain == "EXAMPLE"
+    assert event.unmapped["ServiceStartType"] == "2"
+    assert event.unmapped["ServiceType"] == "0x10"
+    assert event.entity_keys.user == "example\\jdoe"
+    _check_no_drop(
+        fx.flat_security_service(),
+        FLAT_ENVELOPE,
+        {
+            "ServiceName",
+            "ServiceFileName",
+            "ServiceAccount",
+            "SubjectUserName",
+            "SubjectDomainName",
+            "TimeCreated",
+        },
+    )
+
+
+def test_system_7045_maps_to_windows_service_activity() -> None:
+    event = _normalize_record(fx.flat_service_install(channel="System"))
+    assert event.class_uid == 201004
+    assert event.activity_id == 1
+    assert event.metadata.log_name == SYSTEM_CHANNEL
+    assert event.win_service is not None
+    assert event.win_service.name == "ExampleSupport"
+    assert event.win_service.cmd_line == "C:\\Windows\\System32\\examplesup.exe"
+    assert event.win_service.service_start_name is None
+    assert event.win_service.service_start_type_id == 3
+    assert event.win_service.service_start_type == "Auto"
+    assert event.win_service.service_type_id == 99
+    assert event.win_service.service_type == "user mode service"
+    assert event.actor is not None and event.actor.user is not None
+    assert event.actor.user.name == "jdoe"
+    assert event.unmapped["StartType"] == "auto start"
+    assert event.unmapped["ServiceType"] == "user mode service"
+    _check_no_drop(
+        fx.flat_service_install(channel="System"),
+        FLAT_ENVELOPE,
+        {"ServiceName", "ImagePath", "AccountName", "Domain", "TimeCreated"},
+    )
+
+
+def test_service_type_numbers_and_words() -> None:
+    """SCM numbers (4697) and 7045 words share the OCSF id space."""
+    record = fx.flat_security_service()
+    record["ServiceStartType"] = "3"
+    record["ServiceType"] = "0x1"
+    event = _normalize_record(record)
+    assert event.win_service is not None
+    assert event.win_service.service_start_type_id == 4
+    assert event.win_service.service_start_type == "Demand"
+    assert event.win_service.service_type_id == 1
+    assert event.win_service.service_type == "Kernel Driver"
+    record["ServiceStartType"] = "9"
+    record["ServiceType"] = "0xe0"
+    event = _normalize_record(record)
+    assert event.win_service is not None
+    assert event.win_service.service_start_type_id == 99
+    assert event.win_service.service_start_type == "9"
+    assert event.win_service.service_type_id == 99
+    assert event.win_service.service_type == "0xe0"
+    install = fx.flat_service_install(channel="System")
+    install["StartType"] = "demand start"
+    install["ServiceType"] = "kernel mode driver"
+    event = _normalize_record(install)
+    assert event.win_service is not None
+    assert event.win_service.service_start_type_id == 4
+    assert event.win_service.service_type_id == 1
+
+
+def test_sysmon_7_stays_unmapped_and_counted() -> None:
+    """Sysmon 7 (image load) targets Module Activity: not mapped here."""
+    with pytest.raises(UnmappedEvent) as excinfo:
+        _normalize_record(fx.flat_unmapped(event_id=7, channel=SYSMON_CHANNEL))
+    assert excinfo.value.key == (SYSMON_CHANNEL, 7)
 
 
 def test_lowercase_security_unmapped_merges_with_security(tmp_path: Path) -> None:
     """WEF lowercase ``security`` counts in the canonical Security bucket."""
-    lower = fx.flat_service_install(channel="security")
-    upper = fx.flat_service_install(channel="Security")
+    lower = fx.flat_unmapped(channel="security")
+    upper = fx.flat_unmapped(channel="Security")
     lines = [json.dumps(lower), json.dumps(upper)]
     archive = _write_zip(tmp_path / "svc.zip", {"events.json": lines})
     result = read_dataset_file(archive, dataset_rel="svc.zip")
     assert result.events == []
-    assert result.unmapped == {(SECURITY_CHANNEL, 4697): 2}
+    assert result.unmapped == {(SECURITY_CHANNEL, 4688): 2}
+
+
+def test_lowercase_channels_map_for_registry_and_service() -> None:
+    """Case-insensitive channels keep the canonical log_name on new classes."""
+    key = fx.flat_sysmon_registry_key()
+    key["Channel"] = "microsoft-windows-sysmon/operational"
+    event = _normalize_record(key)
+    assert event.class_uid == 201001
+    assert event.metadata.log_name == SYSMON_CHANNEL
+    service = fx.flat_security_service()
+    service["Channel"] = "security"
+    event = _normalize_record(service)
+    assert event.class_uid == 201004
+    assert event.metadata.log_name == SECURITY_CHANNEL
+    install = fx.flat_service_install(channel="System")
+    install["Channel"] = "system"
+    event = _normalize_record(install)
+    assert event.class_uid == 201004
+    assert event.metadata.log_name == SYSTEM_CHANNEL
+
+
+def test_winlog_layout_maps_registry_and_service() -> None:
+    """Newer nested winlog layout maps every new (channel, event id)."""
+    cases = [
+        (fx.winlog_sysmon_registry_key(), 201001, 1, SYSMON_CHANNEL),
+        (fx.winlog_sysmon_registry_value(), 201002, 2, SYSMON_CHANNEL),
+        (fx.winlog_sysmon_registry_rename(), 201001, 5, SYSMON_CHANNEL),
+        (fx.winlog_security_service(), 201004, 1, SECURITY_CHANNEL),
+        (fx.winlog_system_service(), 201004, 1, SYSTEM_CHANNEL),
+    ]
+    for record, class_uid, activity_id, channel in cases:
+        event = _normalize_record(record)
+        assert event.class_uid == class_uid
+        assert event.activity_id == activity_id
+        assert event.metadata.log_name == channel
+        assert event.time == fx.SYS_MS
+    key = _normalize_record(fx.winlog_sysmon_registry_key())
+    assert key.reg_key is not None
+    assert key.reg_key.path == "HKLM\\SOFTWARE\\ExampleCorp\\ExampleApp"
+    value = _normalize_record(fx.winlog_sysmon_registry_value())
+    assert value.reg_value is not None
+    assert value.reg_value.name == "ExampleApp"
+    assert value.reg_value.data == "C:\\Tools\\example.exe"
+    rename = _normalize_record(fx.winlog_sysmon_registry_rename())
+    assert rename.prev_reg_key is not None
+    assert rename.prev_reg_key.path == "HKLM\\SOFTWARE\\ExampleCorp\\OldName"
+    security = _normalize_record(fx.winlog_security_service())
+    assert security.win_service is not None
+    assert security.win_service.name == "ExampleSupport"
+    assert security.win_service.service_start_type_id == 3
+    system = _normalize_record(fx.winlog_system_service())
+    assert system.win_service is not None
+    assert system.win_service.service_start_type_id == 3
+    assert "provider_name" in system.unmapped

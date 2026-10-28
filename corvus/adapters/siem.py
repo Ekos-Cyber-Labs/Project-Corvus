@@ -77,6 +77,7 @@ _SOURCE_CATEGORY: dict[tuple[str, str], SourceCategory] = {
     ("wazuh", "syscheck"): "endpoint process",
     ("Sysmon", "Microsoft-Windows-Sysmon/Operational"): "endpoint process",
     ("Microsoft Windows", "Security"): "authentication",
+    ("Microsoft Windows", "System"): "endpoint process",
     (
         "Microsoft Windows",
         "Microsoft-Windows-TaskScheduler/Operational",
@@ -95,6 +96,9 @@ _CLASS_CATEGORY: dict[int, SourceCategory] = {
     1001: "endpoint process",
     1006: "endpoint process",
     1009: "endpoint process",
+    201001: "endpoint process",
+    201002: "endpoint process",
+    201004: "endpoint process",
     2004: "other",
 }
 

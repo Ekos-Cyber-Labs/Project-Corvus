@@ -253,6 +253,8 @@ or model inputs. Details: `datasets/README.md`.
   extensions such as win included, never written from memory). Classes:
   Authentication 3002, Process Activity 1007, Network Activity 4001, File
   System Activity 1001, Scheduled Job Activity 1006, Script Activity 1009,
+  Registry Key Activity 201001, Registry Value Activity 201002, Windows
+  Service Activity 201004 (all three from the win extension),
   Detection Finding 2004.
   All times UTC. Raw event kept on every record.
 - State: PostgreSQL is the system of record — incidents, durable work queue

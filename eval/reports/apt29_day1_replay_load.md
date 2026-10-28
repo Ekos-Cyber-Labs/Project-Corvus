@@ -5,11 +5,11 @@ Load: `corvus replay load data/security-datasets/datasets/compound/apt29/day1/ap
 ## Load totals
 
 - Files processed: 1. SHA-256 verified before load: `98a073140860560d70080ace9142961be4f64b4862bae892d62d0f254d0fdbe5`.
-- Runtime: 8.0 s (loader summary). Peak memory: 403734528 bytes maximum resident set size via `/usr/bin/time -l`. The census pass streams record by record and never holds the dataset in memory.
-- Mapped events: 53512. Unmapped records: 142569 in 167 (channel, event id) buckets. Unsupported archive members: 0. Mapped + unmapped = 196081, the full record count.
+- Runtime and peak memory: measured with `/usr/bin/time -l corvus replay load ...` at report generation; re-run that command to reproduce them. The census pass streams record by record and never holds the dataset in memory.
+- Mapped events: 132232. Unmapped records: 63849 in 163 (channel, event id) buckets. Unsupported archive members: 0. Mapped + unmapped = 196081, the full record count.
 - Events carrying an in-band technique reference (provenance flag from the load): 0.
 
-## Events per OCSF class (n = 53512)
+## Events per OCSF class (n = 132232)
 
 | Class | Events |
 |---|---|
@@ -18,16 +18,22 @@ Load: `corvus replay load data/security-datasets/datasets/compound/apt29/day1/ap
 | 1009 Script Activity | 10607 |
 | 3002 Authentication | 297 |
 | 4001 Network Activity | 1229 |
+| 201001 Registry Key Activity | 60970 |
+| 201002 Registry Value Activity | 17722 |
+| 201004 Windows Service Activity | 28 |
 
-Script Activity is PowerShell 4104 plus PowerShell Operational 4103 and Windows PowerShell 800. Authentication includes both `Security` and WEF-forwarded lowercase `security` records under the canonical `Security` channel; a probe found no exact duplicate records across the two spellings.
+Script Activity is PowerShell 4104 plus PowerShell Operational 4103 and Windows PowerShell 800. Authentication includes both `Security` and WEF-forwarded lowercase `security` records under the canonical `Security` channel; a probe found no exact duplicate records across the two spellings. Registry Key Activity is Sysmon 12 CreateKey (Create) and DeleteKey (Delete) plus Sysmon 14 renames; Registry Value Activity is Sysmon 13 value sets (Set) plus Sysmon 12 DeleteValue (Delete). NXLog replaces the flat `EventType` field with the severity, so the op is read from the `Message` `EventType:` line. Windows Service Activity is Security 4697 and System 7045 service installs. Sysmon 7 image loads stay unmapped and counted.
 
-## Top 15 unmapped (channel, event id) buckets (n = 142569 records)
+Per-activity breakdown of the new classes (n = 60970 + 17722):
+
+- Registry Key Activity (201001): Create 60094, Delete 876, Rename 0.
+- Registry Value Activity (201002): Set 17541, Delete 181.
+
+## Top 15 unmapped (channel, event id) buckets (n = 63849 records)
 
 | Channel | Event id | Records |
 |---|---|---|
-| Microsoft-Windows-Sysmon/Operational | 12 | 61151 |
 | Microsoft-Windows-Sysmon/Operational | 7 | 20259 |
-| Microsoft-Windows-Sysmon/Operational | 13 | 17541 |
 | Security | 4658 | 10973 |
 | Security | 4656 | 5497 |
 | Security | 4690 | 5471 |
@@ -40,27 +46,29 @@ Script Activity is PowerShell 4104 plus PowerShell Operational 4103 and Windows 
 | Microsoft-Windows-Sysmon/Operational | 9 | 652 |
 | Security | 4688 | 460 |
 | Microsoft-Windows-Sysmon/Operational | 23 | 422 |
+| Microsoft-Windows-Sysmon/Operational | 5 | 401 |
+| Security | 4689 | 398 |
 
 Security buckets are canonical: lowercase `security` records count under `Security`, never as a second channel.
 
 ## Ground-truth step visibility (per-step windows, counts only)
 
-Verdict per step: `direct` = at least one mapped event inside the step window whose text fields (process and parent path, command line, script content, file path) contain a step anchor; `indirect` = no mapped anchor hit but technique-relevant events inside the window; `none` = neither. Anchor hits outside a step window are reported as out-of-window counts, not matches. Step windows were re-derived in the census (min/max ingest time of anchor hits over all records); the difference against the committed window is shown per step.
+Verdict per step: `direct` = at least one mapped event inside the step window whose text fields (process and parent path, command line, script content, file path, registry key/value path/name/data, service name/command line) contain a step anchor; `indirect` = no mapped anchor hit but technique-relevant events inside the window; `none` = neither. Anchor hits outside a step window are reported as out-of-window counts, not matches. Step windows were re-derived in the census (min/max ingest time of anchor hits over all records); the difference against the committed window is shown per step. No step changed verdict in the registry/service mapping pass: all 10 steps were `direct` before and stay `direct`. Steps 3 and 5 changed evidence instead — their registry and service anchors moved from unmapped buckets into mapped events (step 3: 17 more mapped anchor hits; step 5: 9 more, emptying its unmapped column), which is why their `match_kind` stays `direct` with new `relevant` classes rather than flipping.
 
 | Step | Window (UTC) | Anchor hits (mapped, in / out) | Unmapped anchor hits in window | Relevant in window | Verdict |
 |---|---|---|---|---|---|
-| 1 Initial Breach | 02:55:57-03:02:06 (derived 02:55:57-03:02:06 (+730 / +95 ms)) | 31 / 2 | Microsoft-Windows-Sysmon/Operational 7: 65; Microsoft-Windows-Sysmon/Operational 12: 9; Microsoft-Windows-Sysmon/Operational 17: 6; Microsoft-Windows-Sysmon/Operational 18: 6; Security 4688: 5; Security 4658: 2; Microsoft-Windows-Sysmon/Operational 22: 2; Security 4673: 1; Security 4656: 1; Security 4663: 1; Security 5158: 1; Security 5156: 1; Security 4689: 1; Microsoft-Windows-Sysmon/Operational 5: 1; Microsoft-Windows-Sysmon/Operational 13: 1 | 44 | direct |
+| 1 Initial Breach | 02:55:57-03:02:06 (derived 02:55:57-03:02:06 (+730 / +95 ms)) | 41 / 2 | Microsoft-Windows-Sysmon/Operational 7: 65; Microsoft-Windows-Sysmon/Operational 17: 6; Microsoft-Windows-Sysmon/Operational 18: 6; Security 4688: 5; Security 4658: 2; Microsoft-Windows-Sysmon/Operational 22: 2; Security 4673: 1; Security 4656: 1; Security 4663: 1; Security 5158: 1; Security 5156: 1; Security 4689: 1; Microsoft-Windows-Sysmon/Operational 5: 1 | 44 | direct |
 | 2 Rapid Collection and Exfiltration | 02:56:18-03:03:16 (derived 02:56:18-03:16:01 (+119 / +765396 ms)) | 41 / 28 | none | 6235 | direct |
-| 3 Deploy Stealth Toolkit | 02:57:01-03:08:53 (derived 02:57:01-03:08:53 (+833 / +548 ms)) | 44 / 0 | Microsoft-Windows-Sysmon/Operational 7: 68; Microsoft-Windows-Sysmon/Operational 13: 10; Microsoft-Windows-Sysmon/Operational 12: 7; Windows PowerShell 600: 6; Security 4688: 5; Microsoft-Windows-Sysmon/Operational 5: 3; Security 4689: 3; Security 4658: 2; Security 4656: 1; Security 4663: 1; Windows PowerShell 400: 1 | 9258 | direct |
-| 4 Defense Evasion and Discovery | 02:59:44-03:18:22 (derived 02:59:44-03:18:22 (+582 / +14 ms)) | 4260 / 0 | Microsoft-Windows-Sysmon/Operational 7: 444; Microsoft-Windows-Sysmon/Operational 12: 48; Microsoft-Windows-PowerShell/Operational 4100: 45; Security 4658: 22; Security 5158: 13; Security 5156: 13; Security 4688: 11; Security 4656: 11; Security 4663: 11; Security 4689: 10; Microsoft-Windows-Sysmon/Operational 13: 10; Microsoft-Windows-Sysmon/Operational 5: 10; Microsoft-Windows-Sysmon/Operational 18: 9; Microsoft-Windows-Sysmon/Operational 23: 6; Security 4673: 6; Microsoft-Windows-Sysmon/Operational 22: 4 | 12366 | direct |
-| 5 Persistence | 03:04:16-03:04:24 (derived 03:00:37-03:20:38 (-218459 / +974550 ms)) | 4 / 24 | Microsoft-Windows-Sysmon/Operational 13: 6; Security 4697: 1; Microsoft-Windows-Sysmon/Operational 12: 1; System 7045: 1 | 13 | direct |
+| 3 Deploy Stealth Toolkit | 02:57:01-03:08:53 (derived 02:57:01-03:08:53 (+833 / +548 ms)) | 61 / 0 | Microsoft-Windows-Sysmon/Operational 7: 68; Windows PowerShell 600: 6; Security 4688: 5; Microsoft-Windows-Sysmon/Operational 5: 3; Security 4689: 3; Security 4658: 2; Security 4656: 1; Security 4663: 1; Windows PowerShell 400: 1 | 45391 | direct |
+| 4 Defense Evasion and Discovery | 02:59:44-03:18:22 (derived 02:59:44-03:18:22 (+582 / +14 ms)) | 4318 / 0 | Microsoft-Windows-Sysmon/Operational 7: 444; Microsoft-Windows-PowerShell/Operational 4100: 45; Security 4658: 22; Security 5158: 13; Security 5156: 13; Security 4688: 11; Security 4656: 11; Security 4663: 11; Security 4689: 10; Microsoft-Windows-Sysmon/Operational 5: 10; Microsoft-Windows-Sysmon/Operational 18: 9; Microsoft-Windows-Sysmon/Operational 23: 6; Security 4673: 6; Microsoft-Windows-Sysmon/Operational 22: 4 | 12366 | direct |
+| 5 Persistence | 03:04:16-03:04:24 (derived 03:00:37-03:20:38 (-218459 / +974550 ms)) | 13 / 24 | none | 26 | direct |
 | 6 Credential Access | 03:00:37-03:05:20 (derived 03:00:37-03:04:57 (+543 / -22594 ms)) | 23 / 0 | Microsoft-Windows-Sysmon/Operational 7: 19; Security 4658: 2; Security 4688: 1; Microsoft-Windows-Sysmon/Operational 5: 1; Security 4656: 1; Security 4663: 1; Security 4689: 1 | 7036 | direct |
 | 7 Collection and Exfiltration | 03:05:46-03:07:15 (derived 03:05:46-03:07:15 (+288 / +102 ms)) | 8 / 1 | none | 666 | direct |
-| 8 Lateral Movement | 03:00:26-03:18:22 (derived 03:00:26-03:18:22 (+826 / +14 ms)) | 70 / 0 | Microsoft-Windows-Sysmon/Operational 7: 219; Microsoft-Windows-Sysmon/Operational 12: 32; Security 5158: 13; Security 5156: 13; Microsoft-Windows-Sysmon/Operational 18: 9; Security 4658: 8; Microsoft-Windows-Sysmon/Operational 13: 4; Security 4688: 4; Security 4656: 4; Security 4663: 4; Microsoft-Windows-Sysmon/Operational 22: 4; Microsoft-Windows-Sysmon/Operational 5: 3; Security 4673: 3; Security 4689: 3 | 1062 | direct |
+| 8 Lateral Movement | 03:00:26-03:18:22 (derived 03:00:26-03:18:22 (+826 / +14 ms)) | 106 / 0 | Microsoft-Windows-Sysmon/Operational 7: 219; Security 5158: 13; Security 5156: 13; Microsoft-Windows-Sysmon/Operational 18: 9; Security 4658: 8; Security 4688: 4; Security 4656: 4; Security 4663: 4; Microsoft-Windows-Sysmon/Operational 22: 4; Microsoft-Windows-Sysmon/Operational 5: 3; Security 4673: 3; Security 4689: 3 | 1062 | direct |
 | 9 Collection | 03:15:32-03:17:43 (derived 03:15:32-03:17:43 (+790 / +537 ms)) | 52 / 0 | Microsoft-Windows-Sysmon/Operational 7: 38; Security 4688: 4; Security 4658: 2; Security 4673: 1; Security 4656: 1; Security 4663: 1; Security 4689: 1; Microsoft-Windows-Sysmon/Operational 5: 1; Microsoft-Windows-Sysmon/Operational 23: 1 | 1199 | direct |
-| 10 Persistence Execution | 03:19:53-03:28:20 (derived 03:00:37-03:20:38 (-1155459 / -461450 ms)) | 6 / 20 | Microsoft-Windows-Sysmon/Operational 7: 9; Microsoft-Windows-Sysmon/Operational 5: 1 | 356 | direct |
+| 10 Persistence Execution | 03:19:53-03:28:20 (derived 03:00:37-03:20:38 (-1155459 / -461450 ms)) | 6 / 29 | Microsoft-Windows-Sysmon/Operational 7: 9; Microsoft-Windows-Sysmon/Operational 5: 1 | 356 | direct |
 
-Steps 5 and 10 share one persistence artifact but disjoint windows; mapped anchor hits counted for both steps: 0. Their derived windows are identical because both steps derive from the same shared anchor, which also appears before the install, so the committed windows instead come from the plan sequence and the post-reboot service start. Step 5 is the install in its window (the service-install and registry records are in its unmapped anchor hits; the Invoke-Persistence script block is mapped). Step 10 is execution after the reboot: a mapped Sysmon 1 process creation of the service binary by its parent service controller inside the step-10 window, with a mapped rundll32 child seconds later, is direct evidence — step 10 is not indirect-only.
+Steps 5 and 10 share one persistence artifact but disjoint windows; mapped anchor hits counted for both steps: 0. Their derived windows are identical because both steps derive from the same shared anchor, which also appears before the install, so the committed windows instead come from the plan sequence and the post-reboot service start. Step 5 is the install in its window: the 9 service-install and registry anchor hits are now mapped events (Windows Service Activity plus Registry Key/Value Activity) alongside the mapped Invoke-Persistence script block, and its unmapped column is empty. Step 10 is execution after the reboot: a mapped Sysmon 1 process creation of the service binary by its parent service controller inside the step-10 window, with a mapped rundll32 child seconds later, is direct evidence — step 10 is not indirect-only.
 
 ## LSASS credential access (step 6)
 
@@ -76,11 +84,10 @@ Only the opens inside step 6's own window count as step-6 evidence (a cluster sh
 
 ## Known visibility gaps (expected, not normalizer bugs)
 
-- Service-based persistence (steps 5 and 10, T1543.003): Security 4697 (23 records, canonical across both channel spellings) and System 7045 (5) are not mapped yet. The pinned OCSF 1.4.0 win extension defines Windows Service Activity (`windows_service_activity`, attribute `win_service`); that class exists in the pinned schema and is not mapped yet. Mapping the records to Scheduled Job Activity (1006) would mislabel them in the meantime, so they stay counted until the service class is mapped (the next mapping step).
-- Registry modification (steps 3 and 5, T1112 / T1547.001): Sysmon 12 (61151), 13 (17541) and 14 (0) are not mapped yet. The pinned OCSF 1.4.0 win extension defines Registry Key Activity and Registry Value Activity (`registry_key_activity` / `registry_value_activity`); those classes exist in the pinned schema and are not mapped yet (the next mapping step). Together Sysmon 12/13 are 78692 of 196081 records.
+- Service-based persistence (steps 5 and 10, T1543.003): Security 4697 and System 7045 now map to Windows Service Activity (201004, Create); unmapped leftovers in either bucket: 0 and 0. The pinned OCSF 1.4.0 win extension class is `windows_service_activity` (attribute `win_service`).
+- Registry modification (steps 3 and 5, T1112 / T1547.001): Sysmon 12, 13 and 14 now map to Registry Key/Value Activity (201001/201002); unmapped leftovers: 0, 0 and 0. Together Sysmon 12/13 were 78692 of 196081 records, all mapped.
+- Remaining gap: Sysmon 7 image loads (20259) stay unmapped and counted; their target class is Module Activity (1005), not one of the classes mapped here.
 
 ## Recommendation: which unmapped ids to map next
 
-1. Sysmon 12/13/14 — Registry Key/Value Activity (win extension classes, as ranked in the day-1 report): the direct evidence for steps 3 and 5 and the largest unmapped share of this dataset.
-2. Sysmon 7 — image load to Module Activity (1005), for the same reasons as in the day-1 report.
-3. Security 4697 / System 7045 — Windows Service Activity (win extension, `win_service`): small in volume, but the only direct telemetry for the step-5 install.
+1. Sysmon 7 — image load to Module Activity (1005), for the same reasons as in the day-1 report. It is now the largest unmapped bucket in this dataset.

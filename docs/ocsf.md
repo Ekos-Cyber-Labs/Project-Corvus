@@ -9,7 +9,7 @@ such as win) before use, never written from memory. Every event's
 `metadata.version` defaults to that constant, so a version bump is a
 one-line change.
 
-Shared rules for all seven classes:
+Shared rules for all ten classes:
 
 - `type_uid` is computed as `class_uid * 100 + activity_id`. It is a
   read-only computed field: any `type_uid` present in input is ignored and
@@ -46,6 +46,9 @@ Detection Finding has no mapper yet.
 | File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open | `windows.py` (Sysmon 11) |
 | Scheduled Job Activity | 1006 | 1 | 1 Create, 2 Update, 3 Delete, 4 Enable, 5 Disable, 6 Start | `windows.py` (Security 4698, TaskScheduler 106) |
 | Script Activity | 1009 | 1 | 1 Execute | `windows.py` (PowerShell 4104/4103, Windows PowerShell 800) |
+| Registry Key Activity | 201001 | 1 | 1 Create, 4 Delete, 5 Rename | `windows.py` (Sysmon 12 CreateKey/DeleteKey, Sysmon 14 as Rename; `extensions/windows/events/registry_key_activity.json`) |
+| Registry Value Activity | 201002 | 1 | 2 Set, 4 Delete | `windows.py` (Sysmon 13, Sysmon 12 DeleteValue; `extensions/windows/events/registry_value_activity.json`) |
+| Windows Service Activity | 201004 | 1 | 1 Create | `windows.py` (Security 4697, System 7045; `extensions/windows/events/windows_service_activity.json`) |
 | Detection Finding | 2004 | 2 | 1 Create, 2 Update, 3 Close |  |
 
 Other activity IDs pass through unchanged; the table lists the schema
@@ -74,12 +77,38 @@ values Corvus mappers may emit.
   a split block share the script `uid` for downstream grouping. Module
   logging (4103, content in `Payload`) and classic pipeline execution
   (Windows PowerShell 800, content in `Message`) map to the same class
-  with no block id; Windows PowerShell 600 (provider lifecycle) and
-  service-install records (Security 4697, System 7045) stay unmapped
-  and counted. The pinned OCSF 1.4.0 win extension defines Windows
-  Service Activity (`windows_service_activity`, attribute
-  `win_service`) for those records; that class exists in the pinned
-  schema and is not mapped yet.
+  with no block id; Windows PowerShell 600 (provider lifecycle) stays
+  unmapped and counted.
+- Registry Key Activity carries `reg_key` (`path`; object
+  `extensions/windows/objects/registry_key.json`) and, for renames,
+  `prev_reg_key` with the pre-rename path. Sysmon 12 `CreateKey`
+  maps to activity 1 Create and `DeleteKey` to 4 Delete; NXLog
+  replaces the `EventType` field with the record severity (`INFO`),
+  so the operation is read from the `Message` `EventType:` line,
+  falling back to 1 Create when neither source has a known op; both
+  stay in `unmapped`. Sysmon 14 maps to 5 Rename with `NewName` as
+  the key and `TargetObject` as the previous key. The initiating
+  process (`Image` / `ProcessId`) is `actor.process`; the NXLog
+  `AccountName` / `Domain` pair is `actor.user`.
+- Registry Value Activity carries `reg_value` (`path`, `name`
+  derived as the last backslash component, `data`; object
+  `extensions/windows/objects/registry_value.json`). Sysmon 13 maps
+  to activity 2 Set; Sysmon 12 `DeleteValue` maps to 4 Delete with
+  the same path/name derivation and no `data`.
+  `TargetObject` and `Details` are kept verbatim in `path` and
+  `data`.
+- Windows Service Activity carries `win_service` (`name`,
+  `cmd_line`, `service_start_name`, `service_start_type` /
+  `service_start_type_id`, `service_type` / `service_type_id`;
+  object `extensions/windows/objects/win_service.json`, enums
+  `extensions/windows/dictionary.json`). Both sources map to
+  activity 1 Create: Security 4697 (`ServiceName`, `ServiceFileName`,
+  SCM-number `ServiceStartType`, hex `ServiceType`, `ServiceAccount`,
+  installer in `SubjectUserName` / `SubjectDomainName`) and System
+  7045 (`ServiceName`, `ImagePath`, word `StartType` such as
+  `auto start`, word `ServiceType`, installer in `AccountName` /
+  `Domain`; no service-account field, so `service_start_name` stays
+  empty). Raw type values stay in `unmapped`.
 - Network Activity carries `action` / `action_id` (0 Unknown, 1 Allowed,
   2 Denied, 99 Other) alongside the endpoints.
 - File System Activity carries `file` (`path`, `name`; `name` is derived

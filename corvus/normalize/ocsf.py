@@ -54,10 +54,16 @@ __all__ = [
     "Process",
     "ProcessActivity",
     "Product",
+    "RegKey",
+    "RegValue",
+    "RegistryKeyActivity",
+    "RegistryValueActivity",
     "ScheduledJobActivity",
     "Script",
     "ScriptActivity",
     "User",
+    "WinService",
+    "WindowsServiceActivity",
     "canonicalize_host",
     "canonicalize_ip",
     "canonicalize_user",
@@ -500,6 +506,136 @@ class ScriptActivity(OcsfEventBase):
     script: Script | None = None
 
 
+class RegKey(BaseModel):
+    """OCSF reg_key object: a Windows registry key.
+
+    Attribute names from the pinned OCSF 1.4.0 schema
+    (``extensions/windows/objects/registry_key.json`` in ``ocsf-schema``
+    tag ``v1.4.0``): ``path`` is the full path to the key (required
+    there); the remaining attributes have no source in the mapped
+    Windows events and stay empty.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    path: str | None = None
+
+
+class RegValue(BaseModel):
+    """OCSF reg_value object: a Windows registry value.
+
+    Attribute names from the pinned OCSF 1.4.0 schema
+    (``extensions/windows/objects/registry_value.json`` in
+    ``ocsf-schema`` tag ``v1.4.0``): ``name`` is the value name and
+    ``path`` the full path of the key holding it (both required
+    there); ``data`` is the value data, which carries a Sysmon 13
+    ``Details`` string verbatim.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    name: str | None = None
+    path: str | None = None
+    data: str | None = None
+
+
+class WinService(BaseModel):
+    """OCSF win_service object: a Windows service.
+
+    Attribute names from the pinned OCSF 1.4.0 schema
+    (``extensions/windows/objects/win_service.json`` in ``ocsf-schema``
+    tag ``v1.4.0``): ``name`` is the unique service name (required
+    there), ``cmd_line`` the full launch command line, and
+    ``service_start_name`` the account the service starts as.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    name: str | None = None
+    cmd_line: str | None = None
+    service_start_name: str | None = None
+    service_start_type: str | None = None
+    service_start_type_id: int | None = None
+    service_type: str | None = None
+    service_type_id: int | None = None
+
+    @field_validator("service_start_type_id")
+    @classmethod
+    def _check_start_type(cls, value: int | None) -> int | None:
+        # Enum from the pinned OCSF 1.4.0 win extension
+        # (`extensions/windows/dictionary.json`,
+        # `attributes.service_start_type_id.enum` in `ocsf-schema` tag
+        # `v1.4.0`): 0 Unknown, 1 Boot, 2 System, 3 Auto, 4 Demand,
+        # 5 Disabled, 99 Other.
+        if value is not None and value not in (0, 1, 2, 3, 4, 5, 99):
+            raise ValueError("service_start_type_id must be one of 0-5 or 99 (Other)")
+        return value
+
+    @field_validator("service_type_id")
+    @classmethod
+    def _check_service_type(cls, value: int | None) -> int | None:
+        # Enum from the pinned OCSF 1.4.0 win extension
+        # (`extensions/windows/dictionary.json`,
+        # `attributes.service_type_id.enum` in `ocsf-schema` tag
+        # `v1.4.0`): 0 Unknown, 1 Kernel Driver, 2 File System Driver,
+        # 3 Own Process, 4 Share Process, 99 Other.
+        if value is not None and value not in (0, 1, 2, 3, 4, 99):
+            raise ValueError("service_type_id must be one of 0-4 or 99 (Other)")
+        return value
+
+
+class RegistryKeyActivity(OcsfEventBase):
+    """OCSF 201001 Registry Key Activity (category 1, System Activity).
+
+    Class from the pinned OCSF 1.4.0 win extension
+    (``extensions/windows/events/registry_key_activity.json``: uid 1,
+    class ``201001``; ``extends`` system, so category 1). Activity ids
+    from that file's ``activity_id`` enum: 1 Create, 2 Read, 3 Modify,
+    4 Delete, 5 Rename, 6 Set Security, 7 Restore, 8 Import, 9 Export.
+    The key lives in ``reg_key``; a rename also carries the pre-rename
+    key in ``prev_reg_key``.
+    """
+
+    class_uid: Literal[201001] = 201001
+    category_uid: Literal[1] = 1
+    activity_id: int = 1
+    reg_key: RegKey | None = None
+    prev_reg_key: RegKey | None = None
+
+
+class RegistryValueActivity(OcsfEventBase):
+    """OCSF 201002 Registry Value Activity (category 1, System Activity).
+
+    Class from the pinned OCSF 1.4.0 win extension
+    (``extensions/windows/events/registry_value_activity.json``: uid 2,
+    class ``201002``; ``extends`` system, so category 1). Activity ids
+    from that file's ``activity_id`` enum: 1 Get, 2 Set, 3 Modify,
+    4 Delete. The value lives in ``reg_value``.
+    """
+
+    class_uid: Literal[201002] = 201002
+    category_uid: Literal[1] = 1
+    activity_id: int = 1
+    reg_value: RegValue | None = None
+
+
+class WindowsServiceActivity(OcsfEventBase):
+    """OCSF 201004 Windows Service Activity (category 1, System Activity).
+
+    Class from the pinned OCSF 1.4.0 win extension
+    (``extensions/windows/events/windows_service_activity.json``: uid 4,
+    class ``201004``; ``extends`` system, so category 1). Activity ids
+    from that file's ``activity_id`` enum: 1 Create, 2 Reconfigure,
+    3 Start, 4 Stop, 5 Pause, 6 Continue, 7 Delete. The service lives
+    in ``win_service``.
+    """
+
+    class_uid: Literal[201004] = 201004
+    category_uid: Literal[1] = 1
+    activity_id: int = 1
+    win_service: WinService | None = None
+
+
 class DetectionFinding(OcsfEventBase):
     """OCSF 2004 Detection Finding (category 2, Findings)."""
 
@@ -515,6 +651,9 @@ OcsfEvent = Annotated[
     | FileSystemActivity
     | ScheduledJobActivity
     | ScriptActivity
+    | RegistryKeyActivity
+    | RegistryValueActivity
+    | WindowsServiceActivity
     | DetectionFinding,
     Field(discriminator="class_uid"),
 ]

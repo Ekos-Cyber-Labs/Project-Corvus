@@ -91,7 +91,7 @@ Every prompt names the role it works under. Changes under `corvus/llm`, `corvus/
 
 - Use Python 3.12 with type hints and small modules.
 - Write code, comments, and docs in English.
-- Use OCSF classes 3002 Authentication, 1007 Process Activity, 4001 Network Activity, 1001 File System Activity, 1006 Scheduled Job Activity, 1009 Script Activity, and 2004 Detection Finding. Keep the raw event attached to every OCSF record.
+- Use OCSF classes 3002 Authentication, 1007 Process Activity, 4001 Network Activity, 1001 File System Activity, 1006 Scheduled Job Activity, 1009 Script Activity, 201001 Registry Key Activity, 201002 Registry Value Activity, 201004 Windows Service Activity, and 2004 Detection Finding. Keep the raw event attached to every OCSF record.
 - OCSF classes, activity ids and attributes are verified against the pinned v1.4.0 schema files (including extensions such as win) before use, never written from memory.
 - Ship every normalizer with a fixture-based test.
 
