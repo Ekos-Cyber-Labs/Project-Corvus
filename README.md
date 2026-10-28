@@ -10,7 +10,7 @@ Small companies run Linux servers and Windows endpoints, often with Wazuh as the
 
 Corvus is not a SIEM. It plugs into the SIEM the organization already runs (Wazuh): the SIEM detects atomic events and stores logs; Corvus consumes alerts, correlates them into attack chains, reasons over them, and pushes learned rules back. Design: `docs/architecture.md`. Threat model: `docs/threat-model.md`.
 
-- Consume Wazuh alerts and archives through a `SiemAdapter`; Linux events arrive as Wazuh data, Windows coverage via Wazuh agents and public EVTX datasets through replay. No raw log parsing in hackathon scope.
+- Consume Wazuh alerts and archives through a `SiemAdapter` (paged `stream_alerts` with stable per-event uids, strict entity filters, source-grouped inventory); Linux events arrive as Wazuh data, Windows coverage via Wazuh agents and public EVTX datasets through replay. No raw log parsing in hackathon scope.
 - Normalize into OCSF events. No local event store: PostgreSQL is the system of record (incidents, queue, checkpoints, rules) and the SIEM stays the log store, queried on demand.
 - Correlate deterministically by host, user, IP, process, and time window, map to MITRE ATT&CK, and set an explainable severity floor.
 - Triage each cluster on-prem with Muse Glimmer through an async batch queue. Glimmer alone sees raw evidence.

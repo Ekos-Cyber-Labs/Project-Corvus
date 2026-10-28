@@ -177,19 +177,30 @@ prompts or models. See `eval/` (design; harness ships the table).
 
 - `SiemAdapter` (Python `Protocol`) — the core depends only on this
   interface. No MCP between Corvus and Wazuh.
-  - `stream_alerts(since cursor)` -> OCSF events.
-  - `query_events(entity, start, end, classes, limit<=200)`.
+  - `stream_alerts(since cursor, page_size)` -> OCSF events, up to
+    `page_size` (default 500, max 1000). Every event carries a stable,
+    unique `metadata.uid`; ordering ties break on it and the cursor
+    advances to the last returned event. Real adapters page on an
+    ingestion-ordered key (`search_after`), never wall time alone, so
+    late-indexed events are not skipped.
+  - `query_events(entity, start, end, classes, limit<=200)`. Entity filters
+    are strict: a provided field that canonicalizes to nothing raises, and
+    `start` after `end` raises.
   - `translate_rule(sigma)` -> native rule; `validate_rule(native, samples)`;
     `deploy_rule(native, mode shadow|active)`; `rollback_rule(deployment)`.
-  - `update_list(name, indicators, ttl)` `[ROADMAP]` (CDB indicator lists).
+  - `update_list(name, indicators, ttl)` `[ROADMAP]` (CDB indicator lists);
+    real adapters raise `NotImplementedError` until it is in scope.
   - `describe_sources(window)` -> `SourceInventory`: what telemetry actually
     exists — per source: category (endpoint process, authentication,
-    network, web/WAF, IPS, EDR), product/decoder, OCSF classes, host count,
-    event count, first/last seen. Computed from the data, never configured
-    by hand (Wazuh: aggregations over the indexer; replay: group-by over
-    Parquet). Refreshed periodically; goes into the stable part of the Spark
-    context (cache-augmented generation: identical prompt prefix —
-    instructions, schemas, playbooks — first, variable incident last).
+    network, web/WAF, IPS, EDR, other), product/log source, OCSF classes,
+    host count, event count, first/last seen. Grouped by the real telemetry
+    source, never the index pattern; the category comes from an explicit
+    source map, falling back to the OCSF class (`other` when unknown).
+    Computed from the data, never configured by hand (Wazuh: aggregations
+    over the indexer; replay: group-by over Parquet). Refreshed
+    periodically; goes into the stable part of the Spark context
+    (cache-augmented generation: identical prompt prefix — instructions,
+    schemas, playbooks — first, variable incident last).
 - `WazuhAdapter`: indexer REST API read-only for `wazuh-alerts-*` /
   `wazuh-archives-*`, polled with a `search_after` cursor stored as a
   checkpoint; server API with a limited role for logtest, rule files, CDB
