@@ -6,7 +6,9 @@ Usage (from the repo root, after fetching):
 Reads the fetched datasets under data/ (see datasets/README.md) and
 writes a JSON mapping of posix paths relative to data/ to per-file
 objects: {"dataset": ..., "techniques": [...], "tactics": [...],
-"label_source": "otrf-metadata" | "evtx-folder" | "evtx-filename"}.
+"label_source": "otrf-metadata" | "otrf-folder" | "evtx-folder" |
+"evtx-filename"}. OTRF files no metadata file links map to empty
+techniques with "otrf-folder" (tactic only).
 Files whose ground truth cannot be determined map to empty lists
 (unknown is never guessed).
 
@@ -47,6 +49,7 @@ TECHNIQUE_TOKEN = re.compile(
 BASE_TECHNIQUE = re.compile(r"T\d{4}$")
 
 SOURCE_OTRF_METADATA = "otrf-metadata"
+SOURCE_OTRF_FOLDER = "otrf-folder"
 SOURCE_EVTX_FOLDER = "evtx-folder"
 SOURCE_EVTX_FILENAME = "evtx-filename"
 
@@ -226,11 +229,12 @@ def build_ground_truth(data_dir: Path) -> dict[str, FileLabel]:
                 set(index.get(suffix, set()) or index.get(file.name, set()))
             )
             rel = file.relative_to(data_dir).as_posix()
+            source = SOURCE_OTRF_METADATA if techniques else SOURCE_OTRF_FOLDER
             mapping[rel] = FileLabel(
                 dataset=OTRF_DEST,
                 techniques=techniques,
                 tactics=tactics,
-                label_source=SOURCE_OTRF_METADATA,
+                label_source=source,
             )
     else:
         print(f"warning: {otrf_windows} missing; skipping OTRF source", file=sys.stderr)

@@ -7,7 +7,9 @@ Ground truth (per-file ATT&CK techniques and tactics) is derived with
 [ground_truth.py](../eval/ground_truth.py) and written to
 `data/ground_truth.json` (also git ignored): each key is a data-relative
 path to an object with `dataset`, `techniques`, `tactics`, and
-`label_source` (`otrf-metadata` | `evtx-folder` | `evtx-filename`).
+`label_source` (`otrf-metadata` | `otrf-folder` | `evtx-folder` |
+`evtx-filename`; files no metadata links carry `otrf-folder`, tactic
+only).
 
 Fetch (from the repo root):
 
@@ -82,8 +84,9 @@ the environment, never stored.
   the union of techniques from every metadata file linking to it (144
   of 165 carry at least one technique; the rest map to an empty list,
   unknown, never guessed), and to the tactic from its folder name (162
-  of 165). In `ground_truth.json` these files carry `label_source`
-  `otrf-metadata`.
+  of 165). In `ground_truth.json` linked files carry `label_source`
+  `otrf-metadata`; files no metadata file links carry `otrf-folder`
+  (tactic only).
 
 ## Checksums
 

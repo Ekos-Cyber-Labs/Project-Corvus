@@ -79,12 +79,13 @@ values Corvus mappers may emit.
 
 ## Windows replay normalizer (`windows.py`)
 
-Reads `.evtx` files (via the `evtx` package) and OTRF JSON-lines members
-inside `.zip` / `.tar.gz` / `.tgz` archives. The JSON layout is picked per
-record from its keys: flat records (`Channel` / `EventID`), the older
-winlogbeat layout (`log_name` / `event_id` with the payload nested under
-`event_data`), and the newer nested layout (a `winlog` object holding
-`channel` / `event_id` / `event_data`).
+Reads `.evtx` files (via the `evtx` package), bare `.json` JSON-lines
+files, and OTRF JSON-lines members inside `.zip` / `.tar.gz` / `.tgz`
+archives. The JSON layout is picked per record from its keys: flat
+records (`Channel` / `EventID`), the older winlogbeat layout (`log_name` /
+`event_id` with the payload nested under `event_data`), and the newer
+nested layout (a `winlog` object holding `channel` / `event_id` /
+`event_data`).
 
 - Channels match case-insensitively (`security` maps like `Security`),
   and `metadata.log_name` always carries the canonical spelling
@@ -97,6 +98,18 @@ winlogbeat layout (`log_name` / `event_id` with the payload nested under
 - `metadata.uid` is opaque: the truncated SHA-256 of the dataset-relative
   path plus the record id. Dataset file names, which may encode ATT&CK
   technique ids, can never leak into the record.
+- Evidence that names its own technique stays verbatim in the record:
+  Atomic Red Team paths such as `C:\AtomicRedTeam\atomics\T1218.005\...`
+  in a command line, or a sysmon-modular `RuleName` such as
+  `technique_id=T1003,technique_name=Credential Dumping`. The id tokens
+  (`T####` with an optional `.###`, never glued to letters or digits)
+  and the `technique_name=` values are masked (`[TECHNIQUE-ID]`,
+  `[TECHNIQUE-NAME]`, keys and delimiters unchanged) only in
+  model-bound payloads by `corvus/normalize/technique_ids.py`; the
+  loader merely records per event whether such a reference is present.
+  The name value also stops at a backslash, so masked serialized JSON
+  still parses; structured payloads go through `mask_payload`, which
+  masks string leaves without touching keys or other types.
 - File-path ingestion fields (`log`, `path`, `log.file.path`,
   `@metadata`) are stripped from `raw_data` and from `unmapped` for the
   same reason. Every other input field ends up in a typed OCSF field or

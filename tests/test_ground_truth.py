@@ -208,7 +208,7 @@ def test_build_ground_truth_end_to_end(tmp_path: Path) -> None:
     ]
     assert orphan.techniques == []
     assert orphan.tactics == ["Discovery"]
-    assert orphan.label_source == "otrf-metadata"
+    assert orphan.label_source == "otrf-folder"
 
 
 def test_build_otrf_index_unions_same_target(tmp_path: Path) -> None:

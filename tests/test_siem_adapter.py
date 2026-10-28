@@ -1,10 +1,21 @@
-"""Tests for the SiemAdapter protocol and FakeAdapter."""
+"""Behavior suite for the SiemAdapter protocol: FakeAdapter and ReplayAdapter.
+
+Every behavior test runs against both implementations loaded from the
+same fixture events, so the replay adapter honors the contract exactly
+as the fake does. Fake-only tests cover the in-memory recording API;
+replay-only tests cover the read-only rule surface.
+"""
 
 from datetime import timedelta
+from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pydantic import ValidationError
 
+from corvus.adapters.replay.adapter import ReplayAdapter
+from corvus.adapters.replay.schema import EVENTS_SCHEMA, event_to_row, events_dir
 from corvus.adapters.siem import (
     Cursor,
     Deployment,
@@ -39,20 +50,54 @@ def _uids(events: list[OcsfEvent]) -> list[str | None]:
     return [event.metadata.uid for event in events]
 
 
-def test_fake_adapter_satisfies_protocol_statically_and_at_runtime() -> None:
-    adapter: SiemAdapter = FakeAdapter(make_siem_fixture_events())
-    assert isinstance(adapter, SiemAdapter)
-    for method in (
-        "stream_alerts",
-        "query_events",
-        "translate_rule",
-        "validate_rule",
-        "deploy_rule",
-        "rollback_rule",
-        "update_list",
-        "describe_sources",
-    ):
-        assert callable(getattr(adapter, method))
+def _write_replay_store(path: Path, events: list[OcsfEvent]) -> ReplayAdapter:
+    """Persist fixture events as one replay events file; return the adapter."""
+    directory = events_dir(path)
+    directory.mkdir(parents=True, exist_ok=True)
+    rows = [event_to_row(event) for event in events]
+    table = pa.table(
+        {
+            name: pa.array(
+                [row.get(name) for row in rows],
+                type=EVENTS_SCHEMA.field(name).type,
+            )
+            for name in EVENTS_SCHEMA.names
+        }
+    )
+    pq.write_table(table, directory / "fixture.parquet")
+    return ReplayAdapter(path)
+
+
+@pytest.fixture(params=["fake", "replay"])
+def adapter(request: pytest.FixtureRequest, tmp_path: Path) -> SiemAdapter:
+    """One behavior-suite adapter per implementation, same fixture events."""
+    events = make_siem_fixture_events()
+    if request.param == "fake":
+        return FakeAdapter(events)
+    return _write_replay_store(tmp_path / "replay", events)
+
+
+def test_both_adapters_satisfy_protocol_statically_and_at_runtime(
+    tmp_path: Path,
+) -> None:
+    fake: SiemAdapter = FakeAdapter(make_siem_fixture_events())
+    assert isinstance(fake, SiemAdapter)
+    replay: SiemAdapter = _write_replay_store(
+        tmp_path / "replay", make_siem_fixture_events()
+    )
+    assert isinstance(replay, SiemAdapter)
+    for instance in (fake, replay):
+        for method in (
+            "stream_alerts",
+            "query_events",
+            "translate_rule",
+            "validate_rule",
+            "deploy_rule",
+            "rollback_rule",
+            "update_list",
+            "describe_sources",
+        ):
+            assert callable(getattr(instance, method))
 
 
 def test_entity_rejects_fields_that_canonicalize_to_nothing() -> None:
@@ -71,10 +116,11 @@ def test_entity_rejects_fields_that_canonicalize_to_nothing() -> None:
             Entity(**kwargs)
 
 
-def test_entity_netbios_and_upn_spellings_do_not_match() -> None:
+def test_entity_netbios_and_upn_spellings_do_not_match(
+    adapter: SiemAdapter,
+) -> None:
     assert Entity(user="EXAMPLE\\jdoe").user == "example\\jdoe"
     assert Entity(user="jdoe@example.com").user == "example.com\\jdoe"
-    adapter = FakeAdapter(make_siem_fixture_events())
     assert _uids(adapter.query_events(Entity(user="EXAMPLE\\jdoe"))) == [
         "wazuh-1",
         "wazuh-2",
@@ -86,8 +132,7 @@ def test_entity_netbios_and_upn_spellings_do_not_match() -> None:
     assert adapter.query_events(Entity(user="jdoe@example.com")) == []
 
 
-def test_query_events_filters_by_entity() -> None:
-    adapter = FakeAdapter(make_siem_fixture_events())
+def test_query_events_filters_by_entity(adapter: SiemAdapter) -> None:
     assert _uids(adapter.query_events(Entity(host="web01"))) == [
         "wazuh-1",
         "wazuh-2",
@@ -112,8 +157,9 @@ def test_query_events_filters_by_entity() -> None:
     assert adapter.query_events(Entity(host="db01", user="example\\jdoe")) == []
 
 
-def test_query_events_filters_by_time_window_inclusively() -> None:
-    adapter = FakeAdapter(make_siem_fixture_events())
+def test_query_events_filters_by_time_window_inclusively(
+    adapter: SiemAdapter,
+) -> None:
     start = BASE_TIME_MS + MINUTE_MS
     end = BASE_TIME_MS + 3 * MINUTE_MS
     assert _uids(adapter.query_events(start=start, end=end)) == [
@@ -127,14 +173,14 @@ def test_query_events_filters_by_time_window_inclusively() -> None:
     ]
 
 
-def test_query_events_rejects_start_after_end() -> None:
-    adapter = FakeAdapter(make_siem_fixture_events())
+def test_query_events_rejects_start_after_end(adapter: SiemAdapter) -> None:
     with pytest.raises(ValueError, match="start"):
         adapter.query_events(start=BASE_TIME_MS + MINUTE_MS, end=BASE_TIME_MS)
 
 
-def test_query_events_filters_by_class_and_respects_limit() -> None:
-    adapter = FakeAdapter(make_siem_fixture_events())
+def test_query_events_filters_by_class_and_respects_limit(
+    adapter: SiemAdapter,
+) -> None:
     assert _uids(adapter.query_events(classes=[4001])) == ["wazuh-4"]
     assert _uids(adapter.query_events(classes=[3002, 2004])) == [
         "wazuh-1",
@@ -150,8 +196,9 @@ def test_query_events_filters_by_class_and_respects_limit() -> None:
         adapter.query_events(limit=201)
 
 
-def test_stream_alerts_resumes_from_cursor_without_duplicates() -> None:
-    adapter = FakeAdapter(make_siem_fixture_events())
+def test_stream_alerts_resumes_from_cursor_without_duplicates(
+    adapter: SiemAdapter,
+) -> None:
     page, cursor = adapter.stream_alerts()
     assert _uids(page) == ALL_UIDS
     resumed, cursor2 = adapter.stream_alerts(since=cursor)
@@ -163,8 +210,9 @@ def test_stream_alerts_resumes_from_cursor_without_duplicates() -> None:
     assert _uids(suffix) == ["wazuh-2b", "wazuh-3", "wazuh-4", "wazuh-5", "wazuh-6"]
 
 
-def test_stream_alerts_pages_whole_fixture_in_pairs() -> None:
-    adapter = FakeAdapter(make_siem_fixture_events())
+def test_stream_alerts_pages_whole_fixture_in_pairs(
+    adapter: SiemAdapter,
+) -> None:
     seen: list[str | None] = []
     since: Cursor | None = None
     pages = 0
@@ -199,8 +247,9 @@ def test_fake_adapter_rejects_events_without_uid() -> None:
         FakeAdapter([*make_siem_fixture_events(), orphan])
 
 
-def test_describe_sources_groups_by_telemetry_source() -> None:
-    adapter = FakeAdapter(make_siem_fixture_events())
+def test_describe_sources_groups_by_telemetry_source(
+    adapter: SiemAdapter,
+) -> None:
     inventory = adapter.describe_sources()
     assert isinstance(inventory, SourceInventory)
     by_source = {entry.source: entry for entry in inventory.sources}
@@ -270,3 +319,24 @@ def test_fake_adapter_records_rule_calls() -> None:
         [Indicator(kind="ip", value="198.51.100.23")],
         timedelta(hours=24),
     )
+
+
+def test_replay_adapter_rule_surface_is_read_only(tmp_path: Path) -> None:
+    adapter = _write_replay_store(tmp_path / "replay", make_siem_fixture_events())
+    sigma = SigmaRule(title="Suspicious encoded PowerShell", yaml="title: x")
+    native = NativeRule(rule_id=100001, xml="<group></group>")
+    deployment = Deployment(
+        deployment_id="replay-100001-shadow-1", rule_id=100001, mode="shadow"
+    )
+    with pytest.raises(NotImplementedError, match="read-only"):
+        adapter.translate_rule(sigma)
+    with pytest.raises(NotImplementedError, match="read-only"):
+        adapter.validate_rule(native, [])
+    with pytest.raises(NotImplementedError, match="read-only"):
+        adapter.deploy_rule(native, "shadow")
+    with pytest.raises(NotImplementedError, match="read-only"):
+        adapter.rollback_rule(deployment)
+    with pytest.raises(NotImplementedError, match="roadmap"):
+        adapter.update_list(
+            "blocked-ips", [Indicator(kind="ip", value="198.51.100.23")]
+        )

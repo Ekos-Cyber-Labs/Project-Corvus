@@ -1,10 +1,11 @@
 """Windows event normalizer: Sysmon, Security and Task Scheduler to OCSF.
 
-Reads two third-party replay formats without copying their content:
+Reads third-party replay formats without copying their content:
 ``.evtx`` files via the ``evtx`` package (pyevtx-rs ``PyEvtxParser`` with
-``records_json``) and OTRF JSON-lines members inside ``.zip`` / ``.tar.gz``
-archives. :func:`iter_dataset_file` streams one OCSF event at a time while
-filling a :class:`WindowsReadStats` (archives are never loaded fully into
+``records_json``), bare ``.json`` JSON-lines files, and OTRF JSON-lines
+members inside ``.zip`` / ``.tar.gz`` archives. :func:`iter_dataset_file`
+streams one OCSF event at a time while filling a
+:class:`WindowsReadStats` (archives are never loaded fully into
 memory); :func:`read_dataset_file` is a thin wrapper collecting the same
 stream for tests. Every mapped record becomes one OCSF event carrying the
 real Windows channel in ``metadata.log_name`` and an opaque
@@ -84,6 +85,7 @@ __all__ = [
     "parse_windows_time",
     "read_dataset_file",
     "read_evtx",
+    "read_json_lines",
     "read_otrf_archive",
     "sanitize_record",
 ]
@@ -1047,19 +1049,23 @@ def iter_dataset_file(
 ) -> Iterator[OcsfEvent]:
     """Yield OCSF events from one replay file, one at a time.
 
-    Accepts ``.evtx`` files and ``.zip`` / ``.tar.gz`` / ``.tgz`` archives of
-    JSON lines; members holding no Windows event JSON (for example network
-    pcaps) increment ``stats.unsupported`` instead of raising. Unmapped
-    records increment ``stats.unmapped`` per ``(channel, event id)`` and
-    never surface as events. Pass your own :class:`WindowsReadStats` to
-    read the counts after the iterator is exhausted; the events stream so
-    the caller never holds a whole dataset in memory.
+    Accepts ``.evtx`` files, bare ``.json`` JSON-lines files, and ``.zip`` /
+    ``.tar.gz`` / ``.tgz`` archives of JSON lines; archive members holding
+    no Windows event JSON (for example network pcaps) increment
+    ``stats.unsupported`` instead of raising. Unmapped records increment
+    ``stats.unmapped`` per ``(channel, event id)`` and never surface as
+    events. Pass your own :class:`WindowsReadStats` to read the counts
+    after the iterator is exhausted; the events stream so the caller never
+    holds a whole dataset in memory.
     """
     source = Path(path)
     counts = stats if stats is not None else WindowsReadStats()
     rel = dataset_rel if dataset_rel is not None else source.name
     if source.suffix.lower() == ".evtx":
         yield from _iter_evtx(source, rel, counts)
+    elif source.suffix.lower() == ".json":
+        with open(source, "rb") as stream:
+            yield from _iter_json_lines(stream, rel, counts)
     elif source.suffix.lower() == ".zip":
         with zipfile.ZipFile(source) as archive:
             for info in archive.infolist():
@@ -1124,13 +1130,24 @@ def read_otrf_archive(
     return _drain(Path(path), dataset_rel)
 
 
+def read_json_lines(
+    path: str | Path, *, dataset_rel: str | None = None
+) -> WindowsReadResult:
+    """Read one bare ``.json`` JSON-lines file into OCSF events."""
+    if Path(path).suffix.lower() != ".json":
+        raise ValueError(f"unsupported dataset file suffix for {path}")
+    return _drain(Path(path), dataset_rel)
+
+
 def read_dataset_file(
     path: str | Path, *, dataset_rel: str | None = None
 ) -> WindowsReadResult:
-    """Read one replay file (``.evtx``, ``.zip``, ``.tar.gz``/``.tgz``)."""
+    """Read one replay file (``.evtx``, ``.json``, ``.zip``, ``.tar.gz``/``.tgz``)."""
     source = Path(path)
     if source.suffix.lower() == ".evtx":
         return read_evtx(source, dataset_rel=dataset_rel)
+    if source.suffix.lower() == ".json":
+        return read_json_lines(source, dataset_rel=dataset_rel)
     if _is_archive_suffix(source):
         return read_otrf_archive(source, dataset_rel=dataset_rel)
     raise ValueError(f"unsupported dataset file suffix for {source}")

@@ -125,3 +125,28 @@ rules back to Wazuh (shadow first, human approval).
   replay file (857022 records): 259479 Sysmon 10 and 804 script-block
   records newly map, zero leftovers in either bucket, everything else
   unchanged. Awaiting maintainer commit.
+- 2026-10-27: added the replay adapter (`corvus/adapters/replay/`,
+  DuckDB over Parquet under `data/replay/`): `corvus replay load`
+  streams dataset files (including bare JSON-lines) in batches
+  through the Windows normalizer into per-file events/provenance
+  tables with explicit schemas, written atomically; dataset paths
+  and an in-band-technique flag live only in provenance (keyed by
+  event uid, joined to ground-truth keys by the harness), never in
+  returned records. In-band references (`corvus/normalize/technique_ids.py`,
+  id tokens and `technique_name=` values) stay verbatim in evidence
+  and are masked only at later model-call time. The adapter meets
+  the `SiemAdapter` contract (same parametrized behavior suite as
+  the fake; rule methods stay read-only until alert generation).
+  Verified with `make lint` and `make test`. Awaiting maintainer
+  commit.
+- 2026-10-27: replay validation fixes. Masking a `technique_name=`
+  value also stops at a backslash, so masked serialized JSON still
+  parses (an escaped quote or `\r\n` escape no longer lets the value
+  eat following fields); new `mask_payload` masks string leaves of
+  structured payloads for the model-call layer instead. Directory
+  loads skip bare JSON-lines files (some payloads ship zipped and
+  bare byte-identical while metadata links only the archive; an
+  explicitly named file still loads). OTRF files no metadata file
+  links carry the new `otrf-folder` ground-truth source (tactic
+  only). Verified with `make lint` and `make test`. Awaiting
+  maintainer commit.

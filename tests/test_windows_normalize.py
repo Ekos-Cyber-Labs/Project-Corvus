@@ -338,6 +338,34 @@ def test_reader_counts_unmapped_and_malformed_per_key(tmp_path: Path) -> None:
     assert result.unsupported == 0
 
 
+def test_bare_json_lines_file_reads_flat_and_nested(tmp_path: Path) -> None:
+    path = tmp_path / "events.json"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(fx.flat_sysmon_process()),
+                json.dumps(fx.winlog_sysmon_file()),
+                json.dumps(fx.flat_unmapped()),
+            ]
+        )
+        + "\n"
+    )
+    result = read_dataset_file(path, dataset_rel="events.json")
+    assert len(result.events) == 2
+    assert {event.class_uid for event in result.events} == {1007, 1001}
+    assert result.unmapped == {("Security", 4688): 1}
+    assert result.unsupported == 0
+
+
+def test_empty_json_lines_file_yields_no_events(tmp_path: Path) -> None:
+    path = tmp_path / "empty.json"
+    path.write_text("")
+    result = read_dataset_file(path, dataset_rel="empty.json")
+    assert result.events == []
+    assert result.unmapped == {}
+    assert result.unsupported == 0
+
+
 def test_pcap_only_archive_is_unsupported_not_an_error(tmp_path: Path) -> None:
     archive = tmp_path / "capture.zip"
     with zipfile.ZipFile(archive, "w") as holder:

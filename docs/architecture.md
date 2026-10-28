@@ -134,8 +134,9 @@ prompts or models. Dataset plumbing is implemented: `scripts/fetch_datasets.py`
 downloads the pinned OTRF and EVTX-ATTACK-SAMPLES revisions into git-ignored
 `data/`, verified against `datasets/checksums.txt`; `eval/ground_truth.py`
 writes `data/ground_truth.json` (per-file `dataset` / `techniques` /
-`tactics` / `label_source`; EVTX labels are tactic-level, OTRF labels are
-technique-level from metadata). Details: `datasets/README.md`.
+`tactics` / `label_source`; EVTX labels are tactic-level, linked OTRF
+files are technique-level from metadata while unlinked ones carry
+tactic-only `otrf-folder` labels). Details: `datasets/README.md`.
 
 ### Supporting pieces (in scope)
 
@@ -217,9 +218,19 @@ technique-level from metadata). Details: `datasets/README.md`.
   `wazuh-archives-*`, polled with a `search_after` cursor stored as a
   checkpoint; server API with a limited role for logtest, rule files, CDB
   lists, config validation and manager restart.
-- `ReplayAdapter`: public datasets stored as Parquet, queried with DuckDB;
-  used by the evaluation harness; simulates rule deployment by evaluating
-  Sigma rules on the same data. `[ROADMAP]` Splunk and Elastic adapters.
+- `ReplayAdapter`: public datasets normalized with `corvus replay load`
+  into per-file events/provenance Parquet under `data/replay/`
+  (explicit schemas, batched streaming, atomic writes) and queried
+  with DuckDB; used by the evaluation harness. Directory loads skip
+  bare JSON-lines files (some payloads ship zipped and bare
+  byte-identical while metadata links only the archive; an explicitly
+  named file still loads). Dataset paths and the in-band-technique
+  flag live only in provenance, keyed by event uid for the harness
+  ground-truth join, never in returned records. The rule surface is
+  read-only until alert generation exists (rule methods raise
+  `NotImplementedError`; Sigma matching in DuckDB will be
+  case-insensitive, `ILIKE`, like Sigma itself).
+  `[ROADMAP]` Splunk and Elastic adapters.
 - Normalization: everything inside Corvus is OCSF (pinned version). Classes:
   Authentication 3002, Process Activity 1007, Network Activity 4001, File
   System Activity 1001, Scheduled Job Activity 1006, Script Activity 1009,
