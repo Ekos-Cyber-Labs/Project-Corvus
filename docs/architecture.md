@@ -48,8 +48,9 @@ This cap also bounds injection-driven severity inflation.
 
 Muse Glimmer (on-prem, vLLM, OpenAI-compatible) makes one structured call per
 incident cluster: no tools, JSON-schema output, async batch queue with up to
-16 in flight (~7 tokens/s per request, ~70 tokens/s at 16 concurrent,
-roughly 1-1.5 min per cluster; never per-event synchronous calls).
+16 in flight (~8 tokens/s per request, ~114 tokens/s at 16 concurrent
+and ~196 tokens/s at 32, with linear scaling and no errors; roughly
+1-1.5 min per cluster; never per-event synchronous calls).
 
 Glimmer reads the raw evidence of each cluster and produces the condensed
 incident that is pseudonymized for Spark. Raw logs are only ever seen by the
@@ -222,7 +223,12 @@ prompts or models. See `eval/` (design; harness ships the table).
   the validators. Transport errors never enter the semantic loop; semantic
   errors never restart processes.
 - Deployment: Docker Compose (`corvus-api`, `corvus-worker`, `postgres`).
-  Glimmer runs on a separate GPU host, reached via `GLIMMER_BASE_URL`.
+  Ports are published on 127.0.0.1 only (API `8000`, Postgres `55432`;
+  host port 5432 belongs to another stack). Compose refuses to start
+  without `CORVUS_ENV_FILE` pointing at a secrets file outside the
+  repository; services read all secrets from that file, with no defaults.
+  Glimmer runs on a separate GPU host, reached via `GLIMMER_BASE_URL`
+  (required, no default).
 - `[ROADMAP]` Raw Linux log parsers (auth.log, journald, auditd): Linux
   events arrive as Wazuh alerts and archives. `[ROADMAP]` Live Windows VM
   (lab currently uses exported/public data).

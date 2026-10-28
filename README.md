@@ -40,6 +40,15 @@ Results: TBD - published here as they are measured.
 
 Work in progress, built during the Meta Global AI Developer Hackathon.
 
+Run the skeleton stack:
+
+- Copy `.env.example` to a file outside the repository (e.g.
+  `/run/corvus/corvus.env`) and fill in secrets.
+- `CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose up --build -d`
+- Health (database plus model reachability): `curl http://127.0.0.1:8000/health`
+- From the dev machine Postgres is at `127.0.0.1:55432`; the test
+  recipe is under `AGENTS.md` Commands.
+
 ## Built during the hackathon
 
 All product code in this repo was written between Oct 27 and Nov 4, 2026. The commit history shows what was built when.

@@ -218,3 +218,41 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Corvus: never commit (public repository — AGENTS.md rules 2, 3, 9)
+# Secrets arrive via CORVUS_ENV_FILE (a file outside the repository).
+# Ignore data-file patterns only — never broad *secret*/*credentials*
+# wildcards, which would silently ignore source files such as a
+# secrets redactor.
+# Keep !.env.example AFTER .env.* so the template stays committable.
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.crt
+*.secret
+*secrets*.json
+*credentials*.json
+# Data and ground truth (rule 2: download scripts only, never datasets).
+data/
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.sqlite
+*.evtx
+*.pcap
+*.pcapng
+lab/captures/
+eval/runs/
+# Local state: *.log, coverage and caches are already covered above.
+# Postgres uses the named Docker volume postgres-data; nothing is
+# bind-mounted into the repo, so there is no volume path to ignore.
+# No tool-local-state directory exists in this working tree
+# (deliverables .agents/, docs/, .agents/MEMORY.md are meant to
+# be committed; session logs live outside the repo).
+# Editor and OS. If a shared .vscode/settings.json is added later, append
+# a narrow !.vscode/settings.json exception below .vscode/.
+.DS_Store
+.idea/
+.vscode/

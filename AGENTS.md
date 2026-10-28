@@ -1,5 +1,8 @@
 # AGENTS.md
 
+> 👋 Yes, this file is supposed to be here. It's the rulebook our AI coding agent (Muse Code) reads before touching anything, committed on purpose so hackathon judges can see exactly how Corvus was built. No secrets
+were harmed in the making of this file.
+
 Project Corvus is an on-prem AI SOC analyst for small teams with no 24/7 SOC that cannot ship logs to a vendor cloud.
 It was built during the Meta Global AI Developer Hackathon (Oct 27 - Nov 4, 2026). All product code is written in that window, so keep commit history honest.
 
@@ -34,8 +37,15 @@ A reduced web UI and an eval harness with an honest results table (every number 
 
 - `make install` — install dependencies with uv (dev group included).
 - `make lint` — ruff check, ruff format check, mypy.
-- `make test` — pytest (`DATABASE_URL` enables the Postgres migration test).
-- `make up` / `make down` — start / stop `postgres`, `corvus-api`, `corvus-worker`.
+- `make test` — full pytest; the migration integration test always runs and
+  refuses anything but `DATABASE_URL=postgresql://...@127.0.0.1:55432/corvus_test_<name>`
+  (wrong port or database prefix fails, never skips). Test env recipe:
+  write `/tmp/corvus-test.env` from `.env.example`,
+  `CORVUS_ENV_FILE=/tmp/corvus-test.env docker compose up -d postgres`,
+  `DATABASE_URL=postgresql://corvus:<pw>@127.0.0.1:55432/corvus_test_<rand> make test`,
+  `CORVUS_ENV_FILE=/tmp/corvus-test.env docker compose down`.
+- `make up` / `make down` — start / stop `postgres`, `corvus-api`, `corvus-worker`;
+  both require `CORVUS_ENV_FILE` set (compose fails fast otherwise).
 - `corvus version` — print the package version.
 - `corvus db migrate` — apply pending SQL migrations (reads `$DATABASE_URL`).
 - `CORVUS_ENV_FILE=/path/outside/repo.env docker compose up --build` — secrets
@@ -51,17 +61,17 @@ A reduced web UI and an eval harness with an honest results table (every number 
 6. Run the eval harness for any change to normalizers, correlation, prompts, or models, and report the metric delta. False positives are the primary gate; detected attack chains must not regress.
 7. Agents never commit, amend, or push. The maintainer commits.
 8. Do not implement anything under Roadmap in docs/architecture.md unless the maintainer explicitly asks.
-9. MEMORY.md is committed to a public repository. Write in it only what could appear in the README: no IP addresses or hostnames of real infrastructure, no personal names, no secrets or key names with values, no paths outside this repository, no lab credentials, no content from datasets beyond file counts. Before writing to MEMORY.md, re-read this rule.
+9. .agents/MEMORY.md is committed to a public repository. Write in it only what could appear in the README: no IP addresses or hostnames of real infrastructure, no personal names, no secrets or key names with values, no paths outside this repository, no lab credentials, no content from datasets beyond file counts. Before writing to .agents/MEMORY.md, re-read this rule. The legends in AGENTS.md, .agents/MEMORY.md and .agents/README.md must be kept verbatim.
 
 ## Models
 
 Clients are OpenAI-compatible. Switching models is `base_url` plus model name.
-- On-prem triage: Muse Glimmer 30B, FP8 on vLLM, served as model `glimmer` at `GLIMMER_BASE_URL` (default `http://127.0.0.1:8001/v1`).
+- On-prem triage: Muse Glimmer 30B, FP8 on vLLM, served as model `glimmer` at `GLIMMER_BASE_URL` (required, no default).
 - Reasoning: `muse-spark-1.3` at `META_BASE_URL=https://api.meta.ai/v1` with `META_API_KEY`.
 - Both models reason by default and reasoning tokens count against `max_tokens`. A low limit returns HTTP 200 with null content. Use `max_tokens >= 1500` (Glimmer default 4200) and treat empty content as an error.
 - Glimmer reasoning arrives in `message.reasoning`. vLLM reports `reasoning_tokens` 0 even though the tokens are counted in `completion_tokens`; `call.py` requests `return_token_ids` and splits generated tokens by channel headers, so `llm_attempts` carries exact counts.
 - Set Glimmer depth in the system message. Reasoning strength (`low|medium|high`, default medium) is a per-purpose setting chosen by the evaluation harness, not by cost alone.
-- Glimmer does about 7 tokens/s per request and about 70 tokens/s at 16 concurrent, roughly 1-1.5 min per cluster. Keep triage as an async batch queue with up to 16 in flight, never per-event synchronous calls.
+- Glimmer does about 8 tokens/s per request, about 114 tokens/s at 16 concurrent and about 196 tokens/s at 32, with linear scaling and no errors, roughly 1-1.5 min per cluster. Keep triage as an async batch queue with up to 16 in flight, never per-event synchronous calls.
 - All model output is validated by the self-correction loop in `corvus/llm/call.py`: validators run in order (syntax, schema, semantics, policy, security); on failure the output is discarded and the model is re-asked with a structured error, up to 3 attempts (attempt 3 escalates: temperature 0, more reasoning, simplified schema), then falls back to the other model per routing profile, then to the deterministic result marked "AI analysis failed". Security failures are never retried. Every attempt is recorded in `llm_attempts` and measured in the eval.
 
 ## Roles
