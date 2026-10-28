@@ -11,8 +11,8 @@ Small companies run Linux servers and Windows endpoints, often with Wazuh as the
 Corvus is not a SIEM. It plugs into the SIEM the organization already runs (Wazuh): the SIEM detects atomic events and stores logs; Corvus consumes alerts, correlates them into attack chains, reasons over them, and pushes learned rules back. Design: `docs/architecture.md`. Threat model: `docs/threat-model.md`.
 
 - Consume Wazuh alerts and archives through a `SiemAdapter` (paged `stream_alerts` with stable per-event uids, strict entity filters, source-grouped inventory); Linux events arrive as Wazuh data, Windows coverage via Wazuh agents and public EVTX datasets through replay. No raw log parsing in hackathon scope.
-- Normalize into OCSF events. No local event store: PostgreSQL is the system of record (incidents, queue, checkpoints, rules) and the SIEM stays the log store, queried on demand.
-- Correlate deterministically by host, user, IP, process, and time window, map to MITRE ATT&CK, and set an explainable severity floor.
+- Normalize into OCSF events. No local event store: PostgreSQL is the system of record (checkpoints, work queue, incidents, agent steps, rules, dispositions, pseudonyms, spend, and LLM attempts; migration `0002_core_tables.sql`) and the SIEM stays the log store, queried on demand.
+- Correlate deterministically by host, user, IP, process, and time window, map to MITRE ATT&CK, and set an explainable severity floor (the database keeps `severity_id` within one level above the floor).
 - Triage each cluster on-prem with Muse Glimmer through an async batch queue. Glimmer alone sees raw evidence.
 - Pseudonymize condensed incidents before any external reasoning call.
 - Reason with Muse Spark in a bounded agent loop (`get_events`, `get_attack_technique`) for verdict, timeline, and response in English or Spanish.
@@ -48,7 +48,8 @@ Run the skeleton stack:
   from that file.
 - `CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose up --build -d`
 - Apply database migrations with `corvus db migrate` (reads
-  `DATABASE_URL`; safe to re-run, concurrent runners are serialized).
+  `DATABASE_URL`; idempotent plain SQL in `corvus/state/migrations/`,
+  safe to re-run, concurrent runners are serialized).
 - Health (database plus model reachability): `curl http://127.0.0.1:8000/health`
   reports `degraded` when the database or the on-prem Glimmer model is
   unreachable; Muse Spark reachability is informational only.

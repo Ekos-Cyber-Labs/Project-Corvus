@@ -11,8 +11,8 @@ Corvus is NOT a SIEM. It plugs into the SIEM the organization already runs (Wazu
 ## Pipeline
 
 Linux events arrive as Wazuh alerts and archives (no raw log parsing in hackathon scope). Windows coverage comes from Wazuh agents and public EVTX datasets via replay.
-Alerts flow through the adapter into OCSF events; there is no local event store — PostgreSQL is the system of record (incidents, queue, checkpoints, agent steps, rules, dispositions, budgets), and the SIEM remains the log store queried on demand.
-Deterministic correlation (host, user, IP, process, time window) plus MITRE ATT&CK mapping produces candidate incidents with an explainable severity floor.
+Alerts flow through the adapter into OCSF events; there is no local event store — PostgreSQL is the system of record (incidents, queue, checkpoints, agent steps, rules, dispositions, pseudonyms, spend, LLM attempts, budgets; migration `0002_core_tables.sql`), and the SIEM remains the log store queried on demand.
+Deterministic correlation (host, user, IP, process, time window) plus MITRE ATT&CK mapping produces candidate incidents with an explainable severity floor; the database keeps `severity_id` within one level above the floor, and unique `correlation_key` / queue `dedupe_key` values keep crash re-runs from duplicating incidents or jobs.
 On-prem Muse Glimmer triages each cluster via an async batch queue (it alone sees raw evidence), then a pseudonymizer runs before Muse Spark reasoning.
 Muse Spark runs a bounded agent loop (`get_events`, `get_attack_technique`) and returns verdict, timeline, response in English or Spanish.
 Proposed Sigma rules are backtested, deployed to Wazuh in shadow mode, and need human approval.

@@ -8,8 +8,8 @@ metric).
 
 | Risk | Control |
 |---|---|
-| Prompt injection causing a benign verdict | Deterministic score floor (asymmetry): the model may never lower severity below the floor without a human. |
-| Prompt injection inflating severity to burn cloud budget / cause alert fatigue | Model may raise severity by at most one level, only citing validated evidence event ids; per-incident and daily USD spend caps. |
+| Prompt injection causing a benign verdict | Deterministic score floor (asymmetry): the model may never lower severity below the floor; a database CHECK keeps `severity_id` at or above `severity_floor` (human override path comes later). |
+| Prompt injection inflating severity to burn cloud budget / cause alert fatigue | Model may raise severity by at most one level, only citing validated evidence event ids; the same database CHECK caps `severity_id` at the floor plus one; per-incident and daily USD spend caps. |
 | Secrets inside log content (tokens, passwords in command lines) reaching the cloud | Secret-pattern redactor in the egress filter. |
 | Data leaking to the cloud | Egress filter before every Spark call: no known entity value (IPs, hosts, users, domains, user paths, SIDs) may appear in the payload, including inside free text; on failure the call is not sent. |
 | Instructions inside data | Data sent as escaped, delimited JSON marked untrusted; fields truncated; chat-template special tokens stripped. |

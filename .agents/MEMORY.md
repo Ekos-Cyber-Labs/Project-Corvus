@@ -60,3 +60,12 @@ rules back to Wazuh (shadow first, human approval).
   Verified with `make lint` and `make test` (only the Postgres-backed
   migration test could not run here; no database reachable). Awaiting
   maintainer commit.
+- 2026-10-28: added migration `0002_core_tables.sql` under
+  `corvus/state/migrations/` (idempotent plain SQL, all timestamps
+  `timestamptz`): checkpoints, work queue, incidents, agent steps, rules,
+  dispositions, deployment-stable pseudonyms, spend, and LLM attempts.
+  Incident `severity_id` stays within one level above the deterministic
+  floor; `correlation_key` and queue `dedupe_key` keep re-runs after a
+  crash from creating duplicates; analyst dispositions delete-restrict
+  their incident and rule. Checks live in the guarded integration test
+  in `tests/test_migrations.py`. Awaiting maintainer commit.

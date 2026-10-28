@@ -39,10 +39,13 @@ Severity is explainable, derived from three factors:
 - chain breadth (number of distinct entities and techniques),
 - success vs. attempt (did the action succeed or only get attempted).
 
-The deterministic score is mapped to OCSF `severity_id` and sets a floor:
-models may raise severity by at most one level, only by citing validated
-evidence event ids, and may never lower it below the floor without a human.
-This cap also bounds injection-driven severity inflation.
+The deterministic score is mapped to OCSF `severity_id` (1 Informational
+to 6 Fatal) and sets a floor: models may raise severity by at most one
+level, only by citing validated evidence event ids, and may never lower
+it below the floor. The database enforces the same cap
+(`severity_floor` 1–6, `severity_id` between the floor and the floor
+plus one); a human override path comes later. This cap also bounds
+injection-driven severity inflation.
 
 ### 2. Glimmer reads raw evidence, Spark never does
 
@@ -215,7 +218,24 @@ prompts or models. See `eval/` (design; harness ships the table).
 - State: PostgreSQL is the system of record — incidents, durable work queue
   (`SELECT ... FOR UPDATE SKIP LOCKED`), ingestion checkpoints, agent steps,
   rules with versions and lineage, analyst dispositions, budgets. No Redis.
-  DuckDB is used only inside `ReplayAdapter`.
+  DuckDB is used only inside `ReplayAdapter`. The schema lives in
+  `corvus/state/migrations/` as idempotent plain SQL: `0001` is migration
+  bookkeeping (`schema_migrations`); `0002_core_tables.sql` creates the core
+  tables — `checkpoints` (one row per adapter and stream, JSONB cursor),
+  `work_queue`, `incidents`, `agent_steps`, `rules`, `dispositions`,
+  `pseudonyms` (deployment-stable, so the same entity keeps its pseudonym
+  across incidents and the UI can map back to real values), `spend`, and
+  `llm_attempts`. All timestamps are `timestamptz` (`updated_at` is set
+  by the application; there are no triggers). Partial indexes support the
+  queue claim/lease queries, and composite indexes support the
+  newest-first incident list filtered by status, AI status, and severity;
+  `spend(created_at)` supports the daily budget sum. Crash-safe
+  idempotency keys keep re-runs from duplicating work: the unique
+  `incidents.correlation_key` for correlation and the nullable unique
+  `work_queue.dedupe_key` for enqueueing. Analyst dispositions
+  delete-restrict their incident and rule, so verdicts are never removed
+  silently, and native rule ids stay inside the local 100000–120000
+  range.
 - Knowledge: no vector RAG. Exact-key dictionaries (MITRE ATT&CK STIX,
   SigmaHQ rules, entity aliases, per-deployment baseline and allowlist).
 - False positives: analyst disposition in the UI (true positive / false
