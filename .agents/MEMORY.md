@@ -69,3 +69,16 @@ rules back to Wazuh (shadow first, human approval).
   crash from creating duplicates; analyst dispositions delete-restrict
   their incident and rule. Checks live in the guarded integration test
   in `tests/test_migrations.py`. Awaiting maintainer commit.
+- 2026-10-28: implemented the durable work queue in
+  `corvus/state/queue.py` on the existing `work_queue` table from
+  migration `0002` (no new migration needed): deduped enqueue (a key
+  stays taken after `done`/`dead`; a deliberate re-run needs a new
+  key), `SKIP LOCKED` claim in due order, owner-only heartbeat so
+  long handlers keep their lease, lease reclaim after a crash that
+  counts as an attempt and ends in `dead` for poison jobs, owner-only
+  complete/fail so a stale worker cannot overwrite a new owner, and
+  failure backoff with jitter ending in `dead`. Handlers must be
+  idempotent under at-least-once delivery. Covered by guarded
+  integration tests in `tests/test_queue.py`, with the shared
+  Postgres guard in `tests/conftest.py`, and verified with
+  `make lint` and the full `make test`. Awaiting maintainer commit.

@@ -53,7 +53,11 @@ Muse Glimmer (on-prem, vLLM, OpenAI-compatible) makes one structured call per
 incident cluster: no tools, JSON-schema output, async batch queue with up to
 16 in flight (~8 tokens/s per request, ~114 tokens/s at 16 concurrent
 and ~196 tokens/s at 32, with linear scaling and no errors; roughly
-1-1.5 min per cluster; never per-event synchronous calls).
+1-1.5 min per cluster; never per-event synchronous calls). Because a
+cluster can outlast the work queue's 60-second default lease, the
+worker heartbeats the job while Glimmer runs (see the durable queue
+under State below); losing the heartbeat means the worker stops and
+writes no result.
 
 Glimmer reads the raw evidence of each cluster and produces the condensed
 incident that is pseudonymized for Spark. Raw logs are only ever seen by the
@@ -236,6 +240,23 @@ prompts or models. See `eval/` (design; harness ships the table).
   delete-restrict their incident and rule, so verdicts are never removed
   silently, and native rule ids stay inside the local 100000–120000
   range.
+- Durable queue (`corvus/state/queue.py`, `WorkQueue` over `work_queue`;
+  no migration beyond `0002` was needed). Delivery is at-least-once, so
+  handlers must be idempotent. Enqueue takes an optional `dedupe_key`:
+  the same key always returns the same job id and creates one row, and
+  the key stays taken after the job is `done` or `dead`, so a
+  deliberate re-run needs a new key (for example with a version or
+  revision). Claim takes due `pending`/`failed` rows in
+  `available_at`, then `id` order under a lease. Long handlers extend
+  the lease with `heartbeat` at least every `lease / 3`; `heartbeat`,
+  `complete`, and `fail` act only while the caller still owns an
+  unexpired lock, so a stale worker cannot overwrite the new owner.
+  `fail` retries with exponential backoff plus jitter and turns `dead`
+  at `max_attempts`; reclaiming an expired lease also counts as an
+  attempt (`last_error` `lease expired`) and turns `dead` at
+  `max_attempts`, so a poison job that crashes its worker every time
+  is not reclaimed forever. Every queue operation is one short
+  transaction; no transaction is held open while a job runs.
 - Knowledge: no vector RAG. Exact-key dictionaries (MITRE ATT&CK STIX,
   SigmaHQ rules, entity aliases, per-deployment baseline and allowlist).
 - False positives: analyst disposition in the UI (true positive / false
@@ -246,7 +267,8 @@ prompts or models. See `eval/` (design; harness ships the table).
   back to shadow), rule dedup/quotas/consolidation.
 - Self-recovery, infrastructure layer: restart policies and watchers,
   healthchecks, timeouts, retries with exponential backoff, durable queue
-  with leases reclaimed after a crash, checkpoints, persisted agent steps,
+  with heartbeated leases reclaimed after a crash (and dead-lettered
+  after `max_attempts`), checkpoints, persisted agent steps,
   budget guard, degraded mode. `[ROADMAP]` Per-model circuit breaker, with
   coupling both ways: a high semantic failure rate opens the breaker even on
   HTTP 200, and a restarted model gets traffic only after a semantic canary
