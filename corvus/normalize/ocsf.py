@@ -372,6 +372,36 @@ class Authentication(OcsfEventBase):
     activity_id: int = 1
     status: str | None = None
     status_id: int | None = None
+    logon_type: str | None = None
+    logon_type_id: int | None = None
+
+    @field_validator("logon_type_id")
+    @classmethod
+    def _check_logon_type(cls, value: int | None) -> int | None:
+        # Enum from the pinned OCSF 1.4.0 schema (`dictionary.json`,
+        # `attributes.logon_type_id.enum` in `ocsf-schema` tag `v1.4.0`):
+        # 0 Unknown, 1 System, 2 Interactive, 3 Network, 4 Batch,
+        # 5 OS Service, 7 Unlock, 8 Network Cleartext, 9 New Credentials,
+        # 10 Remote Interactive, 11 Cached Interactive,
+        # 12 Cached Remote Interactive, 13 Cached Unlock, 99 Other.
+        if value is not None and value not in (
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            99,
+        ):
+            raise ValueError("logon_type_id must be one of 0, 1-5, 7-13, or 99 (Other)")
+        return value
 
 
 class ProcessActivity(OcsfEventBase):

@@ -89,3 +89,28 @@ rules back to Wazuh (shadow first, human approval).
   kept when present) and 165 OTRF atomic Windows files (technique
   labels from metadata). Data lives under git-ignored `data/` only.
   Awaiting maintainer commit.
+- 2026-10-28: added the Windows normalizer
+  (`corvus/normalize/windows.py`, verified against the installed
+  `evtx` API and probed replay files before designing the readers):
+  Sysmon 1/3/11 to Process/Network/File-System Activity, Security
+  4624/4625 to Authentication, Security 4698 and TaskScheduler 106 to
+  Scheduled Job Activity. Readers stream `.evtx` and `.zip`/`.tar.gz`
+  JSON-lines without loading archives into memory; anything else is
+  counted per `(channel, event id)` and pcap-only archives are
+  `unsupported`, never silent. Uids are opaque truncated hashes so
+  dataset file names never enter the record, and ingestion path
+  fields are stripped from `raw_data`. Replay products and channels
+  added to the `SiemAdapter` source-category map; the Source column in
+  `docs/ocsf.md` now names `windows.py`. Follow-up pass: channels
+  match case-insensitively (canonical spelling in `log_name`),
+  older (`log_name`/`event_data`) and nested (`winlog`) winlogbeat
+  layouts extract by record keys, no mapper drops a field (initiating
+  processes land in `actor.process`, Windows LogonType maps to the
+  pinned OCSF `logon_type_id` enum with the raw value kept), and
+  `iter_dataset_file` streams events with caller-owned stats while
+  `read_dataset_file` stays a thin wrapper. Verified with `make lint`
+  and the unit plus live-replay integration tests (per-format unknown
+  share under 5% on the representative files; the full census shows
+  `.evtx` far above it because channel-less RPC provider records are
+  out of scope and stay counted, never mapped). Awaiting maintainer
+  commit.

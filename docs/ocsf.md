@@ -17,8 +17,12 @@ Shared rules for all six classes:
   like epoch seconds.
 - `severity_id` follows the OCSF enum 0 Unknown, 1 Informational, 2 Low,
   3 Medium, 4 High, 5 Critical, 6 Fatal, plus 99 Other.
-- `raw_data` keeps the original event as a JSON string; `unmapped` holds
-  anything a mapper could not place (counted, never dropped silently).
+- `raw_data` keeps the original event as a JSON string, minus file-path
+  ingestion fields (see below); `unmapped` holds anything a mapper could
+  not place. Nothing is dropped silently: unmapped records are counted
+  per `(channel, event id)` in `WindowsReadStats`, and archive members
+  with no Windows event JSON (for example network pcaps) count as
+  `unsupported` instead of raising.
 - `entity_keys` is a Corvus extension with canonical, lowercased keys for
   deterministic correlation: `user` as `domain\user`, `host` as the short
   hostname, `ip` as the device address, plus `src_ip` / `dst_ip` from the
@@ -28,16 +32,16 @@ Shared rules for all six classes:
 
 ## Classes and activity IDs
 
-The Source column names the mapper that produces each class; it is empty
-until the mappers land.
+The Source column names the mapper that produces each class. Only
+Detection Finding has no mapper yet.
 
 | OCSF class | class_uid | category_uid | Activity IDs we use | Source |
 |---|---|---|---|---|
-| Authentication | 3002 | 3 | 1 Logon, 2 Logoff, 3 Authentication Ticket, 4 Service Ticket Request, 5 Service Ticket Renew, 6 Preauth |  |
-| Process Activity | 1007 | 1 | 1 Launch, 2 Terminate, 3 Open, 4 Inject, 5 Set User ID |  |
-| Network Activity | 4001 | 4 | 1 Open, 2 Close, 3 Reset, 4 Fail, 5 Refuse, 6 Traffic, 7 Listen |  |
-| File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open |  |
-| Scheduled Job Activity | 1006 | 1 | 1 Create, 2 Update, 3 Delete, 4 Enable, 5 Disable, 6 Start |  |
+| Authentication | 3002 | 3 | 1 Logon, 2 Logoff, 3 Authentication Ticket, 4 Service Ticket Request, 5 Service Ticket Renew, 6 Preauth | `windows.py` (Security 4624/4625) |
+| Process Activity | 1007 | 1 | 1 Launch, 2 Terminate, 3 Open, 4 Inject, 5 Set User ID | `windows.py` (Sysmon 1) |
+| Network Activity | 4001 | 4 | 1 Open, 2 Close, 3 Reset, 4 Fail, 5 Refuse, 6 Traffic, 7 Listen | `windows.py` (Sysmon 3) |
+| File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open | `windows.py` (Sysmon 11) |
+| Scheduled Job Activity | 1006 | 1 | 1 Create, 2 Update, 3 Delete, 4 Enable, 5 Disable, 6 Start | `windows.py` (Security 4698, TaskScheduler 106) |
 | Detection Finding | 2004 | 2 | 1 Create, 2 Update, 3 Close |  |
 
 Other activity IDs pass through unchanged; the table lists the schema
@@ -47,7 +51,12 @@ values Corvus mappers may emit.
 
 - Authentication carries `status` (for example `Success` / `Failure`) and
   `status_id` (0 Unknown, 1 Success, 2 Failure, 99 Other), which feed the
-  success-vs-attempt factor of the severity floor.
+  success-vs-attempt factor of the severity floor, plus `logon_type` /
+  `logon_type_id` (Windows LogonType mapped to the pinned OCSF 1.4.0 enum:
+  0 Unknown, 1 System, 2 Interactive, 3 Network, 4 Batch, 5 OS Service,
+  7 Unlock, 8 Network Cleartext, 9 New Credentials, 10 Remote Interactive,
+  11 Cached Interactive, 12 Cached Remote Interactive, 13 Cached Unlock,
+  99 Other; the raw value stays in `unmapped`).
 - Process Activity carries `process` (`pid`, `name`, `cmd_line`, `file`,
   `parent_process`); the actor may additionally carry the process object
   for process events.
@@ -58,6 +67,38 @@ values Corvus mappers may emit.
 - Scheduled Job Activity carries `job` (`name`, `cmd_line`).
 - All classes may carry `device` (`hostname`, `ip`), `actor` with `user`
   (`name`, `domain`), and `src_endpoint` / `dst_endpoint` (`ip`, `port`).
+
+## Windows replay normalizer (`windows.py`)
+
+Reads `.evtx` files (via the `evtx` package) and OTRF JSON-lines members
+inside `.zip` / `.tar.gz` / `.tgz` archives. The JSON layout is picked per
+record from its keys: flat records (`Channel` / `EventID`), the older
+winlogbeat layout (`log_name` / `event_id` with the payload nested under
+`event_data`), and the newer nested layout (a `winlog` object holding
+`channel` / `event_id` / `event_data`).
+
+- Channels match case-insensitively (`security` maps like `Security`),
+  and `metadata.log_name` always carries the canonical spelling
+  (`Security`, `Microsoft-Windows-Sysmon/Operational`,
+  `Microsoft-Windows-TaskScheduler/Operational`), so downstream grouping
+  stays deterministic.
+- `metadata.product` names the producing product (`Sysmon` for the
+  Sysmon channel, `Microsoft Windows` otherwise).
+- `metadata.uid` is opaque: the truncated SHA-256 of the dataset-relative
+  path plus the record id. Dataset file names, which may encode ATT&CK
+  technique ids, can never leak into the record.
+- File-path ingestion fields (`log`, `path`, `log.file.path`,
+  `@metadata`) are stripped from `raw_data` and from `unmapped` for the
+  same reason. Every other input field ends up in a typed OCSF field or
+  in `unmapped`.
+- Times are parsed leniently into the strict shape above: naive
+  timestamps are assumed UTC, epoch seconds are accepted, and offsets
+  are converted. A record whose time cannot be parsed counts as unmapped
+  under its own `(channel, event id)`.
+- `iter_dataset_file` yields events one at a time and fills a caller-owned
+  `WindowsReadStats`; `read_dataset_file` collects the same stream and is
+  kept for tests. The replay loader uses the iterator so it never holds a
+  whole dataset in memory.
 
 ## Canonicalization
 

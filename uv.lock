@@ -142,6 +142,7 @@ name = "corvus"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "evtx" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "psycopg", extra = ["binary"] },
@@ -159,6 +160,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "evtx", specifier = ">=0.14.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
@@ -181,6 +183,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/68/bc/d36966de7304047a1001a7559fbf266c464bb5d8cc85464536ef8c9bcc32/distlib-0.4.4.tar.gz", hash = "sha256:ca4175b4ac7f71223cc30ed7248c45d2b38c2439d8ee6e498ab67ed63cf3508d", size = 621304, upload-time = "2026-10-16T13:56:34.203Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/2b/238f02a4927fa2e27aa995371d240a468b52e42eae44a678434aff736b38/distlib-0.4.4-py2.py3-none-any.whl", hash = "sha256:cf09d55b1e85a89576b036aeb71550bfd68320f3f21761ca329eadadad918638", size = 472099, upload-time = "2026-10-16T13:56:32.053Z" },
+]
+
+[[package]]
+name = "evtx"
+version = "0.14.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/da/9e0ebe16fcf92a49c3a4fede89dc1111d4947af659755d39ac4638f1fd03/evtx-0.14.0-cp310-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:5c54428a8f25a64038c655ab645bafd23d5c1674c262ed2354634201efc9f8e1", size = 1720549, upload-time = "2026-10-22T18:37:43.75Z" },
+    { url = "https://files.pythonhosted.org/packages/90/69/2eaa224951c31e084e80ed9a6c87de0d59ee57efd03ea6bd06c07670354c/evtx-0.14.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:5c80f70fc17b8d335bfc0a5111aaa9c58747ddbc9b65392604f08f2e650dc7b2", size = 895383, upload-time = "2026-10-22T18:37:45.378Z" },
+    { url = "https://files.pythonhosted.org/packages/77/2c/b5e1c2e27519200a0e8c977db8ce33a5b3d0585a7805a3b9051e495e53c1/evtx-0.14.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:2409e8cfe05a37574f2e25660ba93d1bfc379a2fce058933162bdae19bbf0753", size = 863976, upload-time = "2026-10-22T18:37:46.574Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/66/f704dfb384940beb936b23ecf5e84ba52df924529e05cfda050e98a47a32/evtx-0.14.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:13292dafc247ec682d197787ae07cfebcf66843d2769c87912faa9f5219fa5a7", size = 1018414, upload-time = "2026-10-22T18:37:47.755Z" },
+    { url = "https://files.pythonhosted.org/packages/89/8a/5b9418514e6f21acf50777599545e1f650fc4fe973267d8e2319c8d1b978/evtx-0.14.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:6b14669390b68d57198701bf32857dfa4b5942853ad07bfec9590a02442473f3", size = 862461, upload-time = "2026-10-22T18:37:49.028Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/06/6b9ced009ffb7f5c0bf6a18cfe2c49ce24a49ee2495777eddb36f0f6a387/evtx-0.14.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:ab627be9298f879cc074aac633ab00fdba38ba7f1f99467ff82001a20b5e140c", size = 894567, upload-time = "2026-10-22T18:37:50.245Z" },
+    { url = "https://files.pythonhosted.org/packages/69/64/05acfd3c408a497931150034729106c34d4e386001a717120f057fd60052/evtx-0.14.0-cp310-abi3-win_amd64.whl", hash = "sha256:dd92d15c0d1707d21ae1502620091b0c73052fee932cebf013e53fb3da63fdc7", size = 737867, upload-time = "2026-10-22T18:37:51.401Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/6e/4844527dd7ca819e22c89a2468f70164fb91ae7f8525887b255375db3c61/evtx-0.14.0-cp314-cp314t-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:97d2d1b69e3d42c95bc37915a20f951d5743f7cf8e44f1868debf70185ba268b", size = 1713451, upload-time = "2026-10-22T18:37:52.889Z" },
+    { url = "https://files.pythonhosted.org/packages/95/cd/7088318139a3c9c3513d48881ad2596bb53e6de2e25446d304f8171669a9/evtx-0.14.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:f05d57c1400a77f50b0b102f05aee14ae0ff0c03f7811a9eb74362fdb37791d5", size = 885584, upload-time = "2026-10-22T18:37:54.155Z" },
+    { url = "https://files.pythonhosted.org/packages/75/5b/25f9316a8ec80887bb6c3e2c83420217e818418c09224fe64247619d34e0/evtx-0.14.0-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:296a66fdfb69b9dd4ba6f39154097664af9f9eaeb6e861fd7ef6d62b1807aeff", size = 857059, upload-time = "2026-10-22T18:37:55.599Z" },
+    { url = "https://files.pythonhosted.org/packages/66/6a/fa220159cf713b807feb0e9e9a81348867ddbc96083e76dd0c2cd506f3b3/evtx-0.14.0-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:37498d0bf1762ba7b1e7d3576ac0f898a429ca5b36eb99666d5d7c34d2597d05", size = 1009330, upload-time = "2026-10-22T18:37:56.914Z" },
+    { url = "https://files.pythonhosted.org/packages/51/20/fd32e168418f58989174d48cd9e9e85ee800d3f46238bd7cd8823e3a587c/evtx-0.14.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:3c9b7a8be4b669fd1cd7183f333a5303d2d3cb232473457905b3d417de22e21a", size = 855857, upload-time = "2026-10-22T18:37:58.38Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/30/97dbc7bf68005d079c25ea449d4649adccc8447fb0428d0e511a0f30ceab/evtx-0.14.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:26c656a4fafb00a737f43157196259cbe52b764ecec4ef2b0f1be9909e9fa1cf", size = 887944, upload-time = "2026-10-22T18:37:59.677Z" },
+    { url = "https://files.pythonhosted.org/packages/37/f0/1aba41e3378805754c7d4026423e411715980591d12f9a1bb91a356b5a21/evtx-0.14.0-cp314-cp314t-win_amd64.whl", hash = "sha256:d4a940dd6319193e8f488fdb5c1e797c37189ae1efc942a755426b81bb52f249", size = 730830, upload-time = "2026-10-22T18:38:00.833Z" },
 ]
 
 [[package]]

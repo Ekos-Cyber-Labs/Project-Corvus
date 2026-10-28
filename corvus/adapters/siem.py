@@ -75,6 +75,12 @@ _SOURCE_CATEGORY: dict[tuple[str, str], SourceCategory] = {
     ("wazuh", "Microsoft-Windows-Sysmon/Operational"): "endpoint process",
     ("wazuh", "suricata"): "network",
     ("wazuh", "syscheck"): "endpoint process",
+    ("Sysmon", "Microsoft-Windows-Sysmon/Operational"): "endpoint process",
+    ("Microsoft Windows", "Security"): "authentication",
+    (
+        "Microsoft Windows",
+        "Microsoft-Windows-TaskScheduler/Operational",
+    ): "endpoint process",
 }
 
 #: OCSF class -> inventory category fallback for unmapped sources.
