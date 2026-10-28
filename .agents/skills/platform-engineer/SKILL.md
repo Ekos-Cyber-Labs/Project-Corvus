@@ -20,6 +20,13 @@ Responsibilities:
 - Graceful shutdown on SIGTERM, bounded queues, backoff with jitter,
   timezone-aware UTC datetimes, streams always closed.
 
+Review checks:
+- Heartbeat every job that can outlast its lease, well before expiry; a worker that loses its lease writes no result.
+- Bound every retry; a job that always fails ends dead, never reclaimed or retried forever.
+- Write queryable files atomically (temporary file, then rename); never write them in place.
+- Stream large files and archives; never read one whole into memory.
+- Quote or encode every URL component that can contain spaces or reserved characters.
+
 Definition of done: stack runs with one command; tests green with pasted
 output; `AGENTS.md` Commands updated if commands changed.
 

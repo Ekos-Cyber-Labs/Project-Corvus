@@ -23,6 +23,20 @@ Responsibilities:
 - Author Sigma in `corvus/learning`, translate to Wazuh XML (rule ids
   100000-120000), validate with `wazuh-logtest`; shadow first.
 
+Review checks:
+- Reject placeholder, empty, and wrong-type filter values; each filter field accepts only its own type.
+- Page and resume only on a unique, stable tie-breaker; never on time alone.
+- Raise on any path outside its allowed root; never substitute a bare name or other silent fallback.
+- Check every premise about real records against real records before designing from it.
+- Match channels and source names case-insensitively; keep the canonical spelling in output.
+- Handle every record layout in the data explicitly; an unhandled layout is a counted unknown.
+- Deduplicate byte-identical payloads before loading or counting; load a payload once.
+- Keep every unmapped source field under `unmapped`; never pop and discard it.
+- Verify every class, activity id, enum, and attribute against the pinned v1.4.0 schema, extensions included, before use.
+- Keep tool and linter pins identical in every config that sets them.
+- Bound identifier patterns tightly and test them against near-miss look-alikes.
+- Test text transforms on the serialized form they will actually receive, escapes included.
+
 Definition of done: fixture test per mapping green; eval metrics
 reported (chains detected, false positives); no unmapped event
 dropped without a counted `unmapped` path.

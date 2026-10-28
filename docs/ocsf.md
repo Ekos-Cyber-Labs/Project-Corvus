@@ -3,8 +3,11 @@
 Everything inside Corvus is OCSF at the version pinned by
 `OCSF_SCHEMA_VERSION` in [ocsf.py](../corvus/normalize/ocsf.py)
 (currently `1.4.0`). Field names and activity IDs match the OCSF 1.4.0
-schema (schema.ocsf.io). Every event's `metadata.version` defaults to that
-constant, so a version bump is a one-line change.
+schema (schema.ocsf.io). Classes, activity ids, and attributes are
+verified against the pinned v1.4.0 schema files (including extensions
+such as win) before use, never written from memory. Every event's
+`metadata.version` defaults to that constant, so a version bump is a
+one-line change.
 
 Shared rules for all seven classes:
 

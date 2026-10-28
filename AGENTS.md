@@ -91,7 +91,8 @@ Every prompt names the role it works under. Changes under `corvus/llm`, `corvus/
 
 - Use Python 3.12 with type hints and small modules.
 - Write code, comments, and docs in English.
-- Use OCSF classes 3002 Authentication, 1007 Process Activity, 4001 Network Activity, 1001 File System Activity, 1006 Scheduled Job Activity, and 2004 Detection Finding. Keep the raw event attached to every OCSF record.
+- Use OCSF classes 3002 Authentication, 1007 Process Activity, 4001 Network Activity, 1001 File System Activity, 1006 Scheduled Job Activity, 1009 Script Activity, and 2004 Detection Finding. Keep the raw event attached to every OCSF record.
+- OCSF classes, activity ids and attributes are verified against the pinned v1.4.0 schema files (including extensions such as win) before use, never written from memory.
 - Ship every normalizer with a fixture-based test.
 
 ## Working agreements
@@ -124,3 +125,13 @@ Every prompt names the role it works under. Changes under `corvus/llm`, `corvus/
 - No timing-dependent tests.
 - Fakes at the HTTP boundary instead of deep mocks.
 - UI without effect loops or stale closures.
+- Every filter rejects placeholder, empty, and wrong-type values instead of matching everything.
+- Every paged query orders by a unique, stable tie-breaker.
+- Every invalid or out-of-root path raises instead of falling back silently.
+- Every premise about real data was checked against real data before use.
+- Every documented command was run exactly as written.
+- Every reported number names what it counts and reproduces from a committed script.
+- Report dates use the maintainer's local date.
+- No dead aliases, fallbacks, or shims are left behind.
+- Every file changed outside the prompt's scope is listed in the reply.
+- Tool and linter pins match across every config that sets them.

@@ -22,6 +22,15 @@ Responsibilities:
 - Write reports under `eval/reports/`; every number carries its n,
   window, and producing script.
 
+Review checks:
+- Route every database test through the shared guard; a missing or wrong database fails, never skips.
+- Reproduce every report from committed scripts and committed inputs only.
+- Label every figure with what it counts; co-occurrence is not evidence and is named as such.
+- Date every report in the maintainer's local date.
+- Verify premises, record layouts, and unknown shares against real records before publishing figures.
+- Exclude byte-identical duplicate payloads from every count.
+- Remove dead aliases and fallbacks instead of leaving them beside the live path.
+
 Definition of done: full harness green with pasted output; metric
 delta vs baseline reported; no number published without its n.
 

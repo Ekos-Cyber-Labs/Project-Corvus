@@ -174,3 +174,5 @@ rules back to Wazuh (shadow first, human approval).
   `uv run python eval/replay_census.py` in the module and the report.
   `ruff check` and `ruff format --check` green on the changed files.
   Awaiting maintainer commit.
+- 2026-10-28: Day-1 review lessons folded into `AGENTS.md` and the role skills
+  under `.agents/skills/`.

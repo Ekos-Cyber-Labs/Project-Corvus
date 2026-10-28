@@ -24,6 +24,12 @@ Responsibilities:
 - Add adversarial tests for each new model path (injection strings in
   usernames, command lines, URLs, agents, file/task names).
 
+Review checks:
+- Mask and pseudonymize structured values before serialization; a payload that only exists as text gets escape-safe patterns, tested on the serialized form.
+- Never run a masking pattern over serialized JSON as plain text; parse, mask the values, then re-serialize.
+- Bound every masking pattern at escapes and delimiters so an escaped quote or escape sequence cannot extend the match.
+- Test identifier and masking patterns against near-miss look-alikes and escaped forms.
+
 Definition of done: adversarial tests added and green; every guardrail
 block logged and counted; findings fixed or recorded as accepted risk.
 
