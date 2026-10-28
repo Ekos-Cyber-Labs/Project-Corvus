@@ -186,10 +186,40 @@ the environment, never stored.
   the chain file, so the shared step-5/step-10 artifact is counted
   in one step per hit, never both.
 
+## 4. MITRE CTI (ATT&CK Enterprise STIX, v20.0)
+
+- Source: <https://github.com/mitre/cti>, files
+  `enterprise-attack/enterprise-attack.json` and `LICENSE.txt`.
+- Pinned revision: `50be388e93819a5d20e71cbaaeccfda157abc846`
+  (tag `ATT&CK-v20.0`, commit message "ATT&CK v20.0 Enterprise",
+  2026-10-13; verified against the GitHub commits API).
+- SHA-256: `66f3fe3f07ef1a2de0bd2fe4b3e8a9ea06c1d0bb2c46171bdbb57c7f7b666524`
+  (49,253,343 bytes) for the bundle; the `LICENSE.txt` hash is recorded
+  alongside it in `checksums.txt`. Verified on every fetch; re-running
+  the fetch downloads nothing.
+- License: the ATT&CK license in the pinned `LICENSE.txt` (research,
+  development, and commercial use permitted provided MITRE's copyright
+  designation and the license are reproduced in any copy). The required
+  notice is reproduced verbatim in the top-level `NOTICE` file.
+- What we use it for: the exact-key technique dictionary backing
+  correlation tactic lookup and the `get_attack_technique` model tool
+  (architecture: dictionaries by key, no vector RAG). `corvus attack
+  build` reads the bundle once and writes the compact
+  `data/attack/enterprise.json` (867 techniques, 149 revoked, 15 tactics
+  in matrix order, ~215 KB); the 49 MB bundle is never parsed per
+  request. Both files live under git-ignored `data/` and are never
+  committed. Only the two listed files are fetched (exact-path prefixes),
+  nothing else in the repo.
+- Ground truth cross-check: every `techniques` id in
+  `eval/apt29_day1_ground_truth.json` resolves to a live technique in
+  this dictionary (e.g. plan `T1145` to `T1552.004`); revoked plan ids
+  map to their `revoked-by` targets, more-specific choices stay recorded
+  in `refinements`, and deprecated `T1043` stays dropped.
+
 ## Checksums
 
 `checksums.txt` holds `SHA-256  data-relative-path` lines for every
-fetched file at the pinned revisions (549 lines). It is populated via
+fetched file at the pinned revisions (551 lines). It is populated via
 `--update-checksums` and committed; the maintainer reviews the diff
 on re-pins. Later runs fail closed on any mismatch or any unlisted
 file.

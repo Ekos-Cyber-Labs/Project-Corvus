@@ -68,6 +68,21 @@ DATASETS: list[dict[str, object]] = [
         # Relative to the data directory (not the repo root).
         "dest": "security-datasets",
     },
+    {
+        "name": "mitre-cti",
+        "repo": "mitre/cti",
+        "rev": "50be388e93819a5d20e71cbaaeccfda157abc846",
+        # ATT&CK v20.0 Enterprise STIX bundle plus the license text.
+        # Exact file paths (matched by equality in wanted()); no
+        # directory prefix, so nothing else in the repo is fetched.
+        "prefixes": [
+            "enterprise-attack/enterprise-attack.json",
+            "LICENSE.txt",
+        ],
+        "include_root_samples": False,
+        # Relative to the data directory (not the repo root).
+        "dest": "mitre-cti",
+    },
 ]
 
 MARKER = ".fetch_rev"

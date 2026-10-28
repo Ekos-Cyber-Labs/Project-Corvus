@@ -22,6 +22,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Postgres URL (default: $DATABASE_URL).",
     )
 
+    attack = sub.add_parser("attack", help="ATT&CK dictionary commands.")
+    attack_sub = attack.add_subparsers(dest="attack_command", required=True)
+    build = attack_sub.add_parser(
+        "build", help="Build the compact ATT&CK dictionary from the STIX bundle."
+    )
+    build.add_argument(
+        "--bundle",
+        default="data/mitre-cti/enterprise-attack/enterprise-attack.json",
+        help="Pinned STIX bundle path (default: %(default)s).",
+    )
+    build.add_argument(
+        "--out",
+        default="data/attack/enterprise.json",
+        help="Compact dictionary output path (default: %(default)s).",
+    )
+
     replay = sub.add_parser("replay", help="Replay dataset commands.")
     replay_sub = replay.add_subparsers(dest="replay_command", required=True)
     load = replay_sub.add_parser(
@@ -65,6 +81,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"applied {name}")
         else:
             print("up to date")
+        return 0
+    if args.command == "attack" and args.attack_command == "build":
+        from corvus.attack import build as attack_build
+
+        stats = attack_build.build_from_files(args.bundle, args.out)
+        print(attack_build.format_summary(stats))
         return 0
     if args.command == "replay" and args.replay_command == "load":
         from corvus.adapters.replay import format_summary, load_path

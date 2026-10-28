@@ -146,11 +146,27 @@ def test_wanted_picks_only_apt29_day1_host_zip() -> None:
 
 
 def test_dataset_pins_are_well_formed() -> None:
-    assert len(fetch.DATASETS) == 2
+    assert len(fetch.DATASETS) == 3
     for dataset in fetch.DATASETS:
         assert dataset["repo"] and dataset["dest"] and dataset["prefixes"]
         assert re.fullmatch(r"[0-9a-f]{40}", str(dataset["rev"])), dataset
         # dest is joined onto the data dir; a "data/" prefix would nest data/.
         assert not str(dataset["dest"]).startswith("data/")
     by_name = {str(dataset["name"]): dataset for dataset in fetch.DATASETS}
-    assert set(by_name) == {"evtx-attack-samples", "security-datasets"}
+    assert set(by_name) == {"evtx-attack-samples", "security-datasets", "mitre-cti"}
+
+
+def test_mitre_cti_fetches_only_bundle_and_license() -> None:
+    paths = [
+        "enterprise-attack/enterprise-attack.json",
+        "LICENSE.txt",
+        "mobile-attack/mobile-attack.json",
+        "ics-attack/ics-attack.json",
+        "some-guide.md",
+    ]
+    mitre = [d for d in fetch.DATASETS if d["name"] == "mitre-cti"][0]
+    assert mitre["rev"] == "50be388e93819a5d20e71cbaaeccfda157abc846"
+    assert fetch.wanted(paths, list(mitre["prefixes"]), False) == [  # type: ignore[arg-type]
+        "LICENSE.txt",
+        "enterprise-attack/enterprise-attack.json",
+    ]

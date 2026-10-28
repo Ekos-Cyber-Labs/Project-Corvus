@@ -225,3 +225,40 @@ rules back to Wazuh (shadow first, human approval).
   Verified with the lint gate and the full suite (178 passed; only
   the Postgres-guarded tests failing, no database reachable).
   Awaiting maintainer commit.
+- 2026-10-28: platform pin refresh (every pin re-checked against its
+  upstream release list on 2026-10-28). Python 3.12 -> 3.14
+  (`requires-python`, ruff target, mypy, `python:3.14-slim` base; 3.15
+  exists but locked duckdb 2.0.0 ships no cp315 wheel, recorded in the
+  Dockerfile). Postgres image 16 -> 18 (volume now at
+  `/var/lib/postgresql` per the official image docs; README notes the
+  dev volume must be recreated, pre-release with no data to migrate).
+  gitleaks hook v8.28.0 -> v8.30.1 (ruff-pre-commit v0.17.3 and uv
+  0.13.6 already latest). `uv lock --upgrade` (pydantic-settings
+  2.16.1 -> 2.16.2, plus mypy, platformdirs, python-discovery, tzdata
+  and virtualenv bumps). MITRE attack-arsenal pin -> `201db70`
+  (Day-1 README byte-identical at both commits; the 14 in-between
+  commits touch only CALDERA_DIY, the APT29 PDF, Day 2 and the APT29
+  README). `httpx` -> `httpx2` 2.16.0 (BSD-3-Clause, noted in README;
+  Starlette deprecation warning gone from pytest output). Pinning rule
+  added to AGENTS.md conventions. Migration test now expects
+  `RestrictViolation` on PG18 (constraint is ON DELETE RESTRICT; no
+  code under `corvus/` depends on the SQLSTATE). Ruff 0.17.3 with
+  target py314 drops redundant `except` parens (valid 3.14-only
+  syntax, identical semantics verified at runtime); applied to 2
+  files to keep the lint gate green. Maintainer review ran the full
+  suite on Postgres 18.6 from docker-compose.yml: 188 passed, no
+  warnings. Working tree: 15 files changed. Awaiting maintainer commit.
+- 2026-10-28: added the MITRE ATT&CK v20.0 dictionary
+  (`corvus/attack/`, exact-key lookups plus `resolve` through
+  `revoked-by`; `mitre/cti` pinned at `50be388e`, fetched with
+  checksums into git-ignored `data/`). 867 techniques (149 revoked)
+  across 15 tactics in matrix order; v20 splits Defense Evasion into
+  `stealth` and `defense-impairment`. `corvus attack build` writes the
+  compact `data/attack/enterprise.json` once (0.1 s, ~220 KB) and the
+  49 MB bundle is never parsed per request. NOTICE carries the
+  verbatim ATT&CK section of the pinned `LICENSE.txt`. Every
+  ground-truth id resolves to a live technique (no JSON change), and
+  16 revoked sub-techniques have no parent because the bundle drops
+  their `subtechnique-of` relationships (by design, the parent is
+  never guessed). Verified with `make lint` and the full `make test`.
+  Awaiting maintainer commit.
