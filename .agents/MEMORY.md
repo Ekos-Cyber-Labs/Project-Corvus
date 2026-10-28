@@ -198,3 +198,30 @@ rules back to Wazuh (shadow first, human approval).
   Verified with the lint gate and the full suite (only the
   Postgres-guarded tests failing, no database reachable). Awaiting
   maintainer commit.
+- 2026-10-28: moved the pinned OCSF schema from 1.4.0 to 1.9.0
+  (`ocsf-schema` tag `1.9.0`; `OCSF_SCHEMA_VERSION` is `1.9.0`) and
+  mapped Sysmon 7 to Module Activity (1005, Load). Verified every
+  modelled class, activity, enum and attribute against the 1.9.0
+  files: no used class uid or enum value changed (only additions).
+  `job.cmd_line` (deprecated in 1.9.0) is gone from the `Job` model;
+  the 4698 task-XML command lives in `job.job_actions[].cmd_line`
+  and the anchor search covers it. Win extension classes declare
+  `metadata.extensions` (win, uid 2, version 1.9.0). Day-1 census
+  (196081 records): 20259 Sysmon 7 events newly map (zero
+  leftovers), all 10 step verdicts stay `direct`, no ground-truth
+  change. Verified with the lint gate and the full suite (only the
+  Postgres-guarded tests failing, no database reachable). Awaiting
+  maintainer commit.
+- 2026-10-28: review fixes on that change, all verified against the
+  pinned 1.9.0 files. `Extension.uid` is the string `"2"`
+  (`_entity.uid` is `string_t`); hashes are the `Fingerprint` object
+  with required `algorithm_id` (MD5 1, SHA-1 2, SHA-256 3, Imphash
+  18, else 99 keeping the source name); 4698 actions carry type 2
+  `Execute`. Anchor search now includes module file fields: step 8
+  keeps 4 PSEXESVC.exe hits whose anchor is only in the typed file
+  description/product, all 10 verdicts stay `direct`. Day-1 load
+  cost, same file and machine: 13.5 s / 71165022 bytes before
+  (`5d2296d`), 16.2 s / 92128495 bytes after (+20259 events).
+  Verified with the lint gate and the full suite (178 passed; only
+  the Postgres-guarded tests failing, no database reachable).
+  Awaiting maintainer commit.

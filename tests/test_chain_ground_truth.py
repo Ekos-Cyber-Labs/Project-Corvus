@@ -18,6 +18,7 @@ from corvus.adapters.replay.adapter import ReplayAdapter
 from corvus.normalize.technique_ids import find_technique_ids
 from eval.chain_ground_truth import (
     evaluate_mapped,
+    event_text_fields,
     is_lsass_high_access,
     load_chain,
     step_verdict,
@@ -176,6 +177,22 @@ def test_verdict_logic_direct_indirect_none() -> None:
     outside = evaluate_mapped([_at(_normalize_record(record), start - 60_000)], CHAIN)
     assert outside[9]["anchor_out"] == 1
     assert outside[9]["verdict"] != "direct"
+
+
+def test_module_file_fields_join_anchor_search() -> None:
+    """A loaded image names its artifact: desc/product/path are searched."""
+    from tests.test_windows_normalize import _normalize_record
+
+    record = fx.flat_sysmon_module()
+    record["Description"] = "Invented Loader Service"
+    record["Product"] = "Invented Loader Suite"
+    text = event_text_fields(_normalize_record(record))
+    assert "invented loader service" in text
+    assert "invented loader suite" in text
+    assert "wmidcom.dll" in text
+    # Vendor company and signer evidence stay out of the search text.
+    assert "microsoft corporation" not in text
+    assert "microsoft windows" not in text
 
 
 def test_shared_artifact_never_counted_for_both_steps() -> None:

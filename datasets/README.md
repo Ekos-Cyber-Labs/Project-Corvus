@@ -163,7 +163,7 @@ the environment, never stored.
 - Known visibility gaps (expected in the unmapped counts, not
   normalizer bugs): the step-5 service install (T1543.003) surfaces
   as Security 4697 / System 7045 and Sysmon 13 service-key writes,
-  not mapped yet. The pinned OCSF 1.4.0 win extension defines
+  not mapped yet. The pinned OCSF 1.9.0 win extension defines
   Windows Service Activity (`windows_service_activity`, attribute
   `win_service`), Registry Key Activity and Registry Value Activity
   (`registry_key_activity` / `registry_value_activity`) for these

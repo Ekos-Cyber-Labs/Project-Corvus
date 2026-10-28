@@ -391,6 +391,101 @@ def flat_sysmon_registry_value() -> dict[str, Any]:
     }
 
 
+def flat_sysmon_module() -> dict[str, Any]:
+    """Flat Sysmon event 7 (image loaded, NXLog layout).
+
+    Mirrors the real flat record: ``EventType`` is the ``INFO``
+    severity, the account arrives as ``AccountName``/``Domain``
+    (no ``User`` key), ``ProcessId`` is a string, and ``Hashes`` is
+    the comma-separated ``ALG=value`` list. ``Message`` repeats the
+    payload as rendered text.
+    """
+    loaded = "C:\\Windows\\System32\\wmidcom.dll"
+    return {
+        "Channel": "Microsoft-Windows-Sysmon/Operational",
+        "EventID": 7,
+        "EventIdx": 122,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "UtcTime": SYS_UTCTIME,
+        "EventType": "INFO",
+        "ImageLoaded": loaded,
+        "FileVersion": "10.0.17763.1 (WinBuild.160101.0800)",
+        "Description": "WMI",
+        "Product": "Microsoft Windows Operating System",
+        "Company": "Microsoft Corporation",
+        "OriginalFileName": "wmidcom.dll",
+        "Hashes": (
+            "SHA1=4C7308C2A323D850C3E5DCB88A32A1C7DF9CBE4F,"
+            "MD5=A9BC5F3E3C6406C3C5ABE804FBF7BC76,"
+            "SHA256=A0177FD4B7690A680E5EAC9BDC78E21117B523622607BCA47305EB74984CF901,"
+            "IMPHASH=8461651332BA942E21A64DBF3E9E80F8"
+        ),
+        "Signed": "true",
+        "Signature": "Microsoft Windows",
+        "SignatureStatus": "Valid",
+        "ProcessGuid": "{32aa854b-cba6-5eac-3503-000000000300}",
+        "ProcessId": "1992",
+        "Image": "C:\\Windows\\System32\\svchost.exe",
+        "UserID": "S-1-5-18",
+        "AccountName": "SYSTEM",
+        "Domain": "NT AUTHORITY",
+        "RuleName": "-",
+        "Message": (
+            "Image loaded:\r\nRuleName: -\r\n"
+            f"ImageLoaded: {loaded}\r\nSigned: true\r\n"
+            "Signature: Microsoft Windows\r\nSignatureStatus: Valid"
+        ),
+    }
+
+
+def winlog_sysmon_module() -> dict[str, Any]:
+    """Newer nested winlog layout of a Sysmon event 7."""
+    loaded = flat_sysmon_module()["ImageLoaded"]
+    return {
+        "@timestamp": SYS_UTC,
+        "host": {"name": "web01.example.com"},
+        "winlog": {
+            "channel": "Microsoft-Windows-Sysmon/Operational",
+            "computer_name": "web01.example.com",
+            "event_id": 7,
+            "record_id": 401,
+            "event_data": {
+                "UtcTime": SYS_UTCTIME,
+                "ProcessGuid": "{32aa854b-cba6-5eac-3503-000000000300}",
+                "ProcessId": 1992,
+                "Image": "C:\\Windows\\System32\\svchost.exe",
+                "ImageLoaded": loaded,
+                "FileVersion": "10.0.17763.1 (WinBuild.160101.0800)",
+                "Description": "WMI",
+                "Product": "Microsoft Windows Operating System",
+                "Company": "Microsoft Corporation",
+                "OriginalFileName": "wmidcom.dll",
+                "Hashes": "SHA1=4C7308C2A323D850C3E5DCB88A32A1C7DF9CBE4F,"
+                "MD5=A9BC5F3E3C6406C3C5ABE804FBF7BC76",
+                "Signed": "true",
+                "Signature": "Microsoft Windows",
+                "SignatureStatus": "Valid",
+                "User": "EXAMPLE\\jdoe",
+            },
+        },
+    }
+
+
+def flat_security_task_xml() -> dict[str, Any]:
+    """Flat Security 4698 with a well-formed namespaced task XML blob."""
+    record = flat_security_task()
+    record["EventIdx"] = 123
+    record["TaskContentNew"] = (
+        '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+        "<Actions><Exec>"
+        "<Command>powershell.exe</Command>"
+        "<Arguments>-NoProfile -Command Get-Process</Arguments>"
+        "</Exec></Actions></Task>"
+    )
+    return record
+
+
 def flat_sysmon_registry_rename() -> dict[str, Any]:
     """Flat Sysmon event 14 (registry key renamed)."""
     return {

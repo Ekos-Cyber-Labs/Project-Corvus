@@ -190,7 +190,27 @@ def test_security_4698_maps_to_scheduled_job() -> None:
     assert event.metadata.product.name == "Microsoft Windows"
     assert event.job is not None
     assert event.job.name == "\\Example\\NightlySync"
+    # The truncated fixture XML does not parse: no actions, still mapped.
+    assert event.job.job_actions is None
     assert "TaskContentNew" in event.unmapped
+
+
+def test_security_4698_command_moves_to_job_actions() -> None:
+    from corvus.normalize.ocsf import Job
+
+    assert "cmd_line" not in Job.model_fields
+    event = _normalize_record(fx.flat_security_task_xml())
+    assert event.class_uid == 1006
+    assert event.job is not None
+    assert event.job.name == "\\Example\\NightlySync"
+    assert event.job.job_actions is not None
+    assert len(event.job.job_actions) == 1
+    action = event.job.job_actions[0]
+    assert action.cmd_line == "powershell.exe -NoProfile -Command Get-Process"
+    assert action.type_id == 2
+    assert action.type == "Execute"
+    assert "TaskContentNew" in event.unmapped
+    assert "cmd_line" not in event.job.model_dump()
 
 
 def test_taskscheduler_106_maps_to_scheduled_job() -> None:
@@ -199,7 +219,40 @@ def test_taskscheduler_106_maps_to_scheduled_job() -> None:
     assert event.metadata.log_name == TASKSCHEDULER_CHANNEL
     assert event.job is not None
     assert event.job.name == "\\Example\\NightlySync"
+    assert event.job.job_actions is None
     assert "UserData" in event.unmapped
+
+
+def test_win_extension_declared_on_win_classes_only() -> None:
+    from corvus.normalize.ocsf import (
+        WIN_EXTENSION_NAME,
+        WIN_EXTENSION_UID,
+        WIN_EXTENSION_VERSION,
+    )
+
+    win_events = [
+        _normalize_record(fx.flat_sysmon_registry_key()),
+        _normalize_record(fx.flat_sysmon_registry_value()),
+        _normalize_record(fx.flat_sysmon_registry_rename()),
+        _normalize_record(fx.flat_security_service()),
+        _normalize_record(fx.flat_service_install(channel="System")),
+    ]
+    assert {event.class_uid for event in win_events} == {201001, 201002, 201004}
+    for event in win_events:
+        assert event.metadata.extensions is not None
+        assert len(event.metadata.extensions) == 1
+        entry = event.metadata.extensions[0]
+        assert entry.name == WIN_EXTENSION_NAME == "win"
+        assert entry.uid == WIN_EXTENSION_UID == "2"
+        assert entry.version == WIN_EXTENSION_VERSION == "1.9.0"
+    core_events = [
+        _normalize_record(fx.flat_sysmon_process()),
+        _normalize_record(fx.flat_sysmon_module()),
+        _normalize_record(fx.flat_security_logon(success=True)),
+        _normalize_record(fx.flat_security_task_xml()),
+    ]
+    for event in core_events:
+        assert event.metadata.extensions is None
 
 
 def test_unmapped_channel_event_raises_with_key() -> None:
@@ -436,6 +489,7 @@ def test_replay_products_land_in_the_source_category_map() -> None:
         _normalize_record(fx.flat_security_logon(success=True)),
         _normalize_record(fx.flat_taskscheduler_106()),
         _normalize_record(fx.flat_powershell_script()),
+        _normalize_record(fx.flat_sysmon_module()),
         _normalize_record(fx.flat_sysmon_registry_value()),
         _normalize_record(fx.flat_security_service()),
         _normalize_record(fx.flat_service_install(channel="System")),
@@ -448,6 +502,7 @@ def test_replay_products_land_in_the_source_category_map() -> None:
     assert by_source[f"Microsoft Windows:{POWERSHELL_CHANNEL}"] == "endpoint process"
     assert by_source[f"Microsoft Windows:{SYSTEM_CHANNEL}"] == "endpoint process"
     classes = {entry.source: entry.classes for entry in inventory.sources}
+    assert 1005 in classes[f"Sysmon:{SYSMON_CHANNEL}"]
     assert 201002 in classes[f"Sysmon:{SYSMON_CHANNEL}"]
     assert 201004 in classes[f"Microsoft Windows:{SECURITY_CHANNEL}"]
     assert classes[f"Microsoft Windows:{SYSTEM_CHANNEL}"] == [201004]
@@ -687,16 +742,15 @@ def test_unmapped_ids_still_count_per_channel_and_id(tmp_path: Path) -> None:
     lines = [
         json.dumps(fx.flat_sysmon_access()),
         json.dumps(fx.flat_powershell_script()),
-        json.dumps(fx.flat_unmapped(event_id=7, channel=SYSMON_CHANNEL)),
+        json.dumps(fx.flat_sysmon_module()),
         json.dumps(fx.flat_unmapped(event_id=4105, channel=POWERSHELL_CHANNEL)),
         json.dumps(fx.flat_unmapped()),
     ]
     archive = _write_zip(tmp_path / "mixed2.zip", {"events.json": lines})
     result = read_dataset_file(archive, dataset_rel="mixed2.zip")
-    assert len(result.events) == 2
-    assert {event.class_uid for event in result.events} == {1007, 1009}
+    assert len(result.events) == 3
+    assert {event.class_uid for event in result.events} == {1007, 1009, 1005}
     assert result.unmapped == {
-        (SYSMON_CHANNEL, 7): 1,
         (POWERSHELL_CHANNEL, 4105): 1,
         ("Security", 4688): 1,
     }
@@ -973,11 +1027,114 @@ def test_service_type_numbers_and_words() -> None:
     assert event.win_service.service_type_id == 1
 
 
-def test_sysmon_7_stays_unmapped_and_counted() -> None:
-    """Sysmon 7 (image load) targets Module Activity: not mapped here."""
-    with pytest.raises(UnmappedEvent) as excinfo:
-        _normalize_record(fx.flat_unmapped(event_id=7, channel=SYSMON_CHANNEL))
-    assert excinfo.value.key == (SYSMON_CHANNEL, 7)
+def test_sysmon_7_maps_to_module_activity() -> None:
+    event = _normalize_record(fx.flat_sysmon_module())
+    assert event.class_uid == 1005
+    assert event.category_uid == 1
+    assert event.activity_id == 1
+    assert event.type_uid == 100501
+    assert event.metadata.log_name == SYSMON_CHANNEL
+    assert event.metadata.product.name == "Sysmon"
+    assert event.metadata.extensions is None
+    assert event.time == fx.SYS_MS
+    assert event.module is not None and event.module.file is not None
+    assert event.module.file.path == "C:\\Windows\\System32\\wmidcom.dll"
+    assert event.module.file.name == "wmidcom.dll"
+    assert event.module.file.desc == "WMI"
+    assert event.module.file.company_name == "Microsoft Corporation"
+    assert event.module.file.internal_name == "wmidcom.dll"
+    assert event.module.file.product is not None
+    assert event.module.file.product.name == "Microsoft Windows Operating System"
+    assert event.module.file.hashes is not None
+    by_id = {h.algorithm_id: (h.algorithm, h.value) for h in event.module.file.hashes}
+    assert by_id[2] == ("SHA-1", "4C7308C2A323D850C3E5DCB88A32A1C7DF9CBE4F")
+    assert by_id[1][0] == "MD5"
+    assert by_id[3][0] == "SHA-256"
+    assert by_id[18] == (
+        "Imphash",
+        "8461651332BA942E21A64DBF3E9E80F8",
+    )
+    assert {h.algorithm_id for h in event.module.file.hashes} == {1, 2, 3, 18}
+    assert event.actor is not None and event.actor.process is not None
+    assert event.actor.process.pid == 1992
+    assert event.actor.process.name == "svchost.exe"
+    assert event.actor.user is not None
+    assert event.actor.user.name == "SYSTEM"
+    assert event.actor.user.domain == "NT AUTHORITY"
+    assert event.unmapped["Signed"] == "true"
+    assert event.unmapped["Signature"] == "Microsoft Windows"
+    assert event.unmapped["SignatureStatus"] == "Valid"
+    assert event.unmapped["FileVersion"] == "10.0.17763.1 (WinBuild.160101.0800)"
+    assert event.unmapped["EventType"] == "INFO"
+    assert event.unmapped["ProcessGuid"] == "{32aa854b-cba6-5eac-3503-000000000300}"
+    assert event.entity_keys.user == "nt authority\\system"
+    assert event.entity_keys.host == "web01"
+    _check_no_drop(
+        fx.flat_sysmon_module(),
+        FLAT_ENVELOPE,
+        {
+            "ImageLoaded",
+            "Image",
+            "ProcessId",
+            "AccountName",
+            "Domain",
+            "Hashes",
+            "Description",
+            "Product",
+            "Company",
+            "OriginalFileName",
+            "UtcTime",
+        },
+    )
+
+
+def test_sysmon_7_winlog_layout_maps_with_user() -> None:
+    event = _normalize_record(fx.winlog_sysmon_module())
+    assert event.class_uid == 1005
+    assert event.activity_id == 1
+    assert event.metadata.log_name == SYSMON_CHANNEL
+    assert event.module is not None and event.module.file is not None
+    assert event.module.file.path == "C:\\Windows\\System32\\wmidcom.dll"
+    assert event.actor is not None and event.actor.user is not None
+    assert event.actor.user.name == "jdoe"
+    assert len(event.module.file.hashes or []) == 2
+
+
+def test_sysmon_7_unknown_hash_algorithm_maps_to_other() -> None:
+    record = fx.flat_sysmon_module()
+    record["Hashes"] = "SSDEEP=3:h1:h2,MD5=A9BC5F3E3C6406C3C5ABE804FBF7BC76"
+    event = _normalize_record(record)
+    assert event.module is not None and event.module.file is not None
+    assert event.module.file.hashes is not None
+    by_id = {h.algorithm_id: (h.algorithm, h.value) for h in event.module.file.hashes}
+    assert by_id[99] == ("SSDEEP", "3:h1:h2")
+    assert by_id[1] == ("MD5", "A9BC5F3E3C6406C3C5ABE804FBF7BC76")
+
+
+def test_sysmon_7_is_no_longer_counted_as_unmapped(tmp_path: Path) -> None:
+    lines = [
+        json.dumps(fx.flat_sysmon_module()),
+        json.dumps(fx.flat_unmapped(event_id=9, channel=SYSMON_CHANNEL)),
+    ]
+    archive = _write_zip(tmp_path / "mod7.zip", {"events.json": lines})
+    result = read_dataset_file(archive, dataset_rel="mod7.zip")
+    assert len(result.events) == 1
+    assert result.events[0].class_uid == 1005
+    assert result.unmapped == {(SYSMON_CHANNEL, 9): 1}
+
+
+def test_sysmon_7_minimal_record_still_maps() -> None:
+    record = {
+        "Channel": "Microsoft-Windows-Sysmon/Operational",
+        "EventID": 7,
+        "EventIdx": 124,
+        "Hostname": "web01.example.com",
+        "TimeCreated": fx.SYS_UTC,
+    }
+    event = _normalize_record(record)
+    assert event.class_uid == 1005
+    assert event.module is None
+    assert event.actor is None
 
 
 def test_lowercase_security_unmapped_merges_with_security(tmp_path: Path) -> None:

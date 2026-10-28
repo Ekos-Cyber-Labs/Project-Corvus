@@ -19,7 +19,7 @@ from corvus.normalize.windows import WindowsReadResult, read_dataset_file
 EVTX_DIR = Path("data/evtx-attack-samples")
 OTRF_WINDOWS = Path("data/security-datasets/datasets/atomic/windows")
 
-ALLOWED_CLASSES = {1007, 4001, 1001, 3002, 1006, 1009, 201001, 201002, 201004}
+ALLOWED_CLASSES = {1007, 4001, 1001, 3002, 1006, 1009, 1005, 201001, 201002, 201004}
 UID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 
 

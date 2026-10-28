@@ -19,7 +19,9 @@ from the class table alone):
 - ``direct``: at least one mapped event inside the step window whose
   text fields (process and parent path, command line, script
   content, file path, registry key/value path/name/data, service
-  name/command line) contain a step anchor, case-insensitive.
+  name/command line, scheduled-job name/action command line, loaded
+  module file path/name/description/product) contain a step anchor,
+  case-insensitive.
 - ``indirect``: no mapped anchor hit, but at least one
   technique-relevant class/activity event inside the step window.
 - ``none``: neither.
@@ -156,9 +158,14 @@ def event_text_fields(event: Any) -> str:
     """Lowercased anchor-search text of a mapped event.
 
     Process and parent path, command line, script content, file path,
-    registry key/value path/name/data, and service name/command line
-    only — never the whole raw record, so ingestion metadata cannot
-    manufacture an anchor hit.
+    registry key/value path/name/data, service name/command line,
+    scheduled-job name/action command line, and loaded-module file
+    path/name/description/product/internal name only — never the whole
+    raw record, so ingestion metadata cannot manufacture an anchor
+    hit. Module fields are in because a loaded image can name the
+    anchor artifact itself (e.g. a service binary whose file
+    description carries the tool name); the vendor company name stays
+    out since it names the vendor, not the artifact.
     """
     parts: list[str] = []
 
@@ -195,6 +202,20 @@ def event_text_fields(event: Any) -> str:
     if service_obj is not None:
         parts.append(getattr(service_obj, "name", None) or "")
         parts.append(getattr(service_obj, "cmd_line", None) or "")
+    job_obj = getattr(event, "job", None)
+    if job_obj is not None:
+        parts.append(getattr(job_obj, "name", None) or "")
+        for action in getattr(job_obj, "job_actions", None) or []:
+            parts.append(getattr(action, "cmd_line", None) or "")
+    module_obj = getattr(event, "module", None)
+    module_file = getattr(module_obj, "file", None) if module_obj is not None else None
+    if module_file is not None:
+        parts.append(getattr(module_file, "path", None) or "")
+        parts.append(getattr(module_file, "name", None) or "")
+        parts.append(getattr(module_file, "desc", None) or "")
+        product_obj = getattr(module_file, "product", None)
+        parts.append(getattr(product_obj, "name", None) if product_obj else "")
+        parts.append(getattr(module_file, "internal_name", None) or "")
     return " ".join(parts).lower()
 
 

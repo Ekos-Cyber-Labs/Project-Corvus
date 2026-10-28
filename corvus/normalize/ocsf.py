@@ -1,8 +1,8 @@
 """Pinned OCSF event models for Corvus normalization.
 
 Everything inside Corvus is OCSF at the version pinned by
-``OCSF_SCHEMA_VERSION``. Field names and activity IDs match the OCSF 1.4.0
-schema (schema.ocsf.io, ``ocsf-schema`` tag ``v1.4.0``): ``actor.user``,
+``OCSF_SCHEMA_VERSION``. Field names and activity IDs match the OCSF 1.9.0
+schema (schema.ocsf.io, ``ocsf-schema`` tag ``1.9.0``): ``actor.user``,
 ``metadata.product`` and ``metadata.log_name``, ``process.file``. These
 models carry only the fields deterministic correlation needs, plus
 ``raw_data`` (the original event as a JSON string) and ``unmapped``
@@ -25,7 +25,16 @@ from pydantic import (
     model_validator,
 )
 
-OCSF_SCHEMA_VERSION = "1.4.0"
+OCSF_SCHEMA_VERSION = "1.9.0"
+
+#: The Windows schema extension, from ``extensions/windows/extension.json``
+#: in ``ocsf-schema`` tag ``1.9.0`` (uid ``"2"``, name ``win``). Every event
+#: of a win extension class (201001, 201002, 201004) carries one
+#: :class:`Extension` with these values in ``metadata.extensions``; events
+#: of core classes carry no extensions entry.
+WIN_EXTENSION_NAME = "win"
+WIN_EXTENSION_UID = "2"
+WIN_EXTENSION_VERSION = "1.9.0"
 
 #: Earliest accepted event time (2000-01-01T00:00:00Z) as UTC epoch ms.
 #: Anything below it is almost certainly epoch seconds, not milliseconds.
@@ -44,10 +53,15 @@ __all__ = [
     "Device",
     "Endpoint",
     "EntityKeys",
+    "Extension",
     "File",
+    "Fingerprint",
     "FileSystemActivity",
     "Job",
+    "JobAction",
     "Metadata",
+    "Module",
+    "ModuleActivity",
     "NetworkActivity",
     "OcsfEvent",
     "OcsfEventBase",
@@ -62,8 +76,12 @@ __all__ = [
     "Script",
     "ScriptActivity",
     "User",
+    "WIN_EXTENSION_NAME",
+    "WIN_EXTENSION_UID",
+    "WIN_EXTENSION_VERSION",
     "WinService",
     "WindowsServiceActivity",
+    "win_extension",
     "canonicalize_host",
     "canonicalize_ip",
     "canonicalize_user",
@@ -200,6 +218,34 @@ class Product(BaseModel):
     vendor_name: str | None = None
 
 
+class Extension(BaseModel):
+    """OCSF schema extension object (``objects/extension.json``).
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/extension.json`` in ``ocsf-schema`` tag ``1.9.0``):
+    ``name`` is the extension name (``win``), ``uid`` its unique id
+    (``"2"`` as a string: the object extends ``_entity`` whose ``uid``
+    is ``string_t``), and ``version`` its version (``1.9.0`` per
+    ``extensions/windows/extension.json`` in the same tag, required
+    there).
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    name: str | None = None
+    uid: str | None = None
+    version: str | None = None
+
+
+def win_extension() -> Extension:
+    """Return the win extension entry for ``metadata.extensions``."""
+    return Extension(
+        name=WIN_EXTENSION_NAME,
+        uid=WIN_EXTENSION_UID,
+        version=WIN_EXTENSION_VERSION,
+    )
+
+
 class Metadata(BaseModel):
     """OCSF metadata object, flattened to the fields Corvus needs."""
 
@@ -212,6 +258,11 @@ class Metadata(BaseModel):
     uid: str | None = Field(default=None, description="Original event id in the SIEM")
     version: str = Field(
         default=OCSF_SCHEMA_VERSION, description="Pinned OCSF schema version"
+    )
+    extensions: list[Extension] | None = Field(
+        default=None,
+        description="Schema extensions used to construct the event "
+        "(one win entry on win extension classes, nothing on core classes)",
     )
 
 
@@ -242,13 +293,79 @@ class User(BaseModel):
     domain: str | None = None
 
 
+class Fingerprint(BaseModel):
+    """OCSF fingerprint object: one hash with its algorithm.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/fingerprint.json`` in ``ocsf-schema`` tag ``1.9.0``,
+    the shape used by the file object's ``hashes`` attribute):
+    ``algorithm`` is the caption of ``algorithm_id`` (``"Other"`` keeps
+    the source name), and both ``algorithm_id`` and ``value`` are
+    required there.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    algorithm: str | None = None
+    algorithm_id: int | None = None
+    value: str | None = None
+
+    @field_validator("algorithm_id")
+    @classmethod
+    def _check_algorithm(cls, value: int | None) -> int | None:
+        # Enum from objects/fingerprint.json attributes.algorithm_id.enum:
+        # 0 Unknown, 1 MD5, 2 SHA-1, 3 SHA-256, 4 SHA-512, 5 CTPH,
+        # 6 TLSH, 7 quickXorHash, 8 SHA-224, 9 SHA-384, 10 SHA-512/224,
+        # 11 SHA-512/256, 12 SHA3-224, 13 SHA3-256, 14 SHA3-384,
+        # 15 SHA3-512, 16 xxHash H3 64-bit, 17 xxHash H3 128-bit,
+        # 18 Imphash, 19 NPF, 20 HASSH, 99 Other.
+        if value is not None and value not in (
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            99,
+        ):
+            raise ValueError("algorithm_id must be one of 0-20 or 99 (Other)")
+        return value
+
+
 class File(BaseModel):
-    """OCSF file object; ``name`` is derived from ``path`` when missing."""
+    """OCSF file object; ``name`` is derived from ``path`` when missing.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/file.json`` in ``ocsf-schema`` tag ``1.9.0``). ``signature``
+    is deliberately absent: it is deprecated since 1.8.0 in favor of
+    ``signatures``, so signer evidence stays verbatim in ``unmapped``.
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     path: str | None = None
     name: str | None = None
+    hashes: list[Fingerprint] | None = None
+    desc: str | None = None
+    company_name: str | None = None
+    version: str | None = None
+    internal_name: str | None = None
+    product: Product | None = None
 
     @model_validator(mode="after")
     def _derive_name(self) -> File:
@@ -282,13 +399,62 @@ class Actor(BaseModel):
     process: Process | None = None
 
 
+class JobAction(BaseModel):
+    """OCSF job-action object: one action a scheduled job performs.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/job_action.json`` in ``ocsf-schema`` tag ``1.9.0``):
+    ``cmd_line`` is the command line the action executes, and
+    ``type_id``/``type`` name the action type (required in the schema:
+    0 Unknown, 1 COM Handler, 2 Execute, 3 E-mail, 4 Show Message,
+    99 Other). This is the non-deprecated home for scheduled-task
+    commands since 1.9.0 deprecated ``job.cmd_line`` (PR #1597) in
+    favor of ``job.job_actions[].cmd_line`` (see ``objects/job.json``).
+    Mappers set the type they can tell (an Exec action from task XML
+    is 2 Execute); when the type is unknowable, use 0 Unknown.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    cmd_line: str | None = None
+    type: str | None = None
+    type_id: int | None = None
+
+    @field_validator("type_id")
+    @classmethod
+    def _check_type(cls, value: int | None) -> int | None:
+        if value is not None and value not in (0, 1, 2, 3, 4, 99):
+            raise ValueError("type_id must be one of 0-4 or 99 (Other)")
+        return value
+
+
 class Job(BaseModel):
-    """OCSF scheduled-job object."""
+    """OCSF scheduled-job object.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/job.json`` in ``ocsf-schema`` tag ``1.9.0``). ``cmd_line``
+    is deliberately absent: deprecated since 1.9.0 in favor of
+    ``job_actions[].cmd_line`` — commands live in :class:`JobAction`.
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     name: str | None = None
-    cmd_line: str | None = None
+    job_actions: list[JobAction] | None = None
+
+
+class Module(BaseModel):
+    """OCSF module object: a loaded library or driver.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/module.json`` in ``ocsf-schema`` tag ``1.9.0``): the
+    loaded image lives in ``file``. No other module attribute has a
+    source in the mapped Windows events.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    file: File | None = None
 
 
 class OcsfEventBase(BaseModel):
@@ -386,8 +552,8 @@ class Authentication(OcsfEventBase):
     @field_validator("logon_type_id")
     @classmethod
     def _check_logon_type(cls, value: int | None) -> int | None:
-        # Enum from the pinned OCSF 1.4.0 schema (`dictionary.json`,
-        # `attributes.logon_type_id.enum` in `ocsf-schema` tag `v1.4.0`):
+        # Enum from the pinned OCSF 1.9.0 schema (`dictionary.json`,
+        # `attributes.logon_type_id.enum` in `ocsf-schema` tag `1.9.0`):
         # 0 Unknown, 1 System, 2 Interactive, 3 Network, 4 Batch,
         # 5 OS Service, 7 Unlock, 8 Network Cleartext, 9 New Credentials,
         # 10 Remote Interactive, 11 Cached Interactive,
@@ -419,7 +585,7 @@ class ProcessActivity(OcsfEventBase):
     category_uid: Literal[1] = 1
     activity_id: int = 1
     process: Process | None = None
-    # Pinned OCSF 1.4.0 ``process_activity.actual_permissions`` ("the
+    # Pinned OCSF 1.9.0 ``process_activity.actual_permissions`` ("the
     # permissions that were granted in a platform-native format",
     # ``dictionary.json`` types it integer_t). Corvus keeps the original
     # hex string (e.g. a Sysmon GrantedAccess mask) instead of coercing it,
@@ -467,8 +633,8 @@ class ScheduledJobActivity(OcsfEventBase):
 class Script(BaseModel):
     """OCSF script object: a script executed by a shell or engine.
 
-    Field meanings from the pinned OCSF 1.4.0 schema (``objects/script.json``
-    in ``ocsf-schema`` tag ``v1.4.0``): ``uid`` is the engine's execution id
+    Field meanings from the pinned OCSF 1.9.0 schema (``objects/script.json``
+    in ``ocsf-schema`` tag ``1.9.0``): ``uid`` is the engine's execution id
     (the PowerShell ``ScriptBlockId``), ``type_id`` 2 with ``type``
     ``"PowerShell"`` names the PowerShell engine.
     """
@@ -495,7 +661,7 @@ class Script(BaseModel):
 class ScriptActivity(OcsfEventBase):
     """OCSF 1009 Script Activity (category 1, System Activity).
 
-    Class and activity from the pinned OCSF 1.4.0 schema
+    Class and activity from the pinned OCSF 1.9.0 schema
     (``events/system/script_activity.json``: uid 9 under the system category,
     activity 1 Execute).
     """
@@ -509,9 +675,9 @@ class ScriptActivity(OcsfEventBase):
 class RegKey(BaseModel):
     """OCSF reg_key object: a Windows registry key.
 
-    Attribute names from the pinned OCSF 1.4.0 schema
+    Attribute names from the pinned OCSF 1.9.0 schema
     (``extensions/windows/objects/registry_key.json`` in ``ocsf-schema``
-    tag ``v1.4.0``): ``path`` is the full path to the key (required
+    tag ``1.9.0``): ``path`` is the full path to the key (required
     there); the remaining attributes have no source in the mapped
     Windows events and stay empty.
     """
@@ -524,9 +690,9 @@ class RegKey(BaseModel):
 class RegValue(BaseModel):
     """OCSF reg_value object: a Windows registry value.
 
-    Attribute names from the pinned OCSF 1.4.0 schema
+    Attribute names from the pinned OCSF 1.9.0 schema
     (``extensions/windows/objects/registry_value.json`` in
-    ``ocsf-schema`` tag ``v1.4.0``): ``name`` is the value name and
+    ``ocsf-schema`` tag ``1.9.0``): ``name`` is the value name and
     ``path`` the full path of the key holding it (both required
     there); ``data`` is the value data, which carries a Sysmon 13
     ``Details`` string verbatim.
@@ -542,9 +708,9 @@ class RegValue(BaseModel):
 class WinService(BaseModel):
     """OCSF win_service object: a Windows service.
 
-    Attribute names from the pinned OCSF 1.4.0 schema
+    Attribute names from the pinned OCSF 1.9.0 schema
     (``extensions/windows/objects/win_service.json`` in ``ocsf-schema``
-    tag ``v1.4.0``): ``name`` is the unique service name (required
+    tag ``1.9.0``): ``name`` is the unique service name (required
     there), ``cmd_line`` the full launch command line, and
     ``service_start_name`` the account the service starts as.
     """
@@ -562,10 +728,10 @@ class WinService(BaseModel):
     @field_validator("service_start_type_id")
     @classmethod
     def _check_start_type(cls, value: int | None) -> int | None:
-        # Enum from the pinned OCSF 1.4.0 win extension
+        # Enum from the pinned OCSF 1.9.0 win extension
         # (`extensions/windows/dictionary.json`,
         # `attributes.service_start_type_id.enum` in `ocsf-schema` tag
-        # `v1.4.0`): 0 Unknown, 1 Boot, 2 System, 3 Auto, 4 Demand,
+        # `1.9.0`): 0 Unknown, 1 Boot, 2 System, 3 Auto, 4 Demand,
         # 5 Disabled, 99 Other.
         if value is not None and value not in (0, 1, 2, 3, 4, 5, 99):
             raise ValueError("service_start_type_id must be one of 0-5 or 99 (Other)")
@@ -574,10 +740,10 @@ class WinService(BaseModel):
     @field_validator("service_type_id")
     @classmethod
     def _check_service_type(cls, value: int | None) -> int | None:
-        # Enum from the pinned OCSF 1.4.0 win extension
+        # Enum from the pinned OCSF 1.9.0 win extension
         # (`extensions/windows/dictionary.json`,
         # `attributes.service_type_id.enum` in `ocsf-schema` tag
-        # `v1.4.0`): 0 Unknown, 1 Kernel Driver, 2 File System Driver,
+        # `1.9.0`): 0 Unknown, 1 Kernel Driver, 2 File System Driver,
         # 3 Own Process, 4 Share Process, 99 Other.
         if value is not None and value not in (0, 1, 2, 3, 4, 99):
             raise ValueError("service_type_id must be one of 0-4 or 99 (Other)")
@@ -587,7 +753,7 @@ class WinService(BaseModel):
 class RegistryKeyActivity(OcsfEventBase):
     """OCSF 201001 Registry Key Activity (category 1, System Activity).
 
-    Class from the pinned OCSF 1.4.0 win extension
+    Class from the pinned OCSF 1.9.0 win extension
     (``extensions/windows/events/registry_key_activity.json``: uid 1,
     class ``201001``; ``extends`` system, so category 1). Activity ids
     from that file's ``activity_id`` enum: 1 Create, 2 Read, 3 Modify,
@@ -606,7 +772,7 @@ class RegistryKeyActivity(OcsfEventBase):
 class RegistryValueActivity(OcsfEventBase):
     """OCSF 201002 Registry Value Activity (category 1, System Activity).
 
-    Class from the pinned OCSF 1.4.0 win extension
+    Class from the pinned OCSF 1.9.0 win extension
     (``extensions/windows/events/registry_value_activity.json``: uid 2,
     class ``201002``; ``extends`` system, so category 1). Activity ids
     from that file's ``activity_id`` enum: 1 Get, 2 Set, 3 Modify,
@@ -622,7 +788,7 @@ class RegistryValueActivity(OcsfEventBase):
 class WindowsServiceActivity(OcsfEventBase):
     """OCSF 201004 Windows Service Activity (category 1, System Activity).
 
-    Class from the pinned OCSF 1.4.0 win extension
+    Class from the pinned OCSF 1.9.0 win extension
     (``extensions/windows/events/windows_service_activity.json``: uid 4,
     class ``201004``; ``extends`` system, so category 1). Activity ids
     from that file's ``activity_id`` enum: 1 Create, 2 Reconfigure,
@@ -637,11 +803,31 @@ class WindowsServiceActivity(OcsfEventBase):
 
 
 class DetectionFinding(OcsfEventBase):
-    """OCSF 2004 Detection Finding (category 2, Findings)."""
+    """OCSF 2004 Detection Finding (category 2, Findings).
+
+    Class from the pinned OCSF 1.9.0 schema
+    (``events/findings/detection_finding.json``: uid 4, ``extends``
+    finding, so category 2).
+    """
 
     class_uid: Literal[2004] = 2004
     category_uid: Literal[2] = 2
     activity_id: int = 1
+
+
+class ModuleActivity(OcsfEventBase):
+    """OCSF 1005 Module Activity (category 1, System Activity).
+
+    Class and activity from the pinned OCSF 1.9.0 schema
+    (``events/system/module_activity.json``: uid 5 under the system
+    category, activity 1 Load). The loaded image lives in
+    ``module.file``; the loading process is ``actor.process``.
+    """
+
+    class_uid: Literal[1005] = 1005
+    category_uid: Literal[1] = 1
+    activity_id: int = 1
+    module: Module | None = None
 
 
 OcsfEvent = Annotated[
@@ -651,6 +837,7 @@ OcsfEvent = Annotated[
     | FileSystemActivity
     | ScheduledJobActivity
     | ScriptActivity
+    | ModuleActivity
     | RegistryKeyActivity
     | RegistryValueActivity
     | WindowsServiceActivity

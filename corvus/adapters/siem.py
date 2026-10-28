@@ -96,6 +96,7 @@ _CLASS_CATEGORY: dict[int, SourceCategory] = {
     1001: "endpoint process",
     1006: "endpoint process",
     1009: "endpoint process",
+    1005: "endpoint process",
     201001: "endpoint process",
     201002: "endpoint process",
     201004: "endpoint process",

@@ -244,6 +244,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", default=None)
     parser.add_argument("--load-seconds", type=float, default=None)
     parser.add_argument("--load-peak-bytes", type=int, default=None)
+    parser.add_argument("--cost-before-seconds", type=float, default=None)
+    parser.add_argument("--cost-before-bytes", type=int, default=None)
+    parser.add_argument("--cost-after-seconds", type=float, default=None)
+    parser.add_argument("--cost-after-bytes", type=int, default=None)
     args = parser.parse_args(argv)
 
     dataset = (REPO_ROOT / args.dataset).resolve()
@@ -309,9 +313,22 @@ def main(argv: list[str] | None = None) -> int:
             f"relevant_in={entry['relevant']} derived_window={derived_text}"
         )
     if args.report:
+        cost = None
+        if (
+            args.cost_before_seconds is not None
+            and args.cost_before_bytes is not None
+            and args.cost_after_seconds is not None
+            and args.cost_after_bytes is not None
+        ):
+            cost = (
+                args.cost_before_seconds,
+                args.cost_before_bytes,
+                args.cost_after_seconds,
+                args.cost_after_bytes,
+            )
         report_path = (REPO_ROOT / args.report).resolve()
         report_path.write_text(
-            render_report(chain, result, args.load_seconds, args.load_peak_bytes),
+            render_report(chain, result, args.load_seconds, args.load_peak_bytes, cost),
             encoding="utf-8",
         )
         print(f"wrote report to {report_path}")
@@ -323,12 +340,14 @@ def render_report(
     result: dict[str, Any],
     load_seconds: float | None,
     load_peak_bytes: int | None,
+    mapping_cost: tuple[float, int, float, int] | None = None,
 ) -> str:
     """Render the counts-only report markdown from census counts."""
     today = datetime.now(tz=UTC).date().isoformat()
     per_class = result["per_class"]
     class_names = {
         1001: "File System Activity",
+        1005: "Module Activity",
         1006: "Scheduled Job Activity",
         1007: "Process Activity",
         1009: "Script Activity",
@@ -383,6 +402,24 @@ def render_report(
         f"Mapped + unmapped = {result['records']}, the full record count.",
         f"- Events carrying an in-band technique reference "
         f"(provenance flag from the load): {result['in_band']}.",
+    ]
+    if mapping_cost is not None:
+        before_s, before_b, after_s, after_b = mapping_cost
+        before_events = result["mapped"] - result["per_class"].get(1005, 0)
+        lines.append(
+            f"- Sysmon 7 mapping cost: this tree vs commit `5d2296d` "
+            f"(same file, same machine, separate `--replay-dir` loads): "
+            f"loader {before_s:.1f} s -> {after_s:.1f} s; day-1 events "
+            f"Parquet {before_b} bytes -> {after_b} bytes "
+            f"(+{after_b - before_b} bytes); mapped events "
+            f"{before_events} -> {result['mapped']} "
+            f"(+{result['per_class'].get(1005, 0)} Module Activity). "
+            f"Reproduced with `git worktree add /tmp/corvus-before "
+            f"5d2296d`, `corvus replay load <file> --replay-dir <dir>` "
+            f"on each tree, and `ls -l <dir>/events/"
+            f"b6d3065fbd07eed2.parquet` (slug of the data-relative path)."
+        )
+    lines += [
         "",
         f"## Events per OCSF class (n = {result['mapped']})",
         "",
@@ -407,7 +444,14 @@ def render_report(
         "`EventType` field with the severity, so the op is read from "
         "the `Message` `EventType:` line. Windows Service Activity is "
         "Security 4697 and System 7045 service installs. Sysmon 7 "
-        "image loads stay unmapped and counted.",
+        "image loads now map to Module Activity (1005, Load): "
+        "`ImageLoaded` becomes `module.file` (hashes, description, "
+        "company, product and original file name typed; signer fields "
+        "stay in `unmapped`), the loading process is `actor.process`. "
+        "Scheduled-job commands moved from the deprecated `job.cmd_line` "
+        "to `job.job_actions[].cmd_line` (type 2 Execute), and win "
+        "extension classes declare `metadata.extensions` (win, uid "
+        '"2", version 1.9.0).',
         "",
         "Per-activity breakdown of the new classes "
         f"(n = {result['per_class'].get(201001, 0)} "
@@ -442,20 +486,31 @@ def render_report(
         "inside the step window whose text fields (process and "
         "parent path, command line, script content, file path, "
         "registry key/value path/name/data, service name/command "
-        "line) contain a step anchor; `indirect` = no mapped anchor "
+        "line, scheduled-job name/action command line, loaded-module "
+        "file path/name/description/product) contain a step anchor; "
+        "`indirect` = no mapped anchor "
         "hit but technique-relevant events inside the window; `none` "
         "= neither. Anchor hits outside a step window are reported "
         "as out-of-window counts, not matches. Step windows were "
         "re-derived in the census (min/max ingest time of anchor "
         "hits over all records); the difference against the "
         "committed window is shown per step. No step changed verdict "
-        "in the registry/service mapping pass: all 10 steps were "
-        "`direct` before and stay `direct`. Steps 3 and 5 changed "
-        "evidence instead — their registry and service anchors moved "
-        "from unmapped buckets into mapped events (step 3: 17 more "
-        "mapped anchor hits; step 5: 9 more, emptying its unmapped "
-        "column), which is why their `match_kind` stays `direct` "
-        "with new `relevant` classes rather than flipping.",
+        "in the Sysmon 7 mapping pass: all 10 steps were `direct` "
+        "before and stay `direct`, so no `match_kind` changes in "
+        "the chain file. Seven steps gained mapped anchor hits — "
+        "their Sysmon 7 image-load anchors moved from the unmapped "
+        "bucket into mapped Module Activity events (the loading "
+        "process name/path carries the anchor; step 1: 65 more, "
+        "step 3: 68, step 4: 444, step 6: 19, step 8: 219, step 9: "
+        "38, step 10: 9 in-window plus 9 out-of-window on step 5) — "
+        "and the Sysmon 7 unmapped column is now empty on every "
+        "step. Step 8's last 4 hits are PSEXESVC.exe image loads "
+        "whose anchor lives only in the typed file description and "
+        "product (`PsExec Service` / `Sysinternals PsExec`); the "
+        "ImageLoaded path itself (`PSEXESVC.exe`) does not contain "
+        "the anchor, which is why the module file fields joined the "
+        "anchor search. Steps 2, 5 and 7 never referenced an image "
+        "load and are unchanged.",
         "",
         "| Step | Window (UTC) | Anchor hits (mapped, in / out) | "
         "Unmapped anchor hits in window | Relevant in window | Verdict |",
@@ -551,7 +606,7 @@ def render_report(
         f"Activity (201004, Create); unmapped leftovers in either "
         f"bucket: {result['unmapped'].get(('Security', 4697), 0)} and "
         f"{result['unmapped'].get(('System', 7045), 0)}. The pinned "
-        "OCSF 1.4.0 win extension class is "
+        "OCSF 1.9.0 win extension class is "
         "`windows_service_activity` (attribute `win_service`).",
         f"- Registry modification (steps 3 and 5, T1112 / T1547.001): "
         f"Sysmon 12, 13 and 14 now map to Registry Key/Value Activity "
@@ -560,16 +615,17 @@ def render_report(
         "Sysmon 12/13 were "
         f"{result['per_class'].get(201001, 0) + result['per_class'].get(201002, 0)} "
         f"of {result['records']} records, all mapped.",
-        f"- Remaining gap: Sysmon 7 image loads "
-        f"({_sysmon(result, 7)}) stay unmapped and counted; their "
-        "target class is Module Activity (1005), not one of the "
-        "classes mapped here.",
+        f"- Closed gap: Sysmon 7 image loads "
+        f"({result['per_class'].get(1005, 0)}) now map to Module "
+        "Activity (1005, Load); unmapped leftovers in that bucket: "
+        f"{_sysmon(result, 7)}. The pinned OCSF 1.9.0 core class is "
+        "`module_activity` (attribute `module`).",
         "",
         "## Recommendation: which unmapped ids to map next",
         "",
-        "1. Sysmon 7 — image load to Module Activity (1005), for "
-        "the same reasons as in the day-1 report. It is now the "
-        "largest unmapped bucket in this dataset.",
+        "1. Security 4658/4656/4690/4663 (handle and key-deletion "
+        "auditing) — now the largest unmapped buckets in this dataset "
+        "after Sysmon 7 was mapped to Module Activity (1005).",
         "",
     ]
     return "\n".join(lines)

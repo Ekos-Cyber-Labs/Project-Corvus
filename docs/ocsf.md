@@ -2,14 +2,17 @@
 
 Everything inside Corvus is OCSF at the version pinned by
 `OCSF_SCHEMA_VERSION` in [ocsf.py](../corvus/normalize/ocsf.py)
-(currently `1.4.0`). Field names and activity IDs match the OCSF 1.4.0
-schema (schema.ocsf.io). Classes, activity ids, and attributes are
-verified against the pinned v1.4.0 schema files (including extensions
-such as win) before use, never written from memory. Every event's
-`metadata.version` defaults to that constant, so a version bump is a
-one-line change.
+(currently `1.9.0`). Field names and activity IDs match the OCSF 1.9.0
+schema (schema.ocsf.io, `ocsf-schema` tag `1.9.0`). Classes, activity ids,
+and attributes are verified against the pinned 1.9.0 schema files
+(including extensions such as win) before use, never written from memory.
+Every event's `metadata.version` defaults to that constant, so a version
+bump is a one-line change. Events of a win extension class (201001,
+201002, 201004) declare the extension in `metadata.extensions` (one entry:
+name `win`, uid `"2"`, version `1.9.0`, from `extensions/windows/extension.json`
+in the pinned tag); events of core classes carry no extensions entry.
 
-Shared rules for all ten classes:
+Shared rules for all eleven classes:
 
 - `type_uid` is computed as `class_uid * 100 + activity_id`. It is a
   read-only computed field: any `type_uid` present in input is ignored and
@@ -46,6 +49,7 @@ Detection Finding has no mapper yet.
 | File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open | `windows.py` (Sysmon 11) |
 | Scheduled Job Activity | 1006 | 1 | 1 Create, 2 Update, 3 Delete, 4 Enable, 5 Disable, 6 Start | `windows.py` (Security 4698, TaskScheduler 106) |
 | Script Activity | 1009 | 1 | 1 Execute | `windows.py` (PowerShell 4104/4103, Windows PowerShell 800) |
+| Module Activity | 1005 | 1 | 1 Load | `windows.py` (Sysmon 7; `events/system/module_activity.json`) |
 | Registry Key Activity | 201001 | 1 | 1 Create, 4 Delete, 5 Rename | `windows.py` (Sysmon 12 CreateKey/DeleteKey, Sysmon 14 as Rename; `extensions/windows/events/registry_key_activity.json`) |
 | Registry Value Activity | 201002 | 1 | 2 Set, 4 Delete | `windows.py` (Sysmon 13, Sysmon 12 DeleteValue; `extensions/windows/events/registry_value_activity.json`) |
 | Windows Service Activity | 201004 | 1 | 1 Create | `windows.py` (Security 4697, System 7045; `extensions/windows/events/windows_service_activity.json`) |
@@ -59,7 +63,7 @@ values Corvus mappers may emit.
 - Authentication carries `status` (for example `Success` / `Failure`) and
   `status_id` (0 Unknown, 1 Success, 2 Failure, 99 Other), which feed the
   success-vs-attempt factor of the severity floor, plus `logon_type` /
-  `logon_type_id` (Windows LogonType mapped to the pinned OCSF 1.4.0 enum:
+  `logon_type_id` (Windows LogonType mapped to the pinned OCSF 1.9.0 enum:
   0 Unknown, 1 System, 2 Interactive, 3 Network, 4 Batch, 5 OS Service,
   7 Unlock, 8 Network Cleartext, 9 New Credentials, 10 Remote Interactive,
   11 Cached Interactive, 12 Cached Remote Interactive, 13 Cached Unlock,
@@ -113,7 +117,20 @@ values Corvus mappers may emit.
   2 Denied, 99 Other) alongside the endpoints.
 - File System Activity carries `file` (`path`, `name`; `name` is derived
   from `path` when missing).
-- Scheduled Job Activity carries `job` (`name`, `cmd_line`).
+- Scheduled Job Activity carries `job` (`name`, `job_actions[]` with
+  `cmd_line` plus `type_id` / `type`; `job.cmd_line` is deprecated since
+  OCSF 1.9.0 and is never written). Security 4698 contributes the first
+  Exec command parsed from the `TaskContentNew` XML as type 2 `Execute`;
+  TaskScheduler 106 names no command.
+- Module Activity carries `module` (`file` with `path`, `name` derived
+  from `path`, `hashes` as fingerprint objects (`algorithm` caption,
+  `algorithm_id`, `value`; object `objects/fingerprint.json`), `desc`,
+  `company_name`, `product.name`, `internal_name`; object
+  `objects/module.json`, file slots from `objects/file.json`).
+  `Signed` / `Signature` / `SignatureStatus` have no typed slot
+  (`file.signature` is deprecated since 1.8.0) and stay in `unmapped`,
+  as do `FileVersion` and the remaining Sysmon fields. The loading
+  process (`Image` / `ProcessId`) is `actor.process`.
 - All classes may carry `device` (`hostname`, `ip`), `actor` with `user`
   (`name`, `domain`), and `src_endpoint` / `dst_endpoint` (`ip`, `port`).
 

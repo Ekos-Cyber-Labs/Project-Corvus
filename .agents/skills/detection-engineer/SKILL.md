@@ -32,7 +32,7 @@ Review checks:
 - Handle every record layout in the data explicitly; an unhandled layout is a counted unknown.
 - Deduplicate byte-identical payloads before loading or counting; load a payload once.
 - Keep every unmapped source field under `unmapped`; never pop and discard it.
-- Verify every class, activity id, enum, and attribute against the pinned v1.4.0 schema, extensions included, before use.
+- Verify every class, activity id, enum, and attribute against the pinned v1.9.0 schema, extensions included, before use.
 - Keep tool and linter pins identical in every config that sets them.
 - Bound identifier patterns tightly and test them against near-miss look-alikes.
 - Test text transforms on the serialized form they will actually receive, escapes included.

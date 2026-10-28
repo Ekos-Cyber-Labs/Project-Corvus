@@ -18,11 +18,14 @@ it per ``(channel, event id)``, never dropping it silently):
 
 - Sysmon event 1 -> Process Activity (1007)
 - Sysmon event 3 -> Network Activity (4001)
+- Sysmon event 7 -> Module Activity (1005), activity Load
 - Sysmon event 10 -> Process Activity (1007), activity Open
 - Sysmon event 11 -> File System Activity (1001)
 - Security 4624 / 4625 -> Authentication (3002), success / failure
 - Security 4698 and Microsoft-Windows-TaskScheduler/Operational 106
-  -> Scheduled Job Activity (1006)
+  -> Scheduled Job Activity (1006); the first Exec command of the 4698
+  task XML becomes ``job.job_actions[0].cmd_line`` (``job.cmd_line`` is
+  deprecated since OCSF 1.9.0 and is never written)
 - Microsoft-Windows-PowerShell/Operational 4104 and 4103, and
   Windows PowerShell 800 -> Script Activity (1009). Windows
   PowerShell 600 (provider lifecycle, no executed content) stays
@@ -39,9 +42,6 @@ it per ``(channel, event id)``, never dropping it silently):
   Service Activity (201004), activity 1 Create. Mapping them to
   Scheduled Job Activity (1006) would mislabel the record, so they
   were counted unmapped until this class was added.
-- Sysmon 7 (image load) stays unmapped and is counted per
-  ``(channel, event id)``: its target class is Module Activity, not
-  one of the classes mapped here.
 
 All times become timezone-aware UTC (naive Windows timestamps are assumed
 to be UTC); a mapped event whose time cannot be parsed is counted as
@@ -54,6 +54,7 @@ import hashlib
 import json
 import re
 import tarfile
+import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -72,8 +73,12 @@ from corvus.normalize.ocsf import (
     Endpoint,
     File,
     FileSystemActivity,
+    Fingerprint,
     Job,
+    JobAction,
     Metadata,
+    Module,
+    ModuleActivity,
     NetworkActivity,
     OcsfEvent,
     Process,
@@ -89,6 +94,7 @@ from corvus.normalize.ocsf import (
     User,
     WindowsServiceActivity,
     WinService,
+    win_extension,
 )
 
 __all__ = [
@@ -393,12 +399,19 @@ def _product_name(channel: str) -> str:
     return "Sysmon" if channel == SYSMON_CHANNEL else "Microsoft Windows"
 
 
-def _metadata(ctx: _Ctx) -> Metadata:
-    """Build the OCSF metadata envelope with the real Windows channel."""
+def _metadata(ctx: _Ctx, *, with_extension: bool = False) -> Metadata:
+    """Build the OCSF metadata envelope with the real Windows channel.
+
+    Win extension classes (201001, 201002, 201004) declare the win
+    extension in ``metadata.extensions`` (name ``win``, uid ``"2"``,
+    version ``1.9.0`` per ``extensions/windows/extension.json`` in the
+    pinned schema); core classes carry no extensions entry.
+    """
     return Metadata(
         product=Product(name=_product_name(ctx.channel), vendor_name="Microsoft"),
         log_name=ctx.channel,
         uid=ctx.uid,
+        extensions=[win_extension()] if with_extension else None,
     )
 
 
@@ -470,8 +483,8 @@ _WINDOWS_TO_OCSF_LOGON_TYPE = {
     13: 13,
 }
 
-#: Captions of the pinned OCSF 1.4.0 ``logon_type_id`` enum (``dictionary.json``
-#: ``attributes.logon_type_id.enum`` in ``ocsf-schema`` tag ``v1.4.0``).
+#: Captions of the pinned OCSF 1.9.0 ``logon_type_id`` enum (``dictionary.json``
+#: ``attributes.logon_type_id.enum`` in ``ocsf-schema`` tag ``1.9.0``).
 _LOGON_TYPE_CAPTIONS = {
     0: "Unknown",
     1: "System",
@@ -506,10 +519,10 @@ def _logon_type_id(value: object) -> tuple[int | None, str | None]:
     return mapped, _LOGON_TYPE_CAPTIONS[mapped]
 
 
-#: Captions of the pinned OCSF 1.4.0 win ``service_start_type_id`` enum
+#: Captions of the pinned OCSF 1.9.0 win ``service_start_type_id`` enum
 #: (``extensions/windows/dictionary.json``
 #: ``attributes.service_start_type_id.enum`` in ``ocsf-schema`` tag
-#: ``v1.4.0``).
+#: ``1.9.0``).
 _START_TYPE_CAPTIONS = {
     0: "Unknown",
     1: "Boot",
@@ -534,7 +547,7 @@ _START_TYPE_WORDS = {
     "disabled": 5,
 }
 
-#: Captions of the pinned OCSF 1.4.0 win ``service_type_id`` enum
+#: Captions of the pinned OCSF 1.9.0 win ``service_type_id`` enum
 #: (``extensions/windows/dictionary.json``
 #: ``attributes.service_type_id.enum``).
 _SERVICE_TYPE_CAPTIONS = {
@@ -683,16 +696,127 @@ def _map_sysmon_network(fields: dict[str, Any], ctx: _Ctx) -> NetworkActivity:
     )
 
 
+#: Sysmon ``Hashes`` algorithm name (uppercased) -> OCSF
+#: ``algorithm_id`` from ``objects/fingerprint.json``
+#: ``attributes.algorithm_id.enum`` in ``ocsf-schema`` tag ``1.9.0``.
+_HASH_ALGORITHM_IDS = {"MD5": 1, "SHA1": 2, "SHA256": 3, "IMPHASH": 18}
+
+#: OCSF ``algorithm_id`` -> enum caption (``algorithm`` carries the
+#: caption for known ids).
+_HASH_ALGORITHM_CAPTIONS = {
+    1: "MD5",
+    2: "SHA-1",
+    3: "SHA-256",
+    18: "Imphash",
+    99: "Other",
+}
+
+
+def _parse_hashes(raw: object) -> list[Fingerprint] | None:
+    """Split a Sysmon ``Hashes`` value into fingerprint objects.
+
+    The value is comma-separated ``ALG=hex`` pairs (Sysmon 7 carries
+    ``SHA1``/``MD5``/``SHA256``/``IMPHASH``). Known names map to the
+    pinned OCSF 1.9.0 ``algorithm_id`` enum with the enum caption in
+    ``algorithm``; anything else becomes 99 Other with the source name
+    kept verbatim in ``algorithm``. Returns None when nothing usable
+    remains; the caller then keeps the raw value in ``unmapped``.
+    """
+    text = _text(raw)
+    if text is None:
+        return None
+    pairs = []
+    for chunk in text.split(","):
+        name, sep, digest = chunk.partition("=")
+        name = name.strip()
+        digest = digest.strip()
+        if not (sep and name and digest):
+            continue
+        algorithm_id = _HASH_ALGORITHM_IDS.get(name.upper(), 99)
+        if algorithm_id == 99:
+            algorithm = name
+        else:
+            algorithm = _HASH_ALGORITHM_CAPTIONS[algorithm_id]
+        pairs.append(
+            Fingerprint(algorithm=algorithm, algorithm_id=algorithm_id, value=digest)
+        )
+    return pairs or None
+
+
+def _map_sysmon_module(fields: dict[str, Any], ctx: _Ctx) -> ModuleActivity:
+    """Map Sysmon event 7 (image loaded) to Module Activity.
+
+    Class 1005, activity 1 Load per the pinned OCSF 1.9.0 schema
+    (``events/system/module_activity.json``: uid 5 under the system
+    category). ``ImageLoaded`` becomes ``module.file`` (the name derived
+    as for other files); the loading process (``Image``/``ProcessId``)
+    becomes ``actor.process``; the user follows the other Sysmon
+    mappers (``User``, else the NXLog ``AccountName``/``Domain`` pair).
+    Typed file slots follow ``objects/file.json``: ``Hashes`` to
+    ``hashes``, ``Description`` to ``desc``, ``Company`` to
+    ``company_name``, ``Product`` to ``product.name``, and
+    ``OriginalFileName`` to ``internal_name`` (the VERSIONINFO name).
+    ``Signed``/``Signature``/``SignatureStatus`` have no typed slot —
+    ``file.signature`` is deprecated since 1.8.0 — so they stay verbatim
+    in ``unmapped``, as do ``FileVersion``, ``ProcessGuid``,
+    ``RuleName``, ``EventType`` and the rest.
+    """
+    loaded = _take_text(fields, "ImageLoaded")
+    image = _text(fields.pop("Image", None))
+    pid = _pid(fields.pop("ProcessId", None))
+    raw_user = _text(fields.pop("User", None))
+    if raw_user is not None:
+        user, domain = _split_account(raw_user)
+    else:
+        user = _take_text(fields, "AccountName")
+        domain = _take_text(fields, "Domain")
+    raw_hashes = fields.pop("Hashes", None)
+    hashes = _parse_hashes(raw_hashes)
+    if hashes is None and raw_hashes is not None:
+        fields["Hashes"] = raw_hashes
+    desc = _take_text(fields, "Description")
+    company = _take_text(fields, "Company")
+    product_name = _take_text(fields, "Product")
+    internal = _take_text(fields, "OriginalFileName")
+    fields.pop("UtcTime", None)
+    file: File | None = None
+    if (
+        loaded is not None
+        or hashes is not None
+        or desc is not None
+        or company is not None
+        or product_name is not None
+        or internal is not None
+    ):
+        file = File(
+            path=loaded,
+            hashes=hashes,
+            desc=desc,
+            company_name=company,
+            product=Product(name=product_name) if product_name is not None else None,
+            internal_name=internal,
+        )
+    return ModuleActivity(
+        time=ctx.time_ms,
+        metadata=_metadata(ctx),
+        activity_id=1,
+        device=_device(ctx),
+        actor=_actor(user, domain, _initiating_process(image, pid)),
+        module=Module(file=file) if file is not None else None,
+        unmapped=fields,
+    )
+
+
 def _map_sysmon_access(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
     """Map Sysmon event 10 (process handle open) to Process Activity.
 
-    Activity 3 Open per the pinned OCSF 1.4.0 schema
+    Activity 3 Open per the pinned OCSF 1.9.0 schema
     (``events/system/process_activity.json`` activity enum). The opening
     process (``SourceImage``/``SourceProcessId``) becomes ``actor.process``
     and the target (``TargetImage``/``TargetProcessId``) becomes
     ``process``. ``GrantedAccess`` is kept verbatim as the typed
     ``actual_permissions`` (the schema's platform-native slot, per that
-    same file). ``CallTrace`` has no typed OCSF 1.4.0 slot — the full
+    same file). ``CallTrace`` has no typed OCSF 1.9.0 slot — the full
     ``process`` object attribute list in ``objects/process.json`` carries
     nothing like it — so it stays in ``unmapped``, as do the GUIDs and
     the source thread id.
@@ -773,7 +897,7 @@ def _script_event(
 def _map_powershell_script(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
     """Map PowerShell Operational 4104 (script block logging).
 
-    Class 1009, activity 1 Execute per the pinned OCSF 1.4.0 schema
+    Class 1009, activity 1 Execute per the pinned OCSF 1.9.0 schema
     (``events/system/script_activity.json``: uid 9 under the system
     category). The typed script fields follow ``objects/script.json``,
     where ``uid`` is documented as the PowerShell ``ScriptBlockId``.
@@ -907,7 +1031,7 @@ def _map_sysmon_registry_key(
 ) -> RegistryKeyActivity | RegistryValueActivity:
     """Map Sysmon event 12 (registry object added or deleted).
 
-    Classes 201001/201002 per the pinned OCSF 1.4.0 win extension
+    Classes 201001/201002 per the pinned OCSF 1.9.0 win extension
     (``extensions/windows/events/registry_key_activity.json``: uid 1,
     and ``registry_value_activity.json``: uid 2, both ``extends``
     system). The operation comes from the ``EventType`` field or, when
@@ -933,7 +1057,7 @@ def _map_sysmon_registry_key(
     if op == "DeleteValue":
         return RegistryValueActivity(
             time=ctx.time_ms,
-            metadata=_metadata(ctx),
+            metadata=_metadata(ctx, with_extension=True),
             activity_id=4,
             device=device,
             actor=actor,
@@ -943,7 +1067,7 @@ def _map_sysmon_registry_key(
     if op in ("CreateValue", "SetValue"):
         return RegistryValueActivity(
             time=ctx.time_ms,
-            metadata=_metadata(ctx),
+            metadata=_metadata(ctx, with_extension=True),
             activity_id=2,
             device=device,
             actor=actor,
@@ -953,7 +1077,7 @@ def _map_sysmon_registry_key(
     if op == "RenameKey":
         return RegistryKeyActivity(
             time=ctx.time_ms,
-            metadata=_metadata(ctx),
+            metadata=_metadata(ctx, with_extension=True),
             activity_id=5,
             device=device,
             actor=actor,
@@ -962,7 +1086,7 @@ def _map_sysmon_registry_key(
         )
     return RegistryKeyActivity(
         time=ctx.time_ms,
-        metadata=_metadata(ctx),
+        metadata=_metadata(ctx, with_extension=True),
         activity_id=4 if op == "DeleteKey" else 1,
         device=device,
         actor=actor,
@@ -976,7 +1100,7 @@ def _map_sysmon_registry_value(
 ) -> RegistryValueActivity:
     """Map Sysmon event 13 (registry value set) to Registry Value Activity.
 
-    Class 201002 per the pinned OCSF 1.4.0 win extension
+    Class 201002 per the pinned OCSF 1.9.0 win extension
     (``extensions/windows/events/registry_value_activity.json``: uid 2,
     ``extends`` system). Event 13 sets one value, so the activity is 2
     Set from that file's enum; ``EventType`` (``SetValue``, or the
@@ -993,7 +1117,7 @@ def _map_sysmon_registry_value(
     value = _registry_value(target, data)
     return RegistryValueActivity(
         time=ctx.time_ms,
-        metadata=_metadata(ctx),
+        metadata=_metadata(ctx, with_extension=True),
         activity_id=2,
         device=_device(ctx),
         actor=_registry_actor(fields, image, pid),
@@ -1007,7 +1131,7 @@ def _map_sysmon_registry_rename(
 ) -> RegistryKeyActivity:
     """Map Sysmon event 14 (registry object renamed) to Registry Key Activity.
 
-    Class 201001 per the pinned OCSF 1.4.0 win extension
+    Class 201001 per the pinned OCSF 1.9.0 win extension
     (``extensions/windows/events/registry_key_activity.json``), activity
     5 Rename from that file's enum, so no ``EventType`` is needed:
     ``NewName`` is the post-rename path (``reg_key``) and
@@ -1025,7 +1149,7 @@ def _map_sysmon_registry_rename(
     prev = target if new_name is not None and target != new_name else None
     return RegistryKeyActivity(
         time=ctx.time_ms,
-        metadata=_metadata(ctx),
+        metadata=_metadata(ctx, with_extension=True),
         activity_id=5,
         device=_device(ctx),
         actor=_registry_actor(fields, image, pid),
@@ -1066,23 +1190,73 @@ def _map_logon(fields: dict[str, Any], ctx: _Ctx, *, success: bool) -> Authentic
     )
 
 
+def _task_command(task_xml: str | None) -> str | None:
+    """Extract the first Exec command from a scheduled-task XML blob.
+
+    Security 4698 ``TaskContentNew`` carries the task definition XML
+    (namespaced ``http://schemas.microsoft.com/windows/2004/02/mit/task``
+    on real records, bare tags in some fixtures). The executed command
+    is the first ``Actions`` / ``Exec`` ``Command`` with its optional
+    ``Arguments`` appended. Tags match by local name so either spelling
+    parses; the raw XML always stays in ``unmapped`` (no typed OCSF slot
+    for it). Returns None when the XML does not parse or names no
+    executable command.
+    """
+    if task_xml is None:
+        return None
+    try:
+        root = ET.fromstring(task_xml)
+    except ET.ParseError:
+        return None
+    for elem in root.iter():
+        if elem.tag.rsplit("}", 1)[-1] != "Exec":
+            continue
+        command: str | None = None
+        arguments: str | None = None
+        for child in elem:
+            local = child.tag.rsplit("}", 1)[-1]
+            if local == "Command" and command is None:
+                command = (child.text or "").strip() or None
+            elif local == "Arguments" and arguments is None:
+                arguments = (child.text or "").strip() or None
+        if command is None:
+            return None
+        return f"{command} {arguments}" if arguments else command
+    return None
+
+
 def _map_task_4698(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
     """Map Security 4698 (scheduled task created) to Scheduled Job Activity.
 
-    ``TaskContentNew`` (the task XML, including its command) stays in
-    ``unmapped``; the subject SIDs stay there too.
+    The first Exec command of the ``TaskContentNew`` XML becomes
+    ``job.job_actions[0]`` with ``cmd_line`` plus ``type_id`` 2
+    (``type`` ``"Execute"`` from the pinned OCSF 1.9.0
+    ``job_action`` enum; ``job.cmd_line`` is deprecated since 1.9.0).
+    The raw XML stays in ``unmapped``, as do the subject SIDs. Records
+    whose XML does not parse still map, with no actions.
     """
     task_name = _text(fields.pop("TaskName", None))
     name = _text(fields.pop("SubjectUserName", None))
     domain = _text(fields.pop("SubjectDomainName", None))
+    command = _task_command(_text(fields.get("TaskContentNew")))
     fields.pop("TimeCreated", None)
+    job: Job | None = None
+    if task_name is not None or command is not None:
+        job = Job(
+            name=task_name,
+            job_actions=(
+                [JobAction(cmd_line=command, type="Execute", type_id=2)]
+                if command is not None
+                else None
+            ),
+        )
     return ScheduledJobActivity(
         time=ctx.time_ms,
         metadata=_metadata(ctx),
         activity_id=1,
         device=_device(ctx),
         actor=_actor(name, domain),
-        job=Job(name=task_name) if task_name is not None else None,
+        job=job,
         unmapped=fields,
     )
 
@@ -1090,7 +1264,10 @@ def _map_task_4698(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
 def _map_task_106(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
     """Map TaskScheduler 106 (task registered) to Scheduled Job Activity.
 
-    ``UserData`` stays in ``unmapped`` (no typed OCSF slot).
+    This layout names no executable command, so the job carries the
+    name only (``job_actions`` stays empty; ``job.cmd_line`` is
+    deprecated since OCSF 1.9.0 and is never written). ``UserData``
+    stays in ``unmapped`` (no typed OCSF slot).
     """
     task_name = _text(fields.pop("TaskName", None))
     name, domain = _split_account(_text(fields.pop("User", None)))
@@ -1113,7 +1290,7 @@ def _service_event(
     fields.pop("TimeCreated", None)
     return WindowsServiceActivity(
         time=ctx.time_ms,
-        metadata=_metadata(ctx),
+        metadata=_metadata(ctx, with_extension=True),
         activity_id=1,
         device=_device(ctx),
         actor=actor,
@@ -1125,7 +1302,7 @@ def _service_event(
 def _map_service_4697(fields: dict[str, Any], ctx: _Ctx) -> WindowsServiceActivity:
     """Map Security 4697 (a service was installed) to Service Activity.
 
-    Class 201004 per the pinned OCSF 1.4.0 win extension
+    Class 201004 per the pinned OCSF 1.9.0 win extension
     (``extensions/windows/events/windows_service_activity.json``: uid 4,
     ``extends`` system), activity 1 Create from that file's enum.
     ``ServiceName`` becomes ``win_service.name``,
@@ -1202,6 +1379,7 @@ def _map_service_7045(fields: dict[str, Any], ctx: _Ctx) -> WindowsServiceActivi
 _MAPPERS: dict[tuple[str, int], Callable[[dict[str, Any], _Ctx], OcsfEvent]] = {
     (SYSMON_CHANNEL, 1): _map_sysmon_process,
     (SYSMON_CHANNEL, 3): _map_sysmon_network,
+    (SYSMON_CHANNEL, 7): _map_sysmon_module,
     (SYSMON_CHANNEL, 10): _map_sysmon_access,
     (SYSMON_CHANNEL, 11): _map_sysmon_file,
     (SYSMON_CHANNEL, 12): _map_sysmon_registry_key,
