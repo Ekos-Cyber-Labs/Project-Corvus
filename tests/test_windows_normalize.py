@@ -13,7 +13,9 @@ from corvus.normalize.windows import (
     POWERSHELL_CHANNEL,
     SECURITY_CHANNEL,
     SYSMON_CHANNEL,
+    SYSTEM_CHANNEL,
     TASKSCHEDULER_CHANNEL,
+    WINDOWS_POWERSHELL_CHANNEL,
     UnmappedEvent,
     WindowsReadStats,
     extract_evtx_parts,
@@ -690,3 +692,60 @@ def test_unmapped_ids_still_count_per_channel_and_id(tmp_path: Path) -> None:
         (POWERSHELL_CHANNEL, 4105): 1,
         ("Security", 4688): 1,
     }
+
+
+def test_powershell_4103_maps_to_script_activity() -> None:
+    event = _normalize_record(fx.flat_powershell_module())
+    assert event.class_uid == 1009
+    assert event.activity_id == 1
+    assert event.metadata.log_name == POWERSHELL_CHANNEL
+    assert event.script is not None
+    assert (
+        event.script.script_content == 'CommandInvocation(Get-Process): "Get-Process"'
+    )
+    assert event.script.uid is None
+    assert event.script.type_id == 2
+    assert event.actor is not None and event.actor.user is not None
+    assert event.actor.user.name == "jdoe"
+    assert event.actor.user.domain == "EXAMPLE"
+    assert "ContextInfo" in event.unmapped
+    _check_no_drop(
+        fx.flat_powershell_module(),
+        FLAT_ENVELOPE,
+        {"AccountName", "Domain", "Payload"},
+    )
+
+
+def test_windows_powershell_800_maps_to_script_activity() -> None:
+    event = _normalize_record(fx.flat_windows_powershell_pipeline())
+    assert event.class_uid == 1009
+    assert event.metadata.log_name == WINDOWS_POWERSHELL_CHANNEL
+    assert event.script is not None
+    assert "Get-Process" in (event.script.script_content or "")
+
+
+def test_windows_powershell_600_stays_unmapped() -> None:
+    with pytest.raises(UnmappedEvent) as excinfo:
+        _normalize_record(fx.flat_windows_powershell_provider())
+    assert excinfo.value.key == (WINDOWS_POWERSHELL_CHANNEL, 600)
+
+
+def test_service_install_stays_unmapped_not_scheduled_job() -> None:
+    """7045/4697 are a reported gap, never mislabelled as Scheduled Job."""
+    with pytest.raises(UnmappedEvent) as system_exc:
+        _normalize_record(fx.flat_service_install(channel="System"))
+    assert system_exc.value.key == (SYSTEM_CHANNEL, 7045)
+    with pytest.raises(UnmappedEvent) as security_exc:
+        _normalize_record(fx.flat_service_install(channel="Security"))
+    assert security_exc.value.key == (SECURITY_CHANNEL, 4697)
+
+
+def test_lowercase_security_unmapped_merges_with_security(tmp_path: Path) -> None:
+    """WEF lowercase ``security`` counts in the canonical Security bucket."""
+    lower = fx.flat_service_install(channel="security")
+    upper = fx.flat_service_install(channel="Security")
+    lines = [json.dumps(lower), json.dumps(upper)]
+    archive = _write_zip(tmp_path / "svc.zip", {"events.json": lines})
+    result = read_dataset_file(archive, dataset_rel="svc.zip")
+    assert result.events == []
+    assert result.unmapped == {(SECURITY_CHANNEL, 4697): 2}

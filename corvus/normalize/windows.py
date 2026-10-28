@@ -23,7 +23,21 @@ it per ``(channel, event id)``, never dropping it silently):
 - Security 4624 / 4625 -> Authentication (3002), success / failure
 - Security 4698 and Microsoft-Windows-TaskScheduler/Operational 106
   -> Scheduled Job Activity (1006)
-- Microsoft-Windows-PowerShell/Operational 4104 -> Script Activity (1009)
+- Microsoft-Windows-PowerShell/Operational 4104 and 4103, and
+  Windows PowerShell 800 -> Script Activity (1009). Windows
+  PowerShell 600 (provider lifecycle, no executed content) stays
+  unmapped and is counted per ``(channel, event id)``.
+- Security 4697 and System 7045 (service installed) stay unmapped:
+  the pinned OCSF 1.4.0 win extension defines Windows Service
+  Activity (``windows_service_activity``, attribute ``win_service``)
+  for them, and that class is not mapped yet. Mapping them to
+  Scheduled Job Activity (1006) would mislabel the record in the
+  meantime. They are counted per ``(channel, event id)``.
+- Sysmon 12/13/14 (registry) stay unmapped: the pinned OCSF 1.4.0
+  win extension defines Registry Key Activity and Registry Value
+  Activity (``registry_key_activity`` / ``registry_value_activity``)
+  for them, and those classes are not mapped yet. Counted, never
+  dropped.
 
 All times become timezone-aware UTC (naive Windows timestamps are assumed
 to be UTC); a mapped event whose time cannot be parsed is counted as
@@ -70,7 +84,9 @@ __all__ = [
     "POWERSHELL_CHANNEL",
     "SECURITY_CHANNEL",
     "SYSMON_CHANNEL",
+    "SYSTEM_CHANNEL",
     "TASKSCHEDULER_CHANNEL",
+    "WINDOWS_POWERSHELL_CHANNEL",
     "UnmappedEvent",
     "WindowsReadResult",
     "WindowsReadStats",
@@ -93,17 +109,24 @@ __all__ = [
 #: Real Windows channels, used verbatim as ``metadata.log_name``.
 SYSMON_CHANNEL = "Microsoft-Windows-Sysmon/Operational"
 SECURITY_CHANNEL = "Security"
+SYSTEM_CHANNEL = "System"
 TASKSCHEDULER_CHANNEL = "Microsoft-Windows-TaskScheduler/Operational"
 POWERSHELL_CHANNEL = "Microsoft-Windows-PowerShell/Operational"
+WINDOWS_POWERSHELL_CHANNEL = "Windows PowerShell"
 
 #: Lowercased channel spellings seen in replay files -> canonical spelling.
 #: Matching is case-insensitive; ``metadata.log_name`` always carries the
-#: canonical spelling so downstream grouping stays deterministic.
+#: canonical spelling so downstream grouping stays deterministic. This is
+#: what keeps a WEF-forwarded lowercase ``security`` record in the same
+#: ``(channel, event id)`` bucket and OCSF ``log_name`` as ``Security``,
+#: instead of splitting one channel into two.
 _CHANNEL_ALIASES = {
     SYSMON_CHANNEL.lower(): SYSMON_CHANNEL,
     SECURITY_CHANNEL.lower(): SECURITY_CHANNEL,
+    SYSTEM_CHANNEL.lower(): SYSTEM_CHANNEL,
     TASKSCHEDULER_CHANNEL.lower(): TASKSCHEDULER_CHANNEL,
     POWERSHELL_CHANNEL.lower(): POWERSHELL_CHANNEL,
+    WINDOWS_POWERSHELL_CHANNEL.lower(): WINDOWS_POWERSHELL_CHANNEL,
 }
 
 #: Envelope keys of a flat record that are placed structurally (channel,
@@ -572,20 +595,26 @@ def _map_sysmon_access(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
     )
 
 
-def _map_powershell_script(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
-    """Map PowerShell Operational 4104 (script block logging).
+def _script_actor(fields: dict[str, Any]) -> Actor | None:
+    """Actor for a script record: ``User``, else ``AccountName``/``Domain``.
 
-    Class 1009, activity 1 Execute per the pinned OCSF 1.4.0 schema
-    (``events/system/script_activity.json``: uid 9 under the system
-    category). The typed script fields follow ``objects/script.json``,
-    where ``uid`` is documented as the PowerShell ``ScriptBlockId``.
-    ``MessageNumber``/``MessageTotal`` have no typed slot and stay in
-    ``unmapped``. Each record maps to its own event; the messages of a
-    split block share the script ``uid`` for downstream grouping.
+    Flat NXLog records (the APT29 compound layout) carry the account as
+    separate ``AccountName`` and ``Domain`` fields instead of one ``User``
+    ``DOMAIN\\name`` string.
     """
-    content = _text(fields.pop("ScriptBlockText", None))
-    block_id = _text(fields.pop("ScriptBlockId", None))
-    user, domain = _split_account(_text(fields.pop("User", None)))
+    raw_user = _text(fields.pop("User", None))
+    if raw_user is not None:
+        name, domain = _split_account(raw_user)
+        return _actor(name, domain)
+    name = _text(fields.pop("AccountName", None))
+    domain = _text(fields.pop("Domain", None))
+    return _actor(name, domain)
+
+
+def _script_event(
+    fields: dict[str, Any], ctx: _Ctx, content: str | None, block_id: str | None
+) -> ScriptActivity:
+    """Build one Script Activity (1009, Execute) from script content."""
     fields.pop("TimeCreated", None)
     script: Script | None = None
     if content is not None or block_id is not None:
@@ -600,10 +629,51 @@ def _map_powershell_script(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
         metadata=_metadata(ctx),
         activity_id=1,
         device=_device(ctx),
-        actor=_actor(user, domain),
+        actor=_script_actor(fields),
         script=script,
         unmapped=fields,
     )
+
+
+def _map_powershell_script(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
+    """Map PowerShell Operational 4104 (script block logging).
+
+    Class 1009, activity 1 Execute per the pinned OCSF 1.4.0 schema
+    (``events/system/script_activity.json``: uid 9 under the system
+    category). The typed script fields follow ``objects/script.json``,
+    where ``uid`` is documented as the PowerShell ``ScriptBlockId``.
+    ``MessageNumber``/``MessageTotal`` have no typed slot and stay in
+    ``unmapped``. Each record maps to its own event; the messages of a
+    split block share the script ``uid`` for downstream grouping.
+    """
+    content = _text(fields.pop("ScriptBlockText", None))
+    block_id = _text(fields.pop("ScriptBlockId", None))
+    return _script_event(fields, ctx, content, block_id)
+
+
+def _map_powershell_module(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
+    """Map PowerShell Operational 4103 (module logging) to Script Activity.
+
+    Same class/activity as 4104. The executed command invocation is in
+    ``Payload`` (there is no ``ScriptBlockId``, so ``script.uid`` stays
+    empty); ``ContextInfo`` has no typed slot and stays in ``unmapped``.
+    """
+    content = _text(fields.pop("Payload", None))
+    return _script_event(fields, ctx, content, None)
+
+
+def _map_windows_powershell_pipeline(
+    fields: dict[str, Any], ctx: _Ctx
+) -> ScriptActivity:
+    """Map Windows PowerShell 800 (pipeline execution) to Script Activity.
+
+    Same class/activity as 4104. This classic channel carries the
+    pipeline detail only in ``Message``, which becomes the script
+    content; there is no block id. Event 600 (provider lifecycle)
+    carries no executed content and stays unmapped.
+    """
+    content = _text(fields.pop("Message", None))
+    return _script_event(fields, ctx, content, None)
 
 
 def _map_sysmon_file(fields: dict[str, Any], ctx: _Ctx) -> FileSystemActivity:
@@ -709,6 +779,8 @@ _MAPPERS: dict[tuple[str, int], Callable[[dict[str, Any], _Ctx], OcsfEvent]] = {
     (SECURITY_CHANNEL, 4698): _map_task_4698,
     (TASKSCHEDULER_CHANNEL, 106): _map_task_106,
     (POWERSHELL_CHANNEL, 4104): _map_powershell_script,
+    (POWERSHELL_CHANNEL, 4103): _map_powershell_module,
+    (WINDOWS_POWERSHELL_CHANNEL, 800): _map_windows_powershell_pipeline,
 }
 
 

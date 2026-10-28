@@ -45,7 +45,7 @@ Detection Finding has no mapper yet.
 | Network Activity | 4001 | 4 | 1 Open, 2 Close, 3 Reset, 4 Fail, 5 Refuse, 6 Traffic, 7 Listen | `windows.py` (Sysmon 3) |
 | File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open | `windows.py` (Sysmon 11) |
 | Scheduled Job Activity | 1006 | 1 | 1 Create, 2 Update, 3 Delete, 4 Enable, 5 Disable, 6 Start | `windows.py` (Security 4698, TaskScheduler 106) |
-| Script Activity | 1009 | 1 | 1 Execute | `windows.py` (PowerShell 4104) |
+| Script Activity | 1009 | 1 | 1 Execute | `windows.py` (PowerShell 4104/4103, Windows PowerShell 800) |
 | Detection Finding | 2004 | 2 | 1 Create, 2 Update, 3 Close |  |
 
 Other activity IDs pass through unchanged; the table lists the schema
@@ -71,7 +71,15 @@ values Corvus mappers may emit.
 - Script Activity carries `script` (`uid` holding the PowerShell
   `ScriptBlockId`, `script_content`, `type_id` 2 / `type` `"PowerShell"`);
   `MessageNumber` / `MessageTotal` stay in `unmapped`, and the messages of
-  a split block share the script `uid` for downstream grouping.
+  a split block share the script `uid` for downstream grouping. Module
+  logging (4103, content in `Payload`) and classic pipeline execution
+  (Windows PowerShell 800, content in `Message`) map to the same class
+  with no block id; Windows PowerShell 600 (provider lifecycle) and
+  service-install records (Security 4697, System 7045) stay unmapped
+  and counted. The pinned OCSF 1.4.0 win extension defines Windows
+  Service Activity (`windows_service_activity`, attribute
+  `win_service`) for those records; that class exists in the pinned
+  schema and is not mapped yet.
 - Network Activity carries `action` / `action_id` (0 Unknown, 1 Allowed,
   2 Denied, 99 Other) alongside the endpoints.
 - File System Activity carries `file` (`path`, `name`; `name` is derived

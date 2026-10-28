@@ -121,6 +121,30 @@ def test_sha256_of(tmp_path: Path) -> None:
     assert fetch.sha256_of(target) == expected
 
 
+def test_wanted_picks_only_apt29_day1_host_zip() -> None:
+    paths = [
+        "datasets/compound/apt29/day1/apt29_evals_day1_manual.zip",
+        "datasets/compound/apt29/day1/pcaps/SCRANTON.zip",
+        "datasets/compound/apt29/day1/zeek/combined_zeek.log",
+        "datasets/compound/apt29/day2/apt29_evals_day2_manual.zip",
+        "datasets/atomic/windows/execution/host/synth.zip",
+    ]
+    prefixes = [
+        "datasets/atomic/windows",
+        "datasets/atomic/_metadata",
+        "datasets/compound/apt29/day1/apt29_evals_day1_manual.zip",
+    ]
+    assert fetch.wanted(paths, prefixes, False) == [
+        "datasets/atomic/windows/execution/host/synth.zip",
+        "datasets/compound/apt29/day1/apt29_evals_day1_manual.zip",
+    ]
+    # The compound file is fetched at the same OTRF pin as the atomic files.
+    otrf = [d for d in fetch.DATASETS if d["name"] == "security-datasets"][0]
+    assert (
+        "datasets/compound/apt29/day1/apt29_evals_day1_manual.zip" in otrf["prefixes"]
+    )  # type: ignore[operator]
+
+
 def test_dataset_pins_are_well_formed() -> None:
     assert len(fetch.DATASETS) == 2
     for dataset in fetch.DATASETS:

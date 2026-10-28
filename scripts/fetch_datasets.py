@@ -56,10 +56,13 @@ DATASETS: list[dict[str, object]] = [
         "name": "security-datasets",
         "repo": "OTRF/Security-Datasets",
         "rev": "d9d40ef123d2c87d5d3df28c96bcab4f0faccc87",
-        # Windows atomic datasets + their metadata only.
+        # Windows atomic datasets + their metadata, plus the single
+        # APT29 day-1 compound host file (exact path, so the day-1
+        # pcaps/zeek and all of day 2 stay unfetched).
         "prefixes": [
             "datasets/atomic/windows",
             "datasets/atomic/_metadata",
+            "datasets/compound/apt29/day1/apt29_evals_day1_manual.zip",
         ],
         "include_root_samples": False,
         # Relative to the data directory (not the repo root).

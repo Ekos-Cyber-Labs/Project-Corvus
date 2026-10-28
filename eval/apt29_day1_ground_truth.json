@@ -1,0 +1,544 @@
+{
+  "chain_id": "apt29-day1",
+  "dataset_file": "security-datasets/datasets/compound/apt29/day1/apt29_evals_day1_manual.zip",
+  "dataset_sha256": "98a073140860560d70080ace9142961be4f64b4862bae892d62d0f254d0fdbe5",
+  "label_level": "chain",
+  "event_level_precision_computable": false,
+  "sources": {
+    "dataset": {
+      "repo": "OTRF/Security-Datasets",
+      "rev": "d9d40ef123d2c87d5d3df28c96bcab4f0faccc87",
+      "path": "datasets/compound/apt29/day1/apt29_evals_day1_manual.zip",
+      "license": "MIT"
+    },
+    "emulation_plan": {
+      "repo": "mitre-attack/attack-arsenal",
+      "rev": "8b290be3b53fcccd477eb79f2bcedbbc158c966c",
+      "path": "adversary_emulation/APT29/Emulation_Plan/Day 1",
+      "license": "Apache-2.0"
+    }
+  },
+  "window": {
+    "start": "2020-05-02T02:55:26Z",
+    "end": "2020-05-02T03:28:20Z",
+    "basis": "min/max @timestamp over all 196081 records, streaming probe of the pinned file"
+  },
+  "lsass_high_access": [
+    "0x1010",
+    "0x101001",
+    "0x1f3fff",
+    "0x1fffff"
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "name": "Initial Breach",
+      "techniques": [
+        "T1204.002",
+        "T1036.002",
+        "T1571",
+        "T1059.003",
+        "T1059.001"
+      ],
+      "plan_techniques": [
+        "T1204",
+        "T1036",
+        "T1065",
+        "T1059",
+        "T1086"
+      ],
+      "refinements": {
+        "T1204.002": {
+          "refines": "T1204",
+          "reason": "User opened a malicious file (1.A), the Malicious File sub-technique."
+        },
+        "T1036.002": {
+          "refines": "T1036",
+          "reason": "Filename uses the right-to-left override masquerade named in the plan intelligence."
+        },
+        "T1059.003": {
+          "refines": "T1059",
+          "reason": "1.B spawns cmd.exe specifically, the Windows Command Shell sub-technique."
+        }
+      },
+      "relevant": [
+        [
+          1007,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 1.A/1.B: user opens the RTLO-masqueraded payload (plan T1036, refined to current T1036.002), C2 on port 1234 (plan T1065, revoked by current T1571 with no sub-techniques), then cmd (refined to T1059.003) and PowerShell (plan T1086, revoked by T1059.001) shells.",
+      "window": {
+        "start": "2020-05-02T02:55:57Z",
+        "end": "2020-05-02T03:02:06Z"
+      },
+      "anchors": [
+        "rcs.3aka3",
+        "cod.3aka3"
+      ]
+    },
+    {
+      "step": 2,
+      "name": "Rapid Collection and Exfiltration",
+      "techniques": [
+        "T1083",
+        "T1119",
+        "T1005",
+        "T1560.001",
+        "T1074.001",
+        "T1041"
+      ],
+      "plan_techniques": [
+        "T1083",
+        "T1119",
+        "T1005",
+        "T1002",
+        "T1074",
+        "T1041"
+      ],
+      "refinements": {
+        "T1560.001": {
+          "refines": "T1560",
+          "reason": "Plan T1002 is revoked by T1560; Compress-Archive is Archive via Utility."
+        },
+        "T1074.001": {
+          "refines": "T1074",
+          "reason": "Files are staged into one local archive (Draft.Zip) before download."
+        }
+      },
+      "relevant": [
+        [
+          1009,
+          1
+        ],
+        [
+          1001,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 2.A/2.B: PowerShell one-liner discovers and collects files, Compress-Archive stages them (plan T1002, revoked by T1560 and refined to T1560.001; plan T1074, refined to T1074.001), download over C2 (T1041).",
+      "window": {
+        "start": "2020-05-02T02:56:18Z",
+        "end": "2020-05-02T03:03:16Z"
+      },
+      "anchors": [
+        "compress-archive",
+        "draft.zip"
+      ]
+    },
+    {
+      "step": 3,
+      "name": "Deploy Stealth Toolkit",
+      "techniques": [
+        "T1105",
+        "T1027",
+        "T1546.015",
+        "T1112",
+        "T1548.002",
+        "T1071.001",
+        "T1573"
+      ],
+      "plan_techniques": [
+        "T1105",
+        "T1027",
+        "T1122",
+        "T1088",
+        "T1043",
+        "T1071",
+        "T1032",
+        "T1112"
+      ],
+      "refinements": {
+        "T1071.001": {
+          "refines": "T1071",
+          "reason": "New C2 is specifically HTTPS (Web Protocols) on port 443."
+        }
+      },
+      "dropped_techniques": [
+        {
+          "plan_technique": "T1043",
+          "status": "deprecated",
+          "reason": "Deprecated in ATT&CK v20.0 with no replacement; the port-443 behaviour is already covered by T1071.001/T1573, so no current id is substituted for it."
+        }
+      ],
+      "relevant": [
+        [
+          1009,
+          1
+        ],
+        [
+          1007,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 3.A-3.C: monkey.png steganography payload (T1027), Folder shell-open registry keys (plan T1122, revoked by current T1546.015 Component Object Model Hijacking; plan T1088 -> current T1548.002 for the sdclt UAC bypass), sdclt launch, registry cleanup (T1112). Plan T1043 is deprecated with no replacement and is dropped, not substituted. Registry writes are Sysmon 12/13, unmapped; script/process anchor hits are mapped.",
+      "window": {
+        "start": "2020-05-02T02:57:01Z",
+        "end": "2020-05-02T03:08:53Z"
+      },
+      "anchors": [
+        "monkey.png",
+        "sdclt.exe",
+        "classes\\folder\\shell\\open\\command"
+      ]
+    },
+    {
+      "step": 4,
+      "name": "Defense Evasion and Discovery",
+      "techniques": [
+        "T1059.001",
+        "T1140",
+        "T1057",
+        "T1070.004",
+        "T1083",
+        "T1033",
+        "T1082",
+        "T1016",
+        "T1518.001",
+        "T1069",
+        "T1106"
+      ],
+      "plan_techniques": [
+        "T1086",
+        "T1140",
+        "T1057",
+        "T1107",
+        "T1083",
+        "T1033",
+        "T1082",
+        "T1016",
+        "T1063",
+        "T1069",
+        "T1106"
+      ],
+      "refinements": {},
+      "relevant": [
+        [
+          1007,
+          1
+        ],
+        [
+          1009,
+          1
+        ],
+        [
+          4001,
+          1
+        ],
+        [
+          1001,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 4.A-4.C: tool upload and PowerShell (plan T1086 -> T1059.001), decompression (T1140), process discovery, sdelete file deletion (plan T1107 -> current T1070.004), Invoke-Discovery (plan T1063 -> current T1518.001).",
+      "window": {
+        "start": "2020-05-02T02:59:44Z",
+        "end": "2020-05-02T03:18:22Z"
+      },
+      "anchors": [
+        "sysinternalssuite",
+        "sdelete64",
+        "invoke-discovery"
+      ]
+    },
+    {
+      "step": 5,
+      "name": "Persistence",
+      "techniques": [
+        "T1543.003",
+        "T1547.001"
+      ],
+      "plan_techniques": [
+        "T1050",
+        "T1060"
+      ],
+      "refinements": {},
+      "relevant": [
+        [
+          1009,
+          1
+        ],
+        [
+          1007,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 5.A/5.B Invoke-Persistence: service install (plan T1050 -> current T1543.003) and startup persistence (plan T1060 -> current T1547.001). Install records Security 4697, System 7045 and Sysmon 13 service-key writes are unmapped; the Invoke-Persistence script block (4104) is mapped.",
+      "window": {
+        "start": "2020-05-02T03:04:16Z",
+        "end": "2020-05-02T03:04:24Z"
+      },
+      "anchors": [
+        "invoke-persistence",
+        "javamtsup"
+      ]
+    },
+    {
+      "step": 6,
+      "name": "Credential Access",
+      "techniques": [
+        "T1552.001",
+        "T1555.003",
+        "T1003.001",
+        "T1036",
+        "T1552.004"
+      ],
+      "plan_techniques": [
+        "T1081",
+        "T1003",
+        "T1036",
+        "T1145"
+      ],
+      "refinements": {
+        "T1555.003": {
+          "refines": "T1552.001",
+          "reason": "Not the resolution of plan T1081: kept only because 6.A specifically steals credentials from the Chrome web browser."
+        },
+        "T1003.001": {
+          "refines": "T1003",
+          "reason": "6.C dumps LSASS memory specifically, the LSASS Memory sub-technique."
+        }
+      },
+      "relevant": [
+        [
+          1007,
+          3
+        ],
+        [
+          1009,
+          1
+        ],
+        [
+          1007,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 6.A-6.C: renamed browser-credential tool (T1036 masquerade; plan T1081, revoked by current T1552.001, with T1555.003 kept as a refinement because 6.A steals from Chrome specifically), private keys (plan T1145 -> current T1552.004), hash dumping refined to LSASS T1003.001. LSASS evidence keys on GrantedAccess, never on touching lsass.",
+      "window": {
+        "start": "2020-05-02T03:00:37Z",
+        "end": "2020-05-02T03:05:20Z"
+      },
+      "anchors": [
+        "accesschk.exe",
+        "get-privatekeys"
+      ]
+    },
+    {
+      "step": 7,
+      "name": "Collection and Exfiltration",
+      "techniques": [
+        "T1113",
+        "T1115",
+        "T1056.001",
+        "T1005",
+        "T1560.001",
+        "T1048"
+      ],
+      "plan_techniques": [
+        "T1113",
+        "T1115",
+        "T1056",
+        "T1005",
+        "T1002",
+        "T1022",
+        "T1048"
+      ],
+      "refinements": {
+        "T1056.001": {
+          "refines": "T1056",
+          "reason": "Get-Keystrokes is specifically keylogging."
+        },
+        "T1560.001": {
+          "refines": "T1560",
+          "reason": "Plan T1002/T1022 are revoked by T1560; collection is archived with a utility before exfiltration."
+        }
+      },
+      "relevant": [
+        [
+          1009,
+          1
+        ],
+        [
+          1007,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 7.A/7.B: screenshot (T1113), clipboard (T1115), keystrokes (plan T1056, refined to T1056.001), collection and archive (plan T1002/T1022, revoked by T1560 and refined to T1560.001), WebDAV exfiltration (T1048).",
+      "window": {
+        "start": "2020-05-02T03:05:46Z",
+        "end": "2020-05-02T03:07:15Z"
+      },
+      "anchors": [
+        "invoke-screencapture",
+        "get-keystrokes",
+        "get-clipboard"
+      ]
+    },
+    {
+      "step": 8,
+      "name": "Lateral Movement",
+      "techniques": [
+        "T1018",
+        "T1021.006",
+        "T1021.002",
+        "T1057",
+        "T1027.002",
+        "T1569.002",
+        "T1078.002"
+      ],
+      "plan_techniques": [
+        "T1018",
+        "T1028",
+        "T1057",
+        "T1045",
+        "T1077",
+        "T1035",
+        "T1078"
+      ],
+      "refinements": {
+        "T1078.002": {
+          "refines": "T1078",
+          "reason": "PsExec uses a stolen domain account specifically."
+        }
+      },
+      "relevant": [
+        [
+          4001,
+          1
+        ],
+        [
+          3002,
+          1
+        ],
+        [
+          1007,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 8.A-8.C: LDAP remote discovery (T1018), remote PowerShell (plan T1028 -> current T1021.006), UPX-packed payload (plan T1045 -> current T1027.002), PsExec service execution (plan T1077/T1035 -> current T1021.002/T1569.002) with a stolen valid account (plan T1078, refined to T1078.002).",
+      "window": {
+        "start": "2020-05-02T03:00:26Z",
+        "end": "2020-05-02T03:18:22Z"
+      },
+      "anchors": [
+        "psexec",
+        "seaduke"
+      ]
+    },
+    {
+      "step": 9,
+      "name": "Collection",
+      "techniques": [
+        "T1105",
+        "T1059.001",
+        "T1083",
+        "T1119",
+        "T1005",
+        "T1560.001",
+        "T1074.001",
+        "T1041",
+        "T1070.004"
+      ],
+      "plan_techniques": [
+        "T1105",
+        "T1086",
+        "T1083",
+        "T1119",
+        "T1005",
+        "T1022",
+        "T1002",
+        "T1074",
+        "T1041",
+        "T1107"
+      ],
+      "refinements": {
+        "T1560.001": {
+          "refines": "T1560",
+          "reason": "Plan T1002/T1022 are revoked by T1560; RAR archiving is Archive via Utility."
+        },
+        "T1074.001": {
+          "refines": "T1074",
+          "reason": "Files are staged into one local archive (working.zip) before exfiltration."
+        }
+      },
+      "relevant": [
+        [
+          1001,
+          1
+        ],
+        [
+          1009,
+          1
+        ],
+        [
+          1007,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 9.A-9.C: tool transfer (T1105), PowerShell collection (plan T1086, revoked by T1059.001; plan T1002/T1022 -> T1560 refined to T1560.001; plan T1074 refined to T1074.001), RAR archive, C2 exfiltration (T1041), sdelete cleanup (plan T1107 -> current T1070.004).",
+      "window": {
+        "start": "2020-05-02T03:15:32Z",
+        "end": "2020-05-02T03:17:43Z"
+      },
+      "anchors": [
+        "rar.exe",
+        "working.zip"
+      ]
+    },
+    {
+      "step": 10,
+      "name": "Persistence Execution",
+      "techniques": [
+        "T1543.003",
+        "T1547.001",
+        "T1569.002",
+        "T1106",
+        "T1134.001"
+      ],
+      "plan_techniques": [
+        "T1035",
+        "T1060",
+        "T1106",
+        "T1134"
+      ],
+      "refinements": {
+        "T1134.001": {
+          "refines": "T1134",
+          "reason": "Follow-on payload uses a stolen token specifically (Token Impersonation/Theft)."
+        }
+      },
+      "relevant": [
+        [
+          1007,
+          1
+        ],
+        [
+          1009,
+          1
+        ],
+        [
+          3002,
+          1
+        ]
+      ],
+      "match_kind": "direct",
+      "note": "Plan 10.A/10.B: after reboot the service from step 5 executes (plan T1035 -> current T1569.002; persistence T1543.003) and logon triggers startup persistence (plan T1060 -> current T1547.001), follow-on with a stolen token (T1106, plan T1134 refined to T1134.001). Direct mapped evidence: Sysmon 1 process creation of the service binary by services.exe after the reboot, with a rundll32 child seconds later.",
+      "window": {
+        "start": "2020-05-02T03:19:53Z",
+        "end": "2020-05-02T03:28:20Z"
+      },
+      "anchors": [
+        "javamtsup"
+      ]
+    }
+  ]
+}

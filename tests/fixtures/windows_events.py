@@ -242,6 +242,59 @@ def flat_powershell_script_split() -> list[dict[str, Any]]:
     return records
 
 
+def flat_powershell_module() -> dict[str, Any]:
+    """Flat PowerShell Operational 4103 (module logging, NXLog layout)."""
+    return {
+        "Channel": "Microsoft-Windows-PowerShell/Operational",
+        "EventID": 4103,
+        "EventIdx": 114,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "AccountName": "jdoe",
+        "Domain": "EXAMPLE",
+        "Payload": 'CommandInvocation(Get-Process): "Get-Process"',
+        "ContextInfo": "Host Name = ConsoleHost (invented context).",
+    }
+
+
+def flat_windows_powershell_pipeline() -> dict[str, Any]:
+    """Flat Windows PowerShell 800 (pipeline execution details)."""
+    return {
+        "Channel": "Windows PowerShell",
+        "EventID": 800,
+        "EventIdx": 115,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "Message": "Pipeline execution details for command line: Get-Process",
+    }
+
+
+def flat_windows_powershell_provider() -> dict[str, Any]:
+    """Flat Windows PowerShell 600 (provider lifecycle, no script content)."""
+    return {
+        "Channel": "Windows PowerShell",
+        "EventID": 600,
+        "EventIdx": 116,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "Message": 'Provider "Registry" is Started (invented text).',
+    }
+
+
+def flat_service_install(*, channel: str = "System") -> dict[str, Any]:
+    """Flat service-installed record (System 7045 / Security 4697 shape)."""
+    event_id = 7045 if channel == "System" else 4697
+    return {
+        "Channel": channel,
+        "EventID": event_id,
+        "EventIdx": 117,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "ServiceName": "ExampleSupport",
+        "ImagePath": "C:\\Windows\\System32\\examplesup.exe",
+    }
+
+
 def evtx_rpc_no_channel() -> dict[str, Any]:
     """Nested ``.evtx`` JSON shape of a channel-less ETW RPC event."""
     return {

@@ -6,9 +6,12 @@ Usage (from the repo root, after fetching):
 Reads the fetched datasets under data/ (see datasets/README.md) and
 writes a JSON mapping of posix paths relative to data/ to per-file
 objects: {"dataset": ..., "techniques": [...], "tactics": [...],
-"label_source": "otrf-metadata" | "otrf-folder" | "evtx-folder" |
-"evtx-filename"}. OTRF files no metadata file links map to empty
-techniques with "otrf-folder" (tactic only).
+"label_source": "otrf-metadata" | "otrf-folder" | "otrf-compound-chain" |
+"evtx-folder" | "evtx-filename"}. OTRF files no metadata file links map to empty
+techniques with "otrf-folder" (tactic only). The APT29 day-1 compound
+zip maps to "otrf-compound-chain" with empty per-file techniques: its
+ground truth is the ordered chain in
+``eval/apt29_day1_ground_truth.json``, not per-event labels.
 Files whose ground truth cannot be determined map to empty lists
 (unknown is never guessed).
 
@@ -50,8 +53,11 @@ BASE_TECHNIQUE = re.compile(r"T\d{4}$")
 
 SOURCE_OTRF_METADATA = "otrf-metadata"
 SOURCE_OTRF_FOLDER = "otrf-folder"
+SOURCE_OTRF_COMPOUND_CHAIN = "otrf-compound-chain"
 SOURCE_EVTX_FOLDER = "evtx-folder"
 SOURCE_EVTX_FILENAME = "evtx-filename"
+
+OTRF_COMPOUND_DAY1 = "datasets/compound/apt29/day1"
 
 ATTACK_TACTICS = {
     "collection": "Collection",
@@ -238,6 +244,25 @@ def build_ground_truth(data_dir: Path) -> dict[str, FileLabel]:
             )
     else:
         print(f"warning: {otrf_windows} missing; skipping OTRF source", file=sys.stderr)
+
+    # Compound chain file: chain-level ground truth only (see
+    # eval/apt29_day1_ground_truth.json). The per-file entry carries
+    # no techniques or tactics — per-event labels do not exist and
+    # event-level precision cannot be computed on this dataset.
+    compound_root = otrf_root / OTRF_COMPOUND_DAY1
+    if compound_root.is_dir():
+        for file in sorted(compound_root.rglob("*")):
+            if not file.is_file() or file.name.startswith("."):
+                continue
+            if file.suffix.lower() != ".zip":
+                continue
+            rel = file.relative_to(data_dir).as_posix()
+            mapping[rel] = FileLabel(
+                dataset=OTRF_DEST,
+                techniques=[],
+                tactics=[],
+                label_source=SOURCE_OTRF_COMPOUND_CHAIN,
+            )
 
     return dict(sorted(mapping.items()))
 
