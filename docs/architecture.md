@@ -136,7 +136,24 @@ downloads the pinned OTRF and EVTX-ATTACK-SAMPLES revisions into git-ignored
 writes `data/ground_truth.json` (per-file `dataset` / `techniques` /
 `tactics` / `label_source`; EVTX labels are tactic-level, linked OTRF
 files are technique-level from metadata while unlinked ones carry
-tactic-only `otrf-folder` labels). Details: `datasets/README.md`.
+tactic-only `otrf-folder` labels). One compound exception is fetched at
+the same OTRF pin: the APT29 day-1 host file (day 2, pcaps and Zeek are
+not fetched). It carries no per-event labels, so it is evaluated at
+chain level only and event-level precision cannot be computed on it:
+`eval/apt29_day1_ground_truth.json` holds the ordered 10-step chain
+from the pinned MITRE APT29 emulation plan, each step with its own
+time window, lowercase anchors, the plan's technique ids
+(`plan_techniques`), current ids resolved against ATT&CK v20.0
+revoked-by relationships (`techniques`), any more-specific choice
+recorded in `refinements`, and any deprecated plan id with no
+replacement recorded as dropped. `eval/apt29_census.py` streams the
+file, re-derives each window from anchor hits and reports the
+difference, and computes each step's verdict (direct anchor evidence
+in mapped events, indirect relevant events only, or none);
+`eval/reports/apt29_day1_replay_load.md` is generated from it.
+Dataset names, file names, technique ids, anchors and windows live
+only in ground truth, eval code and provenance, never in OCSF records
+or model inputs. Details: `datasets/README.md`.
 
 ### Supporting pieces (in scope)
 

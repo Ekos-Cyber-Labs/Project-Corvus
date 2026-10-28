@@ -19,7 +19,7 @@ metric).
 | Tool abuse by the agent | Read-only tools, typed parameters, no network access, row and step limits. |
 | Unauthenticated model endpoint (vLLM has no auth) | Bound to localhost or a private overlay network interface only, never `0.0.0.0`. |
 | Network exfiltration beyond the filter | Content filtering is not network control: network-level egress is the operator's firewall; the HTTP client only talks to an allowlist of hosts (model endpoints, Wazuh). |
-| Ground-truth leakage in evaluation | Dataset names and source file names never reach a model; a harness test enforces it. |
+| Ground-truth leakage in evaluation | Dataset names, source file names, ground-truth technique ids, anchors and step windows never reach a model; a harness test enforces it. |
 | XSS from logs or model output in the UI | Render as text only; strict Content-Security-Policy. |
 | Cost / DoS | Per-cluster size limits, per-incident token budget, bounded queue, USD spend cap with degraded mode. |
 
