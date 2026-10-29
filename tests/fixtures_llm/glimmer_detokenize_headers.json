@@ -1,0 +1,30 @@
+{
+ "endpoint": "POST {server_root}/detokenize (outside /v1)",
+ "special_tokens": {
+  "START": 200022,
+  "MESSAGE": 200023,
+  "EOM": 200007,
+  "EOT": 200008
+ },
+ "segments_headers": [
+  {
+   "header_ids": [
+    328,
+    19669
+   ],
+   "detokenize_response": {
+    "prompt": " to=self"
+   }
+  },
+  {
+   "header_ids": [
+    140680,
+    328,
+    76976
+   ],
+   "detokenize_response": {
+    "prompt": "assistant to=user"
+   }
+  }
+ ]
+}

