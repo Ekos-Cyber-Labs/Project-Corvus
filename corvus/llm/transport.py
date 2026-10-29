@@ -56,6 +56,7 @@ from urllib.parse import urlsplit
 
 import httpx2
 
+from corvus.guardrails.egress import EgressFilter, default_allowed_hosts
 from corvus.llm.config import BackendConfig
 
 TokenSource = Literal["exact_ids", "usage", "estimated"]
@@ -725,6 +726,7 @@ def run_attempt(
     retry_after_cap: float = DEFAULT_RETRY_AFTER_CAP,
     limiter: RateLimiter | None = None,
     limiter_timeout: float | None = None,
+    egress_filter: EgressFilter | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     rng: Callable[[], float] = random.random,
@@ -734,7 +736,11 @@ def run_attempt(
 
     ``latency_ms`` covers the HTTP exchanges after the limiter slot is
     acquired (retries and header decoding included), not the limiter
-    wait. Retries happen only on 429/5xx; any other HTTP status
+    wait. Backends with cloud trust pass the egress allowlist
+    (``EgressFilter.check_url`` over the configured model endpoints
+    plus ``WAZUH_INDEXER_URL``) before anything is sent; a refusal
+    raises ``EgressBlocked`` with no request made. Retries happen
+    only on 429/5xx; any other HTTP status
     (including redirects, which are never followed) returns an
     :class:`Attempt` with ``error`` set. Transport errors and
     unparsable 2xx bodies raise :class:`TransportError` immediately
@@ -824,6 +830,14 @@ def run_attempt(
             "json_schema": schema_block,
         }
     chat_url = f"{backend.base_url.rstrip('/')}/chat/completions"
+    if backend.trust == "cloud":
+        # Every cloud request passes the egress allowlist before
+        # anything is sent; tests inject a stub-scoped filter here.
+        if egress_filter is None:
+            active_filter = EgressFilter(default_allowed_hosts())
+        else:
+            active_filter = egress_filter
+        active_filter.check_url(chat_url)
     server_root = _server_root(backend.base_url)
     headers = _auth_headers(backend.api_key)
     active_limiter = (

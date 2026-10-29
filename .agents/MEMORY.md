@@ -560,3 +560,46 @@ rules back to Wazuh (shadow first, human approval).
   Verified with `make lint` (green) and the full `make test` (470
   passed with Postgres). No eval delta. Compose Postgres left
   running. Awaiting maintainer commit.
+- 2026-10-29: built `corvus/guardrails/` payload preparation
+  (`payload.py`: always-on structured `mask_payload`, `visible`
+  detector labels wrapped under `detector_labels`, `blind` stripping
+  attacks/rule tags/`technique_name` values, `DETECTOR_LABELS`
+  default, rule titles untouched; cloud adds pseudonyms plus secret
+  redaction, on-prem skips both), the stable pseudonymizer
+  (`pseudonymizer.py`: per-kind Postgres counters HOST/USER/IP/DOMAIN/
+  EMAIL-0001, advisory-locked race-safe get-or-create, adapter
+  canonicalization, longest-first free-text replacement with the
+  documented boundary rule plus multi-label host suffix), and the
+  egress filter (`egress.py`: exact-host allowlist with one-level
+  `*.` wildcard, 443-unless-named port, no userinfo, secret redactor
+  with 20/20 corpus). `run_attempt` checks every cloud URL before
+  sending (allowlist from model endpoints plus `WAZUH_INDEXER_URL`).
+  46 new tests; the two existing cloud transport tests now inject a
+  stub-scoped filter. Failures found and fixed first: mid-pattern
+  regex flag, JSON quoted-key redaction, short-bearer over-match,
+  lax allowlist entry parsing, cross-call FQDN leak, one test-side
+  tags nesting error, one fixture eaten by the tag mask. Verified
+  with `make lint` (green: ruff check, format, mypy on 52 files) and
+  the full `make test` (540 passed with Postgres). No normalizer,
+  correlation, prompt or model changes, so no eval delta. Compose
+  Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: closed the free-text and credential gaps in
+  `corvus/guardrails/` (URL checks untouched). Cloud payloads drop
+  every `raw_data` field; a deterministic scanner finds IPs,
+  e-mails, FQDNs, UNC/`DOMAIN\user` spans, profile/home owners and
+  command user arguments in any string field, with longest-span
+  overlap resolution; `register()` plus the new `entities` argument
+  carry typed entities across events; an FQDN whose short host is
+  known keeps the host pseudonym. The redactor gained 8 forms
+  (`=`-style auth headers, curl user pairs, `net use` trailing
+  passwords, cookies, SecureString literals, hash keywords, segment
+  key matching) with 4 new safe strings. 10 new test functions
+  including the 17-string acceptance event and 10 more leak events
+  (540 to 550 passed). Failures found
+  and fixed first: 4 prior tests superseded by the scanner (2
+  updated to the new intended behavior, 2 kept via the known-host
+  alias), `=`-auth needing no space, test-count assertions. Verified
+  with `make lint` (green: ruff check, format, mypy on 52 files) and
+  the full `make test` (550 passed with Postgres). No normalizer,
+  correlation, prompt or model changes, so no eval delta. Compose
+  Postgres left running. Awaiting maintainer commit.

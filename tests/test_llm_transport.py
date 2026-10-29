@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from corvus.guardrails.egress import EgressFilter
 from corvus.llm.config import BackendConfig
 from corvus.llm.transport import (
     EOM_TOKEN,
@@ -425,6 +426,7 @@ def test_spark_error_body_401_no_retry(stub: Any) -> None:
         temperature=0.2,
         max_tokens=3000,
         limiter=_fresh_limiter(),
+        egress_filter=EgressFilter([f"127.0.0.1:{server.server_port}"]),
     )
     assert attempt.http_status == 401
     assert attempt.error is not None
@@ -574,6 +576,7 @@ def test_secrets_absent_from_errors_and_repr(stub: Any) -> None:
         temperature=0.2,
         max_tokens=3000,
         limiter=_fresh_limiter(),
+        egress_filter=EgressFilter([f"127.0.0.1:{server.server_port}"]),
     )
     assert attempt.error is not None
     assert TEST_API_KEY not in str(attempt.error)

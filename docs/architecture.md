@@ -179,7 +179,15 @@ or model inputs. Details: `datasets/README.md`.
   (`corvus/llm/health.py`); prompt-injection classifier.
 - Pseudonymizer with a stable `pseudonyms` table: the same entity always maps
   to the same pseudonym within a deployment, so chains stay correlatable
-  after pseudonymization. Every Spark call goes through it.
+  after pseudonymization. Every Spark call goes through it. For cloud
+  payloads `prepare_payload` also drops every `raw_data` field (raw logs
+  stay on-prem; the typed OCSF fields carry the evidence), scans all
+  remaining free text for entity-shaped spans (IP literals, e-mails,
+  FQDNs, UNC and `DOMAIN\user` forms, profile and home paths, command
+  user arguments) and replaces each hit, after the caller registers the
+  incident's typed entities — so a name typed in one event is hidden in
+  another event's free text. Bare words in no recognizable position
+  cannot be found deterministically.
 - Egress filter before every Spark call: host allowlist (model endpoints,
   Wazuh only) plus a secret-pattern redactor (tokens, passwords in command
   lines). Network-level egress remains the operator's firewall; the HTTP
