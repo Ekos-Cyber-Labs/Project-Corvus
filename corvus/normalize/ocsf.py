@@ -82,6 +82,7 @@ __all__ = [
     "ScheduledJobActivity",
     "Script",
     "ScriptActivity",
+    "ScriptContent",
     "User",
     "WIN_EXTENSION_NAME",
     "WIN_EXTENSION_UID",
@@ -205,7 +206,13 @@ def compute_entity_keys(
 
 
 class EntityKeys(BaseModel):
-    """Corvus extension: canonical keys for deterministic correlation."""
+    """Corvus-internal keys for deterministic correlation (not OCSF).
+
+    Never serialized into the OCSF record: the keys travel as store
+    columns and are recomputed on read (see
+    ``corvus/adapters/replay/schema.py``), so conformance-checked JSON
+    carries no ``entity_keys``.
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -254,7 +261,13 @@ def win_extension() -> Extension:
 
 
 class Metadata(BaseModel):
-    """OCSF metadata object, flattened to the fields Corvus needs."""
+    """OCSF metadata object, flattened to the fields Corvus needs.
+
+    ``profiles`` names the schema profiles the event claims (``host``
+    on every Windows mapper record, which always carries host context
+    in ``device``/``actor``); profile-gated attributes count only under
+    a declared profile.
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -271,15 +284,35 @@ class Metadata(BaseModel):
         description="Schema extensions used to construct the event "
         "(one win entry on win extension classes, nothing on core classes)",
     )
+    profiles: list[str] | None = Field(
+        default=None,
+        description="Schema profiles the event claims "
+        '("host" on records carrying device/actor context)',
+    )
 
 
 class Device(BaseModel):
-    """OCSF device object (the host the event was observed on)."""
+    """OCSF device object (the host the event was observed on).
+
+    ``type_id`` is required in the pinned OCSF 1.9.0 schema
+    (``objects/device.json``; the id enum lives in ``dictionary.json``:
+    0 Unknown, 99 Other). Corvus emits 0 Unknown with the caption,
+    since the source never names the device type.
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     hostname: str | None = None
     ip: str | None = None
+    type: str | None = None
+    type_id: int | None = None
+
+    @field_validator("type_id")
+    @classmethod
+    def _check_type(cls, value: int | None) -> int | None:
+        if value is not None and value not in (0, 99):
+            raise ValueError("type_id must be 0 (Unknown) or 99 (Other)")
+        return value
 
 
 class Endpoint(BaseModel):
@@ -373,6 +406,19 @@ class File(BaseModel):
     version: str | None = None
     internal_name: str | None = None
     product: Product | None = None
+    type: str | None = None
+    type_id: int | None = None
+
+    @field_validator("type_id")
+    @classmethod
+    def _check_type(cls, value: int | None) -> int | None:
+        # Enum from the pinned OCSF 1.9.0 schema (``objects/file.json``
+        # ``attributes.type_id.enum``: 0 Unknown, 1 Regular File,
+        # 2 Folder, 3 Character Device, 4 Block Device, 5 Local Socket,
+        # 6 Named Pipe, 7 Symbolic Link, 8 Executable File, 99 Other).
+        if value is not None and value not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 99):
+            raise ValueError("type_id must be one of 0-8 or 99 (Other)")
+        return value
 
     @model_validator(mode="after")
     def _derive_name(self) -> File:
@@ -546,11 +592,17 @@ class OcsfEventBase(BaseModel):
 
 
 class Authentication(OcsfEventBase):
-    """OCSF 3002 Authentication (category 3, Identity & Access Management)."""
+    """OCSF 3002 Authentication (category 3, Identity & Access Management).
+
+    ``user`` is the subject being authenticated (required in the pinned
+    OCSF 1.9.0 schema: ``events/iam/authentication.json``); the same
+    identity also appears under ``actor.user``.
+    """
 
     class_uid: Literal[3002] = 3002
     category_uid: Literal[3] = 3
     activity_id: int = 1
+    user: User | None = None
     status: str | None = None
     status_id: int | None = None
     logon_type: str | None = None
@@ -594,10 +646,10 @@ class ProcessActivity(OcsfEventBase):
     process: Process | None = None
     # Pinned OCSF 1.9.0 ``process_activity.actual_permissions`` ("the
     # permissions that were granted in a platform-native format",
-    # ``dictionary.json`` types it integer_t). Corvus keeps the original
-    # hex string (e.g. a Sysmon GrantedAccess mask) instead of coercing it,
-    # so the evidence stays verbatim.
-    actual_permissions: str | None = None
+    # ``dictionary.json`` types it integer_t). Corvus parses the
+    # platform-native mask (e.g. a Sysmon GrantedAccess hex string) to
+    # an integer; an unparseable value stays verbatim in ``unmapped``.
+    actual_permissions: int | None = None
 
 
 class NetworkActivity(OcsfEventBase):
@@ -637,12 +689,30 @@ class ScheduledJobActivity(OcsfEventBase):
     job: Job | None = None
 
 
+class ScriptContent(BaseModel):
+    """OCSF long-string object: script text that may be truncated.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/long_string.json`` in ``ocsf-schema`` tag ``1.9.0``):
+    ``value`` (required there) is the string, ``is_truncated`` says a
+    product cut it, and ``untruncated_size`` is the pre-cut byte size.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    value: str
+    is_truncated: bool | None = None
+    untruncated_size: int | None = None
+
+
 class Script(BaseModel):
     """OCSF script object: a script executed by a shell or engine.
 
     Field meanings from the pinned OCSF 1.9.0 schema (``objects/script.json``
     in ``ocsf-schema`` tag ``1.9.0``): ``uid`` is the engine's execution id
-    (the PowerShell ``ScriptBlockId``), ``type_id`` 2 with ``type``
+    (the PowerShell ``ScriptBlockId``), ``script_content`` is the
+    ``long_string`` object above (required there, always set when a
+    script object is emitted), and ``type_id`` 2 with ``type``
     ``"PowerShell"`` names the PowerShell engine.
     """
 
@@ -650,7 +720,7 @@ class Script(BaseModel):
 
     uid: str | None = None
     name: str | None = None
-    script_content: str | None = None
+    script_content: ScriptContent | None = None
     type: str | None = None
     type_id: int | None = None
 

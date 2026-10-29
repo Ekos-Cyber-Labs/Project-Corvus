@@ -30,6 +30,9 @@ Review checks:
 - Verify premises, record layouts, and unknown shares against real records before publishing figures.
 - Exclude byte-identical duplicate payloads from every count.
 - Remove dead aliases and fallbacks instead of leaving them beside the live path.
+- Report any failing or erroring test at the top of the reply; never record a run as verified unless the full suite passed with Postgres.
+- Make only claims checked against the code or the data, like reported numbers.
+- Work only inside the repository, its git-ignored `data/` and `/tmp/corvus-test.env`; fetch every needed reference pinned and checksummed into `data/` via `scripts/fetch_datasets.py`, never from a copy found on disk.
 
 Definition of done: full harness green with pasted output; metric
 delta vs baseline reported; no number published without its n.

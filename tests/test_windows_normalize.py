@@ -273,8 +273,12 @@ def test_unparseable_time_counts_as_unmapped() -> None:
 def test_missing_optional_fields_still_map() -> None:
     event = _normalize_record(fx.flat_minimal_process())
     assert event.class_uid == 1007
-    assert event.process is None
-    assert event.actor is None
+    assert event.process is not None
+    assert event.process.pid is None
+    assert event.process.cmd_line is None
+    assert event.actor is not None
+    assert event.actor.user is None
+    assert event.actor.process is None
     assert event.device is not None
 
 
@@ -682,8 +686,8 @@ def test_sysmon_10_maps_to_process_open() -> None:
     assert event.process.name == "lsass.exe"
     assert event.process.file is not None
     assert event.process.file.path == "C:\\Windows\\System32\\lsass.exe"
-    assert event.actual_permissions == "0x1010"
-    assert isinstance(event.actual_permissions, str)
+    assert event.actual_permissions == 0x1010
+    assert isinstance(event.actual_permissions, int)
     assert "CallTrace" in event.unmapped
     _check_no_drop(
         fx.flat_sysmon_access(),
@@ -711,7 +715,12 @@ def test_powershell_4104_maps_to_script_activity() -> None:
     assert event.metadata.product.name == "Microsoft Windows"
     assert event.time == fx.SYS_MS
     assert event.script is not None
-    assert event.script.script_content == "Get-Process | Where-Object { $_.CPU -gt 10 }"
+    assert event.script is not None
+    assert event.script.script_content is not None
+    assert (
+        event.script.script_content.value
+        == "Get-Process | Where-Object { $_.CPU -gt 10 }"
+    )
     assert event.script.uid == "{cccccccc-9999-aaaa-bbbb-cccccccccccc}"
     assert event.script.type_id == 2
     assert event.script.type == "PowerShell"
@@ -732,7 +741,7 @@ def test_powershell_split_script_block_keeps_every_message() -> None:
     }
     assert [event.unmapped["MessageNumber"] for event in events] == [1, 2, 3]
     assert all(event.unmapped["MessageTotal"] == 3 for event in events)
-    assert "".join(event.script.script_content for event in events) == (
+    assert "".join(event.script.script_content.value for event in events) == (
         "$data = Get-Process |Where-Object { $_.CPU -gt 10 } |Select-Object Name, CPU"
     )
 
@@ -762,8 +771,11 @@ def test_powershell_4103_maps_to_script_activity() -> None:
     assert event.activity_id == 1
     assert event.metadata.log_name == POWERSHELL_CHANNEL
     assert event.script is not None
+    assert event.script is not None
+    assert event.script.script_content is not None
     assert (
-        event.script.script_content == 'CommandInvocation(Get-Process): "Get-Process"'
+        event.script.script_content.value
+        == 'CommandInvocation(Get-Process): "Get-Process"'
     )
     assert event.script.uid is None
     assert event.script.type_id == 2
@@ -783,7 +795,62 @@ def test_windows_powershell_800_maps_to_script_activity() -> None:
     assert event.class_uid == 1009
     assert event.metadata.log_name == WINDOWS_POWERSHELL_CHANNEL
     assert event.script is not None
-    assert "Get-Process" in (event.script.script_content or "")
+    assert event.script is not None
+    assert event.script.script_content is not None
+    assert "Get-Process" in event.script.script_content.value
+
+
+def test_powershell_4104_message_layout_maps_content() -> None:
+    event = _normalize_record(fx.flat_powershell_script_message())
+    assert event.class_uid == 1009
+    assert event.script is not None
+    assert event.script.uid == "{eeeeeeee-1111-2222-3333-444444444444}"
+    assert event.script.script_content is not None
+    assert event.script.script_content.value == "Get-Process"
+
+
+def test_powershell_4103_message_layout_maps_content() -> None:
+    event = _normalize_record(fx.flat_powershell_module_message())
+    assert event.class_uid == 1009
+    assert event.script is not None
+    assert event.script.script_content is not None
+    assert (
+        event.script.script_content.value
+        == 'CommandInvocation(Get-Process): "Get-Process"'
+    )
+
+
+def test_powershell_4103_without_content_stays_unmapped() -> None:
+    with pytest.raises(UnmappedEvent):
+        _normalize_record(fx.flat_powershell_module_empty())
+
+
+def test_windows_powershell_800_data_layout_maps_content() -> None:
+    event = _normalize_record(fx.flat_windows_powershell_pipeline_data())
+    assert event.class_uid == 1009
+    assert event.script is not None
+    assert event.script.script_content is not None
+    assert event.script.script_content.value == "Get-Process"
+
+
+def test_windows_powershell_800_without_content_stays_unmapped() -> None:
+    with pytest.raises(UnmappedEvent):
+        _normalize_record(fx.flat_windows_powershell_pipeline_empty())
+
+
+def test_sysmon_11_without_target_stays_unmapped() -> None:
+    with pytest.raises(UnmappedEvent):
+        _normalize_record(fx.flat_sysmon_file_no_target())
+
+
+def test_sysmon_13_without_target_stays_unmapped() -> None:
+    with pytest.raises(UnmappedEvent):
+        _normalize_record(fx.flat_sysmon_registry_value_no_target())
+
+
+def test_security_4697_without_name_stays_unmapped() -> None:
+    with pytest.raises(UnmappedEvent):
+        _normalize_record(fx.flat_security_service_no_name())
 
 
 def test_windows_powershell_600_stays_unmapped() -> None:
@@ -1133,8 +1200,10 @@ def test_sysmon_7_minimal_record_still_maps() -> None:
     }
     event = _normalize_record(record)
     assert event.class_uid == 1005
-    assert event.module is None
-    assert event.actor is None
+    assert event.module is not None
+    assert event.module.file is None
+    assert event.actor is not None
+    assert event.actor.user is None
 
 
 def test_lowercase_security_unmapped_merges_with_security(tmp_path: Path) -> None:

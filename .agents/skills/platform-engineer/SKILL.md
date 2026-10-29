@@ -26,6 +26,7 @@ Review checks:
 - Write queryable files atomically (temporary file, then rename); never write them in place.
 - Stream large files and archives; never read one whole into memory.
 - Quote or encode every URL component that can contain spaces or reserved characters.
+- Reuse `/tmp/corvus-test.env` and the existing Compose volume for tests (never overwrite the env file, never `down -v`); prefix every `make` and `uv` command with `UV_CACHE_DIR=/tmp/uv-cache`.
 
 Definition of done: stack runs with one command; tests green with pasted
 output; `AGENTS.md` Commands updated if commands changed.

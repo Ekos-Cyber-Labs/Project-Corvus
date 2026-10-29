@@ -188,7 +188,11 @@ def event_text_fields(event: Any) -> str:
         parts.append(getattr(file_obj, "name", None) or "")
     script = getattr(event, "script", None)
     if script is not None:
-        parts.append(getattr(script, "script_content", None) or "")
+        content = getattr(script, "script_content", None)
+        if isinstance(content, str):
+            parts.append(content)
+        else:
+            parts.append(getattr(content, "value", None) or "")
     for key_attr in ("reg_key", "prev_reg_key"):
         key_obj = getattr(event, key_attr, None)
         if key_obj is not None:
@@ -275,8 +279,9 @@ def evaluate_mapped(events: Any, chain: dict[str, Any]) -> dict[int, dict[str, A
 def is_lsass_high_access(event: Any, chain: dict[str, Any]) -> bool:
     """True for a Sysmon 10 lsass open with a dumping-grade access mask.
 
-    Keys on ``actual_permissions`` (GrantedAccess verbatim), never on
-    merely touching lsass: most lsass opens are benign ``0x1000``
+    Keys on ``actual_permissions`` (the GrantedAccess mask parsed to an
+    integer, rendered back to lowercase hex for the comparison), never
+    on merely touching lsass: most lsass opens are benign ``0x1000``
     queries and matching those drowns the signal in false positives.
     """
     if getattr(event, "class_uid", None) != 1007:
@@ -289,4 +294,8 @@ def is_lsass_high_access(event: Any, chain: dict[str, Any]) -> bool:
         return False
     granted = getattr(event, "actual_permissions", None)
     high = {value.lower() for value in chain.get("lsass_high_access", [])}
+    if isinstance(granted, bool):
+        return False
+    if isinstance(granted, int):
+        return hex(granted) in high
     return isinstance(granted, str) and granted.strip().lower() in high

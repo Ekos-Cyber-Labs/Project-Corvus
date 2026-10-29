@@ -146,7 +146,7 @@ def test_wanted_picks_only_apt29_day1_host_zip() -> None:
 
 
 def test_dataset_pins_are_well_formed() -> None:
-    assert len(fetch.DATASETS) == 4
+    assert len(fetch.DATASETS) == 5
     for dataset in fetch.DATASETS:
         assert dataset["dest"] and dataset["rev"]
         # dest is joined onto the data dir; a "data/" prefix would nest data/.
@@ -160,6 +160,7 @@ def test_dataset_pins_are_well_formed() -> None:
         "evtx-attack-samples",
         "security-datasets",
         "mitre-cti",
+        "ocsf-schema",
         "sigma",
     }
 
@@ -240,6 +241,43 @@ def test_safe_extract_prefix_refuses_out_of_root(tmp_path: Path) -> None:
         bundle.writestr("rules/windows/../../escape.yml", "title: evil\n")
     with pytest.raises(RuntimeError, match="out-of-root"):
         fetch.safe_extract_prefix(archive, "rules/windows/", tmp_path / "out")
+
+
+def test_ocsf_schema_fetches_only_conformance_subset() -> None:
+    ocsf = [d for d in fetch.DATASETS if d["name"] == "ocsf-schema"][0]
+    assert ocsf["repo"] == "ocsf/ocsf-schema"
+    assert ocsf["rev"] == "856d462bd20dc46cc1ffed2dfffe3b91ef0fbeba"
+    assert list(ocsf["prefixes"]) == [  # type: ignore[union-attr]
+        "categories.json",
+        "dictionary.json",
+        "LICENSE",
+        "events",
+        "objects",
+        "profiles",
+        "extensions/windows",
+    ]
+    assert ocsf["dest"] == "ocsf-schema"
+    paths = [
+        "categories.json",
+        "dictionary.json",
+        "LICENSE",
+        "events/system/process_activity.json",
+        "objects/process.json",
+        "profiles/host.json",
+        "extensions/windows/extension.json",
+        "extensions/windows/events/registry_key_activity.json",
+        "README.md",
+    ]
+    assert fetch.wanted(paths, list(ocsf["prefixes"]), False) == [  # type: ignore[arg-type]
+        "LICENSE",
+        "categories.json",
+        "dictionary.json",
+        "events/system/process_activity.json",
+        "extensions/windows/events/registry_key_activity.json",
+        "extensions/windows/extension.json",
+        "objects/process.json",
+        "profiles/host.json",
+    ]
 
 
 def test_mitre_cti_fetches_only_bundle_and_license() -> None:

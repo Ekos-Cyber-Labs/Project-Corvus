@@ -297,12 +297,20 @@ def classify_ps_subtype(event: dict[str, Any]) -> str | None:
 
 
 def _script_content(subtype: str) -> Extractor:
-    """The script text when the event is of ``subtype``, else null."""
+    """The script text when the event is of ``subtype``, else null.
+
+    The text lives in the schema ``long_string`` object
+    (``script_content.value``); a plain string is also accepted so rows
+    stored before the object form still match.
+    """
 
     def read(event: dict[str, Any]) -> str | None:
         if classify_ps_subtype(event) != subtype:
             return None
-        return as_text(_dig(event, "script", "script_content"))
+        content = _dig(event, "script", "script_content")
+        if isinstance(content, Mapping):
+            content = content.get("value")
+        return as_text(content)
 
     return read
 
@@ -420,11 +428,28 @@ def _process_creation_fields() -> dict[str, Extractor]:
     }
 
 
+def _granted_access_hex(event: dict[str, Any]) -> str | None:
+    """Render ``actual_permissions`` in platform-native hex text.
+
+    The schema types the mask as an integer, but Sigma rules match the
+    Sysmon hex spelling (``contains '0x1038'``). Rendering back to hex
+    restores exactly the logged form for masks parsed from hex; a mask
+    logged in another base renders in hex too, which is what the rules
+    compare. Mirrors :func:`hashes_sysmon_form`.
+    """
+    value = _dig(event, "actual_permissions")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return hex(value)
+    return as_text(value)
+
+
 def _process_access_fields() -> dict[str, Extractor]:
     return {
         "SourceImage": typed("actor", "process", "file", "path"),
         "TargetImage": typed("process", "file", "path"),
-        "GrantedAccess": typed("actual_permissions"),
+        "GrantedAccess": _granted_access_hex,
         "CallTrace": unmapped("CallTrace"),
         "SourceUser": unmapped("SourceUser"),
         **_standard(SYSMON, const("10")),

@@ -91,6 +91,7 @@ from corvus.normalize.ocsf import (
     ScheduledJobActivity,
     Script,
     ScriptActivity,
+    ScriptContent,
     User,
     WindowsServiceActivity,
     WinService,
@@ -348,6 +349,28 @@ def _pid(value: object) -> int | None:
     return number if number >= 0 else None
 
 
+def _parse_permissions(raw: object, fields: dict[str, Any]) -> int | None:
+    """Parse a platform-native access mask to an integer for OCSF.
+
+    The pinned OCSF 1.9.0 schema types ``actual_permissions`` as
+    integer, so a Sysmon ``GrantedAccess`` hex mask (``"0x1010"``)
+    becomes the integer. A missing or placeholder value stays missing;
+    an unparseable value is restored to ``fields`` so it lands verbatim
+    in ``unmapped`` instead of being dropped.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or text.lower() in PLACEHOLDERS:
+        fields["GrantedAccess"] = raw
+        return None
+    try:
+        return int(text, 0)
+    except ValueError, TypeError:
+        fields["GrantedAccess"] = raw
+        return None
+
+
 def _coerce_event_id(value: object) -> int:
     """Coerce an event id; anything unusable becomes 0 (counted, not lost).
 
@@ -387,12 +410,13 @@ def _split_account(text: str | None) -> tuple[str | None, str | None]:
 
 @dataclass(frozen=True)
 class _Ctx:
-    """Per-record mapping context: identity, time, channel, host."""
+    """Per-record mapping context: identity, time, channel, host, event id."""
 
     uid: str
     time_ms: int
     channel: str
     computer: str | None
+    event_id: int
 
 
 def _product_name(channel: str) -> str:
@@ -406,32 +430,49 @@ def _metadata(ctx: _Ctx, *, with_extension: bool = False) -> Metadata:
     Win extension classes (201001, 201002, 201004) declare the win
     extension in ``metadata.extensions`` (name ``win``, uid ``"2"``,
     version ``1.9.0`` per ``extensions/windows/extension.json`` in the
-    pinned schema); core classes carry no extensions entry.
+    pinned schema); core classes carry no extensions entry. Every record
+    declares the ``host`` profile: Windows event logs are host-observed,
+    and the record always carries ``device``/``actor`` context, so the
+    profile-gated ``device`` and ``actor`` attributes count.
     """
     return Metadata(
         product=Product(name=_product_name(ctx.channel), vendor_name="Microsoft"),
         log_name=ctx.channel,
         uid=ctx.uid,
         extensions=[win_extension()] if with_extension else None,
+        profiles=["host"],
     )
 
 
-def _device(ctx: _Ctx) -> Device | None:
-    """Build the device object, or None when no host is known."""
-    hostname = _text(ctx.computer)
-    return Device(hostname=hostname) if hostname is not None else None
+def _device(ctx: _Ctx) -> Device:
+    """Build the device object, always present with the schema type.
+
+    ``type_id`` 0 Unknown is required by the pinned OCSF 1.9.0 schema
+    (``objects/device.json``); the source never names the device type.
+    """
+    return Device(hostname=_text(ctx.computer), type="Unknown", type_id=0)
 
 
 def _actor(
     name: str | None, domain: str | None, process: Process | None = None
-) -> Actor | None:
-    """Build the actor object, or None when neither user nor process is known."""
-    if name is None and domain is None and process is None:
-        return None
+) -> Actor:
+    """Build the actor object, always present (possibly empty).
+
+    ``actor`` is required on most classes in the pinned OCSF 1.9.0
+    schema, while none of the actor object's own attributes are, so an
+    empty actor is conformant when the record names nobody.
+    """
     user = None
     if name is not None or domain is not None:
         user = User(name=name, domain=domain)
     return Actor(user=user, process=process)
+
+
+def _image_file(path: str | None) -> File | None:
+    """Build the file object for a process image (always executable code)."""
+    if path is None:
+        return None
+    return File(path=path, type="Executable File", type_id=8)
 
 
 def _initiating_process(image: str | None, pid: int | None) -> Process | None:
@@ -445,7 +486,7 @@ def _initiating_process(image: str | None, pid: int | None) -> Process | None:
     return Process(
         pid=pid,
         name=_basename(image),
-        file=File(path=image) if image is not None else None,
+        file=_image_file(image),
     )
 
 
@@ -628,7 +669,12 @@ def _service_type(value: object) -> tuple[int | None, str | None]:
 
 
 def _map_sysmon_process(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
-    """Map Sysmon event 1 (process creation) to Process Activity."""
+    """Map Sysmon event 1 (process creation) to Process Activity.
+
+    ``process`` is always emitted (possibly empty): it is required on
+    Process Activity in the pinned OCSF 1.9.0 schema while none of the
+    process object's own attributes are.
+    """
     image = _text(fields.pop("Image", None))
     pid = _pid(fields.pop("ProcessId", None))
     cmd_line = _text(fields.pop("CommandLine", None))
@@ -641,17 +687,15 @@ def _map_sysmon_process(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
         parent = Process(
             pid=parent_pid,
             name=_basename(parent_image),
-            file=File(path=parent_image) if parent_image is not None else None,
+            file=_image_file(parent_image),
         )
-    process: Process | None = None
-    if pid is not None or image is not None or cmd_line is not None:
-        process = Process(
-            pid=pid,
-            name=_basename(image),
-            cmd_line=cmd_line,
-            file=File(path=image) if image is not None else None,
-            parent_process=parent,
-        )
+    process = Process(
+        pid=pid,
+        name=_basename(image),
+        cmd_line=cmd_line,
+        file=_image_file(image),
+        parent_process=parent,
+    )
     return ProcessActivity(
         time=ctx.time_ms,
         metadata=_metadata(ctx),
@@ -780,15 +824,11 @@ def _map_sysmon_module(fields: dict[str, Any], ctx: _Ctx) -> ModuleActivity:
     product_name = _take_text(fields, "Product")
     internal = _take_text(fields, "OriginalFileName")
     fields.pop("UtcTime", None)
+    # A loaded image is executable code (schema file type 8); without a
+    # path there is no name (required on the file object), so no typed
+    # file is built and the popped values go back to ``unmapped``.
     file: File | None = None
-    if (
-        loaded is not None
-        or hashes is not None
-        or desc is not None
-        or company is not None
-        or product_name is not None
-        or internal is not None
-    ):
+    if loaded is not None:
         file = File(
             path=loaded,
             hashes=hashes,
@@ -796,14 +836,30 @@ def _map_sysmon_module(fields: dict[str, Any], ctx: _Ctx) -> ModuleActivity:
             company_name=company,
             product=Product(name=product_name) if product_name is not None else None,
             internal_name=internal,
+            type="Executable File",
+            type_id=8,
         )
+    else:
+        if hashes is not None and raw_hashes is not None:
+            fields["Hashes"] = raw_hashes
+        if desc is not None:
+            fields["Description"] = desc
+        if company is not None:
+            fields["Company"] = company
+        if product_name is not None:
+            fields["Product"] = product_name
+        if internal is not None:
+            fields["OriginalFileName"] = internal
+    # ``module`` is always emitted (possibly empty): it is required on
+    # Module Activity in the pinned OCSF 1.9.0 schema while none of the
+    # module object's own attributes are.
     return ModuleActivity(
         time=ctx.time_ms,
         metadata=_metadata(ctx),
         activity_id=1,
         device=_device(ctx),
         actor=_actor(user, domain, _initiating_process(image, pid)),
-        module=Module(file=file) if file is not None else None,
+        module=Module(file=file),
         unmapped=fields,
     )
 
@@ -815,18 +871,20 @@ def _map_sysmon_access(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
     (``events/system/process_activity.json`` activity enum). The opening
     process (``SourceImage``/``SourceProcessId``) becomes ``actor.process``
     and the target (``TargetImage``/``TargetProcessId``) becomes
-    ``process``. ``GrantedAccess`` is kept verbatim as the typed
-    ``actual_permissions`` (the schema's platform-native slot, per that
-    same file). ``CallTrace`` has no typed OCSF 1.9.0 slot — the full
-    ``process`` object attribute list in ``objects/process.json`` carries
-    nothing like it — so it stays in ``unmapped``, as do the GUIDs and
-    the source thread id.
+    ``process`` (always emitted, possibly empty: ``process`` is required
+    on the class while none of its own attributes are). ``GrantedAccess``
+    is parsed to the integer ``actual_permissions`` (the schema's
+    platform-native slot, typed integer there, per that same file); an
+    unparseable value stays verbatim in ``unmapped``. ``CallTrace`` has
+    no typed OCSF 1.9.0 slot — the full ``process`` object attribute list
+    in ``objects/process.json`` carries nothing like it — so it stays in
+    ``unmapped``, as do the GUIDs and the source thread id.
     """
     source_image = _text(fields.pop("SourceImage", None))
     source_pid = _pid(fields.pop("SourceProcessId", None))
     target_image = _text(fields.pop("TargetImage", None))
     target_pid = _pid(fields.pop("TargetProcessId", None))
-    granted = _text(fields.pop("GrantedAccess", None))
+    granted = _parse_permissions(fields.pop("GrantedAccess", None), fields)
     user, domain = _split_account(_text(fields.pop("User", None)))
     fields.pop("UtcTime", None)
     source: Process | None = None
@@ -834,15 +892,13 @@ def _map_sysmon_access(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
         source = Process(
             pid=source_pid,
             name=_basename(source_image),
-            file=File(path=source_image) if source_image is not None else None,
+            file=_image_file(source_image),
         )
-    target: Process | None = None
-    if target_pid is not None or target_image is not None:
-        target = Process(
-            pid=target_pid,
-            name=_basename(target_image),
-            file=File(path=target_image) if target_image is not None else None,
-        )
+    target = Process(
+        pid=target_pid,
+        name=_basename(target_image),
+        file=_image_file(target_image),
+    )
     return ProcessActivity(
         time=ctx.time_ms,
         metadata=_metadata(ctx),
@@ -855,7 +911,7 @@ def _map_sysmon_access(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
     )
 
 
-def _script_actor(fields: dict[str, Any]) -> Actor | None:
+def _script_actor(fields: dict[str, Any]) -> Actor:
     """Actor for a script record: ``User``, else ``AccountName``/``Domain``.
 
     Flat NXLog records (the APT29 compound layout) carry the account as
@@ -874,23 +930,27 @@ def _script_actor(fields: dict[str, Any]) -> Actor | None:
 def _script_event(
     fields: dict[str, Any], ctx: _Ctx, content: str | None, block_id: str | None
 ) -> ScriptActivity:
-    """Build one Script Activity (1009, Execute) from script content."""
+    """Build one Script Activity (1009, Execute) from script content.
+
+    The content lives in the schema's ``long_string`` object (required
+    on the script object); a record naming no script text cannot form a
+    conformant Script Activity and is counted unmapped instead.
+    """
     fields.pop("TimeCreated", None)
-    script: Script | None = None
-    if content is not None or block_id is not None:
-        script = Script(
-            uid=block_id,
-            script_content=content,
-            type="PowerShell",
-            type_id=2,
-        )
+    if content is None:
+        raise UnmappedEvent(ctx.channel, ctx.event_id)
     return ScriptActivity(
         time=ctx.time_ms,
         metadata=_metadata(ctx),
         activity_id=1,
         device=_device(ctx),
         actor=_script_actor(fields),
-        script=script,
+        script=Script(
+            uid=block_id,
+            script_content=ScriptContent(value=content),
+            type="PowerShell",
+            type_id=2,
+        ),
         unmapped=fields,
     )
 
@@ -905,10 +965,52 @@ def _map_powershell_script(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
     ``MessageNumber``/``MessageTotal`` have no typed slot and stay in
     ``unmapped``. Each record maps to its own event; the messages of a
     split block share the script ``uid`` for downstream grouping.
+    Logstash layouts render the block in ``Message`` (``Creating
+    Scriptblock text (N of M):`` header, stripped), which is the
+    fallback when ``ScriptBlockText`` is absent.
     """
     content = _text(fields.pop("ScriptBlockText", None))
+    if content is None:
+        content = _scriptblock_message_text(_take_text(fields, "Message"))
     block_id = _text(fields.pop("ScriptBlockId", None))
     return _script_event(fields, ctx, content, block_id)
+
+
+#: Logstash/NXLog rendering of a 4104 block; the script text follows
+#: the first line break.
+_SCRIPTBLOCK_HEADER = "Creating Scriptblock text"
+
+
+def _scriptblock_message_text(message: str | None) -> str | None:
+    """Extract the script text from a rendered 4104 ``Message``.
+
+    Returns None when the message is not a script-block rendering or
+    carries no text after the header, so the record is counted unmapped
+    instead of emitting an empty script.
+    """
+    if not message or not message.startswith(_SCRIPTBLOCK_HEADER):
+        return None
+    for separator in ("\r\n", "\n"):
+        _, found, rest = message.partition(separator)
+        if found:
+            return rest if rest.strip() else None
+    return None
+
+
+def _event_data_text(value: object) -> str | None:
+    """Extract the pipeline text from an EVTX ``EventData.Data`` mapping.
+
+    Classic Windows PowerShell 800 records in EVTX form carry the
+    pipeline detail as the first ``#text`` entry; anything else stays
+    in ``unmapped``.
+    """
+    texts = value.get("#text") if isinstance(value, dict) else None
+    if not isinstance(texts, list):
+        return None
+    for item in texts:
+        if isinstance(item, str) and item.strip():
+            return item
+    return None
 
 
 def _map_powershell_module(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
@@ -916,9 +1018,13 @@ def _map_powershell_module(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
 
     Same class/activity as 4104. The executed command invocation is in
     ``Payload`` (there is no ``ScriptBlockId``, so ``script.uid`` stays
-    empty); ``ContextInfo`` has no typed slot and stays in ``unmapped``.
+    empty); NXLog layouts render the same invocation detail in
+    ``Message``, which is the fallback when ``Payload`` is absent.
+    ``ContextInfo`` has no typed slot and stays in ``unmapped``.
     """
     content = _text(fields.pop("Payload", None))
+    if content is None:
+        content = _take_text(fields, "Message")
     return _script_event(fields, ctx, content, None)
 
 
@@ -929,10 +1035,17 @@ def _map_windows_powershell_pipeline(
 
     Same class/activity as 4104. This classic channel carries the
     pipeline detail only in ``Message``, which becomes the script
-    content; there is no block id. Event 600 (provider lifecycle)
-    carries no executed content and stays unmapped.
+    content; EVTX-form records carry the same detail as the first
+    ``EventData.Data`` ``#text`` entry, which is the fallback. There is
+    no block id. Event 600 (provider lifecycle) carries no executed
+    content and stays unmapped.
     """
     content = _text(fields.pop("Message", None))
+    if content is None:
+        data = fields.pop("Data", None)
+        content = _event_data_text(data)
+        if content is None and data is not None:
+            fields["Data"] = data
     return _script_event(fields, ctx, content, None)
 
 
@@ -940,9 +1053,15 @@ def _map_sysmon_file(fields: dict[str, Any], ctx: _Ctx) -> FileSystemActivity:
     """Map Sysmon event 11 (file creation) to File System Activity.
 
     The creating process (``Image``/``ProcessId``) becomes
-    ``actor.process``; ``ProcessGuid`` stays in ``unmapped``.
+    ``actor.process``; ``ProcessGuid`` stays in ``unmapped``. The file
+    carries schema type 1 Regular File (the schema's own guidance for
+    an undistinguished file). A record without ``TargetFilename`` has
+    no file name (required on the file object) and is counted unmapped
+    instead of emitting a non-conformant event.
     """
     target = _text(fields.pop("TargetFilename", None))
+    if target is None:
+        raise UnmappedEvent(ctx.channel, ctx.event_id)
     image = _text(fields.pop("Image", None))
     pid = _pid(fields.pop("ProcessId", None))
     user, domain = _split_account(_text(fields.pop("User", None)))
@@ -953,7 +1072,7 @@ def _map_sysmon_file(fields: dict[str, Any], ctx: _Ctx) -> FileSystemActivity:
         activity_id=1,
         device=_device(ctx),
         actor=_actor(user, domain, _initiating_process(image, pid)),
-        file=File(path=target) if target is not None else None,
+        file=File(path=target, type="Regular File", type_id=1),
         unmapped=fields,
     )
 
@@ -997,7 +1116,7 @@ def _registry_op(fields: dict[str, Any]) -> str | None:
 
 def _registry_actor(
     fields: dict[str, Any], image: str | None, pid: int | None
-) -> Actor | None:
+) -> Actor:
     """Build the actor for a Sysmon registry record.
 
     Registry events carry no ``User`` key (unlike Sysmon 1/3/10/11);
@@ -1050,6 +1169,11 @@ def _map_sysmon_registry_key(
     """
     op = _registry_op(fields)
     target = _take_text(fields, "TargetObject")
+    # ``reg_key``/``reg_value`` require the path (and the value name
+    # derived from it); a record without a target cannot form a
+    # conformant event and is counted unmapped instead.
+    if target is None:
+        raise UnmappedEvent(ctx.channel, ctx.event_id)
     image = _take_text(fields, "Image")
     pid = _pid(fields.pop("ProcessId", None))
     fields.pop("UtcTime", None)
@@ -1112,6 +1236,10 @@ def _map_sysmon_registry_value(
     """
     target = _take_text(fields, "TargetObject")
     data = _take_text(fields, "Details")
+    # ``reg_value`` requires the path (and the name derived from it); a
+    # record without a target cannot form a conformant event.
+    if target is None:
+        raise UnmappedEvent(ctx.channel, ctx.event_id)
     image = _take_text(fields, "Image")
     pid = _pid(fields.pop("ProcessId", None))
     fields.pop("UtcTime", None)
@@ -1143,10 +1271,12 @@ def _map_sysmon_registry_rename(
     """
     target = _take_text(fields, "TargetObject")
     new_name = _take_text(fields, "NewName")
+    key = new_name if new_name is not None else target
+    if key is None:
+        raise UnmappedEvent(ctx.channel, ctx.event_id)
     image = _take_text(fields, "Image")
     pid = _pid(fields.pop("ProcessId", None))
     fields.pop("UtcTime", None)
-    key = new_name if new_name is not None else target
     prev = target if new_name is not None and target != new_name else None
     return RegistryKeyActivity(
         time=ctx.time_ms,
@@ -1176,10 +1306,13 @@ def _map_logon(fields: dict[str, Any], ctx: _Ctx, *, success: bool) -> Authentic
     src: Endpoint | None = None
     if ip is not None or port is not None:
         src = Endpoint(ip=ip, port=port)
+    # ``user`` is the required top-level subject; ``actor.user`` carries
+    # the same identity. Both are always emitted (possibly empty).
     return Authentication(
         time=ctx.time_ms,
         metadata=_metadata(ctx),
         activity_id=1,
+        user=User(name=name, domain=domain),
         status="Success" if success else "Failure",
         status_id=1 if success else 2,
         logon_type=logon_type,
@@ -1241,16 +1374,17 @@ def _map_task_4698(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
     domain = _text(fields.pop("SubjectDomainName", None))
     command = _task_command(_text(fields.get("TaskContentNew")))
     fields.pop("TimeCreated", None)
-    job: Job | None = None
-    if task_name is not None or command is not None:
-        job = Job(
-            name=task_name,
-            job_actions=(
-                [JobAction(cmd_line=command, type="Execute", type_id=2)]
-                if command is not None
-                else None
-            ),
-        )
+    # ``job`` is always emitted (possibly empty): it is required on
+    # Scheduled Job Activity while none of the job object's own
+    # attributes are.
+    job = Job(
+        name=task_name,
+        job_actions=(
+            [JobAction(cmd_line=command, type="Execute", type_id=2)]
+            if command is not None
+            else None
+        ),
+    )
     return ScheduledJobActivity(
         time=ctx.time_ms,
         metadata=_metadata(ctx),
@@ -1273,19 +1407,22 @@ def _map_task_106(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
     task_name = _text(fields.pop("TaskName", None))
     name, domain = _split_account(_text(fields.pop("User", None)))
     fields.pop("TimeCreated", None)
+    # ``job`` is always emitted (possibly empty): it is required on
+    # Scheduled Job Activity while none of the job object's own
+    # attributes are.
     return ScheduledJobActivity(
         time=ctx.time_ms,
         metadata=_metadata(ctx),
         activity_id=1,
         device=_device(ctx),
         actor=_actor(name, domain),
-        job=Job(name=task_name) if task_name is not None else None,
+        job=Job(name=task_name),
         unmapped=fields,
     )
 
 
 def _service_event(
-    fields: dict[str, Any], ctx: _Ctx, service: WinService | None, actor: Actor | None
+    fields: dict[str, Any], ctx: _Ctx, service: WinService, actor: Actor
 ) -> WindowsServiceActivity:
     """Build one Windows Service Activity (201004, Create) event."""
     fields.pop("TimeCreated", None)
@@ -1315,29 +1452,27 @@ def _map_service_4697(fields: dict[str, Any], ctx: _Ctx) -> WindowsServiceActivi
     ``SubjectDomainName`` name the installer and become the actor.
     """
     name = _take_text(fields, "ServiceName")
+    # ``win_service`` requires the name; a nameless record cannot form a
+    # conformant event and is counted unmapped instead.
+    if name is None:
+        raise UnmappedEvent(ctx.channel, ctx.event_id)
     cmd_line = _take_text(fields, "ServiceFileName")
     start_type_id, start_type = _service_start_type(fields.get("ServiceStartType"))
     type_id, service_type = _service_type(fields.get("ServiceType"))
     start_name = _take_text(fields, "ServiceAccount")
     actor_name = _take_text(fields, "SubjectUserName")
     actor_domain = _take_text(fields, "SubjectDomainName")
-    service: WinService | None = None
-    if (
-        name is not None
-        or cmd_line is not None
-        or start_name is not None
-        or start_type_id is not None
-        or type_id is not None
-    ):
-        service = WinService(
-            name=name,
-            cmd_line=cmd_line,
-            service_start_name=start_name,
-            service_start_type=start_type,
-            service_start_type_id=start_type_id,
-            service_type=service_type,
-            service_type_id=type_id,
-        )
+    # ``name`` is guaranteed above, so the required ``win_service``
+    # is always emitted.
+    service = WinService(
+        name=name,
+        cmd_line=cmd_line,
+        service_start_name=start_name,
+        service_start_type=start_type,
+        service_start_type_id=start_type_id,
+        service_type=service_type,
+        service_type_id=type_id,
+    )
     return _service_event(fields, ctx, service, _actor(actor_name, actor_domain))
 
 
@@ -1354,26 +1489,21 @@ def _map_service_7045(fields: dict[str, Any], ctx: _Ctx) -> WindowsServiceActivi
     become the actor, while ``UserID`` stays in ``unmapped``.
     """
     name = _take_text(fields, "ServiceName")
+    if name is None:
+        raise UnmappedEvent(ctx.channel, ctx.event_id)
     cmd_line = _take_text(fields, "ImagePath")
     start_type_id, start_type = _service_start_type(fields.get("StartType"))
     type_id, service_type = _service_type(fields.get("ServiceType"))
     actor_name = _take_text(fields, "AccountName")
     actor_domain = _take_text(fields, "Domain")
-    service: WinService | None = None
-    if (
-        name is not None
-        or cmd_line is not None
-        or start_type_id is not None
-        or type_id is not None
-    ):
-        service = WinService(
-            name=name,
-            cmd_line=cmd_line,
-            service_start_type=start_type,
-            service_start_type_id=start_type_id,
-            service_type=service_type,
-            service_type_id=type_id,
-        )
+    service = WinService(
+        name=name,
+        cmd_line=cmd_line,
+        service_start_type=start_type,
+        service_start_type_id=start_type_id,
+        service_type=service_type,
+        service_type_id=type_id,
+    )
     return _service_event(fields, ctx, service, _actor(actor_name, actor_domain))
 
 
@@ -1422,7 +1552,9 @@ def normalize_event(
     except ValueError as exc:
         raise UnmappedEvent(channel, event_id) from exc
     host = computer if isinstance(computer, str) else None
-    ctx = _Ctx(uid=uid, time_ms=time_ms, channel=channel, computer=host)
+    ctx = _Ctx(
+        uid=uid, time_ms=time_ms, channel=channel, computer=host, event_id=event_id
+    )
     working = dict(fields)
     event = mapper(working, ctx)
     event.raw_data = json.dumps(

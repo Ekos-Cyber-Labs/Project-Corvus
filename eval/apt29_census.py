@@ -180,7 +180,15 @@ def run_census(dataset: Path, chain: dict[str, Any]) -> dict[str, Any]:
                     ):
                         lsass_total += 1
                         granted = getattr(event, "actual_permissions", None)
-                        lsass_granted[str(granted).strip().lower()] += 1
+                        if isinstance(granted, bool):
+                            mask = str(granted)
+                        elif isinstance(granted, int):
+                            mask = hex(granted)
+                        elif isinstance(granted, str):
+                            mask = granted.strip().lower()
+                        else:
+                            mask = str(granted)
+                        lsass_granted[mask] += 1
                         if is_lsass_high_access(event, chain):
                             lsass_high_times.append(event_time)
                     for n, entry in per_step.items():

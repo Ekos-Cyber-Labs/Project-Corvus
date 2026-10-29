@@ -262,20 +262,6 @@ rules back to Wazuh (shadow first, human approval).
   their `subtechnique-of` relationships (by design, the parent is
   never guessed). Verified with `make lint` and the full `make test`.
   Awaiting maintainer commit.
-- 2026-10-28: review fixes to the SigmaHQ detection layer. The 2004
-  finding's `evidences` is a top-level finding attribute (not
-  `finding_info`; verified against the pinned 1.9.0 schema), one entry
-  per matched event. The null-semantics raw fallback now reuses the
-  normalizer's own layout dispatch (`wire_fields` in `windows.py`:
-  trimmed EVTX `System`/`EventData`, `winlog`, old-beat `event_data`,
-  flat), so nested placeholders compare as logged: the six
-  previously-gained SMB-logon matches carry `EventData.IpAddress`
-  `"-"` and are excluded again as the rule intends. Report reissued
-  with a per-rule old-vs-new delta, every changed rule explained from
-  its records. Verified with `make lint` (green) and the full `make
-  test` (241 passed on the maintainer's machine with Postgres; from
-  this sandbox the 10 Postgres-gated tests fail connecting, listed
-  below, never treated as passed). Awaiting maintainer commit.
 - 2026-10-28: added the atomic SigmaHQ detection layer over OCSF
   events (`corvus/detect/`, reusable by `ReplayAdapter` and future
   rule backtesting): pinned SigmaHQ release, windows rules at status
@@ -284,17 +270,47 @@ rules back to Wazuh (shadow first, human approval).
   Finding 2004 per rule match with deterministic uids, atomic
   per-slug finding writes plus `corvus replay detect`, and
   `eval/reports/day2_replay_detect.md` from `eval/detect_census.py`.
-  Maintainer review then fixed five fidelity items: stock Sigma `NOT`
-  semantics with nulled placeholders re-read from the raw record
-  (report carries the per-rule old-vs-new delta; 5 of 1792 evaluated
-  rules change, all gains, each verified against the rule and the
-  rows); tactic `uid` as the `TA####` external id with the dictionary
-  rebuilt from the pinned bundle; finding context moved into one
-  `finding_info.evidences` entry per matched event (the 2004 finding
-  itself carries no actor or endpoints); tactic-only attacks dropped
-  when a technique entry covers their tactic; vendor
-  `Ekos Cyber Labs`. Verified with `make lint` (green) and the full
-  `make test` (231 passed; the 10 Postgres-gated migration/queue
-  tests cannot run from this sandbox — TCP to the Compose Postgres is
-  denied, so they fail connecting; env file and volume untouched).
-  Awaiting maintainer commit.
+  Maintainer review then fixed the fidelity items from the first
+  version: stock Sigma `NOT` semantics with nulled placeholders
+  re-read from the raw record (report carries the per-rule old-vs-new
+  delta; 4 of 1792 evaluated rules change, all gains, each verified
+  against the rule and the rows); tactic `uid` as the `TA####`
+  external id with the dictionary rebuilt from the pinned bundle;
+  finding context in one top-level `evidences` entry per matched event
+  (verified against the pinned 1.9.0 schema, not `finding_info`; the
+  2004 finding itself carries no actor or endpoints); tactic-only
+  attacks dropped when a technique entry covers their tactic; vendor
+  `Ekos Cyber Labs`; the six previously-gained SMB-logon matches were
+  excluded again as the rule intends. Verified with `make lint`
+  (green) and the full `make test` (244 passed with Postgres on the
+  maintainer's machine). Awaiting maintainer commit.
+- 2026-10-28: added the automated OCSF conformance test. Pinned
+  schema source fetched with `scripts/fetch_datasets.py`
+  (`ocsf/ocsf-schema` tag `1.9.0`, commit `856d462b…`, only
+  `categories.json`, `dictionary.json`, `LICENSE`, `events/`,
+  `objects/`, `profiles/`, `extensions/windows/`, checksummed under
+  git-ignored `data/`, never committed); OCSF attribution added to
+  `NOTICE`. `corvus/normalize/conformance.py` resolves classes and
+  objects as the schema defines them and checks required presence,
+  known names (flagged even when null), `*_id` enums and
+  string-vs-integer types at every nesting level;
+  `tests/test_conformance.py` runs it over every normalizer fixture,
+  Sigma-engine findings end to end, a deterministic per-class sample
+  spread across all replay files, and hand-written broken records
+  with precise messages. One shared `serialize_ocsf` writes the store
+  JSON (no Nones, no `entity_keys`), used by both row builders and
+  checked exactly by the tests. Mapper fixes from the check:
+  `entity_keys` as store columns plus recompute on read;
+  `actual_permissions`, `Device.type_id`, `File.type_id` as schema
+  integers with hex bridging for Sigma and the chain census; required
+  `Authentication.user`; `script_content` as the `long_string`
+  object; always-emitted required containers; records missing a
+  required attribute counted unmapped; 310 script texts recovered
+  from Message/Data layouts. Eval delta: the null-semantics 4-rule
+  delta is unchanged (LSASS +33 preserved via the hex bridge);
+  findings 5780 to 6074 on the refreshed store; day-1 load totals
+  reproduce exactly (152,491 mapped, 43,590 unmapped). Lessons folded
+  into `AGENTS.md` and the matching role skills; the two 2026-10-28
+  SigmaHQ entries merged into one. Verified with `make lint` (green)
+  and the full `make test` (269 passed with Postgres). Awaiting
+  maintainer commit.

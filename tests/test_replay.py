@@ -281,7 +281,7 @@ def test_interrupted_load_leaves_no_truncated_parquet(
 
     staged = read_dataset_file(bad, dataset_rel="bad.zip").events
 
-    def _flaky(path: Path, *, dataset_rel: str | None = None, stats: object = None):  # noqa: ANN001, ANN202
+    def _flaky(path: Path, *, dataset_rel: str | None = None, stats: object = None):
         yield staged[0]
         yield staged[1]
         raise RuntimeError("boom mid-stream")

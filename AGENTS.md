@@ -40,10 +40,13 @@ A reduced web UI and an eval harness with an honest results table (every number 
 - `make test` — full pytest; the migration integration test always runs and
   refuses anything but `DATABASE_URL=postgresql://...@127.0.0.1:55432/corvus_test_<name>`
   (wrong port or database prefix fails, never skips). Test env recipe:
-  write `/tmp/corvus-test.env` from `.env.example`,
+  reuse `/tmp/corvus-test.env` and the existing Compose volume when they
+  exist (never overwrite the env file, never `docker compose down -v`),
   `CORVUS_ENV_FILE=/tmp/corvus-test.env docker compose up -d postgres`,
-  `DATABASE_URL=postgresql://corvus:<pw>@127.0.0.1:55432/corvus_test_<rand> make test`,
-  `CORVUS_ENV_FILE=/tmp/corvus-test.env docker compose down`.
+  `DATABASE_URL=postgresql://corvus:<pw>@127.0.0.1:55432/corvus_test_<rand> UV_CACHE_DIR=/tmp/uv-cache make test`,
+  `CORVUS_ENV_FILE=/tmp/corvus-test.env docker compose down`
+  (`UV_CACHE_DIR=/tmp/uv-cache` prefixes every `make` and `uv` command:
+  the sandbox forbids writes to `~/.cache/uv`).
 - `make up` / `make down` — start / stop `postgres`, `corvus-api`, `corvus-worker`;
   both require `CORVUS_ENV_FILE` set (compose fails fast otherwise).
 - `corvus version` — print the package version.
@@ -104,6 +107,10 @@ Every prompt names the role it works under. Changes under `corvus/llm`, `corvus/
 - For any library whose API you are not certain of (pySigma, python-evtx/evtx in particular), inspect the installed package API and run a minimal check before using it; never write API names from memory.
 - Always paste the actual test and lint output; never claim success from reading code.
 - Integration tests must actually run in this development environment: if Postgres or another dependency is unreachable, stop and say so instead of reporting skipped tests as success.
+- If Postgres rejects the connection, stop and report it; do not continue with the Postgres tests failing.
+- Report any failing or erroring test at the top of the reply; never record a run as verified in `.agents/MEMORY.md` unless the full suite passed with Postgres.
+- End every reply with a checklist mapping each deliverable and each report item the prompt asked for to the file and section where it is, or to `missing` with why.
+- Every emitted OCSF record passes the conformance test; a new class or object is added to it in the same change.
 - Changes to normalizers, correlation, or prompts report the eval delta.
 
 ## Known pitfalls (check before finishing)
@@ -130,8 +137,12 @@ Every prompt names the role it works under. Changes under `corvus/llm`, `corvus/
 - Every paged query orders by a unique, stable tie-breaker.
 - Every invalid or out-of-root path raises instead of falling back silently.
 - Every premise about real data was checked against real data before use.
+- Docstrings, comments and docs make only claims checked against the code or the data, like reported numbers.
 - Every documented command was run exactly as written.
 - Every reported number names what it counts and reproduces from a committed script.
+- `# noqa` only for a rule the project's ruff config actually selects.
+- Work only inside this repository, its git-ignored `data/` and `/tmp/corvus-test.env`: never search or read the rest of the filesystem (no `find /`, no other users' or tools' directories under `/tmp`, `/private/tmp`, `/System/Volumes` or the home directory), and never use files not fetched through `scripts/fetch_datasets.py` (a needed reference is fetched, pinned and checksummed into `data/`, never picked up from a copy found on disk; copies outside the repository left by earlier sessions, for example `/tmp/ocsf-1.9.0`, are not used).
+- Each prompt adds its own dated entry to `.agents/MEMORY.md`, written after the final test run.
 - Report dates use the maintainer's local date.
 - No dead aliases, fallbacks, or shims are left behind.
 - Every file changed outside the prompt's scope is listed in the reply.

@@ -1208,6 +1208,11 @@ def test_registry_target_reads_previous_path_on_rename() -> None:
     assert mapping_mod.rename_new_name(create) is None  # type: ignore[arg-type]
 
 
+def test_granted_access_renders_hex_for_sigma() -> None:
+    assert mapping_mod._granted_access_hex({"actual_permissions": 0x1438}) == "0x1438"  # type: ignore[arg-type]
+    assert mapping_mod._granted_access_hex({}) is None  # type: ignore[arg-type]
+
+
 def test_hashes_reconstruction_matches_raw_pair_form() -> None:
     event = {
         "module": {

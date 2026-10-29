@@ -220,7 +220,7 @@ def evaluate(
                 stats.rules_run += 1
                 try:
                     uids = _run_rule(connection, rule)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     stats.rules_errored[rule.rule_id] = (
                         f"{type(exc).__name__}: {str(exc)[:120]}"
                     )

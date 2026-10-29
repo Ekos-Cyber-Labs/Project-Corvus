@@ -267,6 +267,7 @@ def build_finding(
     unmapped: dict[str, Any] = {}
     if rule.author:
         unmapped["sigma_author"] = rule.author
+    device = Device(**event.device) if isinstance(event.device, dict) else None
     return DetectionFinding(
         time=event.time,
         severity_id=severity_id,
@@ -280,8 +281,11 @@ def build_finding(
             product=Product(name="Corvus", vendor_name="Ekos Cyber Labs"),
             log_name="sigma",
             uid=uid,
+            # The finding carries the matched event's device context,
+            # so the host profile-gated ``device`` attribute counts.
+            profiles=["host"] if device is not None else None,
         ),
-        device=Device(**event.device) if isinstance(event.device, dict) else None,
+        device=device,
         finding_info=finding_info,
         evidences=[evidence],
         unmapped=unmapped,

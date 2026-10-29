@@ -33,9 +33,13 @@ Review checks:
 - Deduplicate byte-identical payloads before loading or counting; load a payload once.
 - Keep every unmapped source field under `unmapped`; never pop and discard it.
 - Verify every class, activity id, enum, and attribute against the pinned v1.9.0 schema, extensions included, before use.
+- Keep every emitted OCSF record passing the conformance test; add a new class or object to it in the same change.
 - Keep tool and linter pins identical in every config that sets them.
+- Write `# noqa` only for a rule the project's ruff config actually selects.
 - Bound identifier patterns tightly and test them against near-miss look-alikes.
 - Test text transforms on the serialized form they will actually receive, escapes included.
+- End the reply with a checklist mapping each prompt deliverable and report item to its file and section, or `missing` with why.
+- Add one dated entry per prompt to `.agents/MEMORY.md`, written after the final test run.
 
 Definition of done: fixture test per mapping green; eval metrics
 reported (chains detected, false positives); no unmapped event

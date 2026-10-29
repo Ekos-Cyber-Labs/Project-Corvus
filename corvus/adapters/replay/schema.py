@@ -28,6 +28,7 @@ __all__ = [
     "finding_to_row",
     "findings_dir",
     "provenance_to_row",
+    "serialize_ocsf",
     "slug_for_rel",
 ]
 
@@ -87,8 +88,28 @@ def dataset_for_rel(data_rel: str) -> str:
     return data_rel.split("/", 1)[0] if "/" in data_rel else data_rel
 
 
+def serialize_ocsf(event: OcsfEvent) -> str:
+    """Serialize one OCSF record exactly as the store keeps it.
+
+    Drops ``None`` values at every nesting level alongside the
+    Corvus-internal ``entity_keys``, so a null-valued name the class
+    does not define can never hide in the stored JSON. Readers only
+    ever ``.get()`` stored fields (or revalidate with pydantic), and
+    ``raw_data`` placeholders such as ``"-"`` are strings, so omitting
+    nulls changes no value the detector reads; reading a stored record
+    back revalidates and recomputes ``entity_keys``.
+    """
+    return event.model_dump_json(exclude={"entity_keys"}, exclude_none=True)
+
+
 def event_to_row(event: OcsfEvent) -> dict[str, Any]:
-    """Flatten one OCSF event to an events-table row (no provenance)."""
+    """Flatten one OCSF event to an events-table row (no provenance).
+
+    ``entity_keys`` is Corvus-internal, not an OCSF attribute: the keys
+    travel as the flat ``host``/``user``/``ip``/``src_ip``/``dst_ip``
+    columns and are recomputed on read, so the stored ``event_json``
+    excludes them and validates against the schema as written.
+    """
     keys = event.entity_keys
     return {
         "uid": event.metadata.uid,
@@ -104,7 +125,7 @@ def event_to_row(event: OcsfEvent) -> dict[str, Any]:
         "ip": keys.ip,
         "src_ip": keys.src_ip,
         "dst_ip": keys.dst_ip,
-        "event_json": event.model_dump_json(),
+        "event_json": serialize_ocsf(event),
     }
 
 
@@ -138,7 +159,12 @@ def findings_dir(replay_dir: str | Path) -> Path:
 def finding_to_row(
     finding: DetectionFinding, rule_id: str, level: str
 ) -> dict[str, Any]:
-    """Flatten one Detection Finding to a findings-table row."""
+    """Flatten one Detection Finding to a findings-table row.
+
+    As in :func:`event_to_row`, the Corvus-internal ``entity_keys``
+    travel as the flat ``host`` column and are recomputed on read, so
+    the stored ``finding_json`` excludes them.
+    """
     return {
         "uid": finding.metadata.uid,
         "time": finding.time,
@@ -146,5 +172,5 @@ def finding_to_row(
         "rule_id": rule_id,
         "level": level,
         "host": finding.entity_keys.host,
-        "finding_json": finding.model_dump_json(),
+        "finding_json": serialize_ocsf(finding),
     }

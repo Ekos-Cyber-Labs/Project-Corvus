@@ -184,7 +184,7 @@ def load_rules(
         stats.files += 1
         try:
             collection = SigmaCollection.from_yaml(path.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             stats.skip(REASON_CONSTRUCT, f"parse error: {type(exc).__name__}")
             continue
         for rule in collection.rules:
@@ -202,7 +202,7 @@ def load_rules(
             try:
                 sqlite_sql = compile_rule_sql(rule, strict_nulls=strict_nulls)
                 item.sql = translate_sqlite_to_duckdb(sqlite_sql)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 stats.skip(REASON_CONSTRUCT, f"{type(exc).__name__}")
                 continue
             if validate_regex:
@@ -243,7 +243,7 @@ def _analyze(rule: SigmaRule, path: Path, stats: LoadStats) -> CompiledRule | No
             return None
     try:
         required = required_field_names(rule)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         stats.skip(REASON_CONSTRUCT, f"{type(exc).__name__}")
         return None
     # The fulltext column backs keyword search on every group; it is

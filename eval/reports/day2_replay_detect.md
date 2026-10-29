@@ -58,48 +58,48 @@ Runtime conversion errors during evaluation: n=0.
 
 ## Findings
 
-- findings total: n=5780 on n=5437 events
-- findings on the APT29 day-1 file: n=1477
+- findings total: n=6074 on n=5690 events
+- findings on the APT29 day-1 file: n=1483
 - findings with no ATT&CK tactic: n=0
 
 | level | whole store (n) | APT29 day-1 (n) |
 | --- | --- | --- |
-| critical | 19 | 0 |
-| high | 1370 | 132 |
-| medium | 4391 | 1345 |
+| critical | 29 | 0 |
+| high | 1487 | 133 |
+| medium | 4558 | 1350 |
 | low | 0 | 0 |
 | informational | 0 | 0 |
 
 | tactic | whole store (n) | APT29 day-1 (n) |
 | --- | --- | --- |
-| Collection | 9 | 6 |
-| Command and Control | 124 | 2 |
-| Credential Access | 209 | 10 |
-| Defense Impairment | 352 | 113 |
-| Discovery | 215 | 13 |
-| Execution | 4430 | 995 |
+| Collection | 11 | 8 |
+| Command and Control | 127 | 2 |
+| Credential Access | 249 | 11 |
+| Defense Impairment | 385 | 113 |
+| Discovery | 217 | 14 |
+| Execution | 4495 | 997 |
 | Exfiltration | 11 | 5 |
-| Impact | 21 | 9 |
+| Impact | 25 | 9 |
 | Initial Access | 23 | 0 |
-| Lateral Movement | 111 | 13 |
-| Persistence | 425 | 295 |
-| Privilege Escalation | 336 | 12 |
-| Resource Development | 25 | 20 |
-| Stealth | 419 | 13 |
+| Lateral Movement | 130 | 14 |
+| Persistence | 580 | 295 |
+| Privilege Escalation | 476 | 12 |
+| Resource Development | 27 | 20 |
+| Stealth | 477 | 14 |
 
 ## OTRF atomic files with techniques
 
 - ground-truth files with techniques: n=144; n=110 have events in the replay store, n=34 do not (network/pcap datasets, never ingested: no findings possible, excluded below)
 
-- all rules: n=110 files with techniques in the store; 86 have >=1 finding; 48 have a finding whose technique (parent) matches ground truth
+- all rules: n=110 files with techniques in the store; 90 have >=1 finding; 61 have a finding whose technique (parent) matches ground truth
 
 | file | findings (n) | technique match | matched techniques |
 | --- | --- | --- | --- |
 | security-datasets/datasets/atomic/windows/collection/host/msf_record_mic | 1 | no |  |
 | security-datasets/datasets/atomic/windows/credential_access/host/cmd_dumping_ntds_dit_file_ntdsutil | 3 | yes | T1003, T1003.003 |
 | security-datasets/datasets/atomic/windows/credential_access/host/cmd_lsass_memory_dumpert_syscalls | 6 | yes | T1003, T1003.001 |
-| security-datasets/datasets/atomic/windows/credential_access/host/cmd_psexec_lsa_secrets_dump | 4 | yes | T1003, T1003.004 |
-| security-datasets/datasets/atomic/windows/credential_access/host/cmd_sam_copy_esentutl | 2 | yes | T1003, T1003.002 |
+| security-datasets/datasets/atomic/windows/credential_access/host/cmd_psexec_lsa_secrets_dump | 6 | yes | T1003, T1003.004 |
+| security-datasets/datasets/atomic/windows/credential_access/host/cmd_sam_copy_esentutl | 39 | yes | T1003, T1003.002 |
 | security-datasets/datasets/atomic/windows/credential_access/host/covenant_dcsync_dcerpc_drsuapi_DsGetNCChanges | 0 | no |  |
 | security-datasets/datasets/atomic/windows/credential_access/host/empire_dcsync_dcerpc_drsuapi_DsGetNCChanges | 0 | no |  |
 | security-datasets/datasets/atomic/windows/credential_access/host/empire_mimikatz_backupkeys_dcerpc_smb_lsarpc | 3 | no |  |
@@ -126,36 +126,36 @@ Runtime conversion errors during evaluation: n=0.
 | security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_process_herpaderping_snippingtool | 1 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_psh_stop_netprofm_eventlog_after_reboot | 0 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_psh_stop_netprofm_eventlog_before_reboot | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset001_minint_key | 1 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset_minint_key | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_wevtutil_modify_security_eventlog_path | 2 | yes | T1685 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/covenant_installutil | 3 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset001_minint_key | 2 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset_minint_key | 1 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_wevtutil_modify_security_eventlog_path | 3 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/covenant_installutil | 9 | yes | T1218 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/covenant_lolbin_wuauclt_createremotethread | 2 | yes | T1218 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_dllinjection_LoadLibrary_CreateRemoteThread | 424 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_enable_rdp.tar.gz | 17 | yes | T1112 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_dllinjection_LoadLibrary_CreateRemoteThread | 427 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_enable_rdp.tar.gz | 19 | yes | T1112 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/empire_launcher_sct_regsvr32 | 11 | yes | T1218, T1218.010 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_monologue_netntlm_downgrade | 74 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_monologue_netntlm_downgrade | 77 | yes | T1112 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/empire_powerview_ldap_ntsecuritydescriptor | 12 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_psinject_PEinjection | 101 | yes | T1055 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_psinject_PEinjection | 102 | yes | T1055 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/empire_wdigest_downgrade.tar.gz | 17 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_cmstp_execution_bypassuac | 5 | yes | T1218, T1218.003 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_control_panel_execution | 1 | yes | T1218, T1218.002 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_disable_eventlog_service_startuptype_modification | 23 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_cmstp_execution_bypassuac | 7 | yes | T1218, T1218.003 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_control_panel_execution | 2 | yes | T1218, T1218.002 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_disable_eventlog_service_startuptype_modification | 24 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/psh_hh_local_html_payload | 2 | yes | T1218, T1218.001 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/psh_mavinject_dll_notepad | 3 | yes | T1055 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_after_reboot | 26 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_before_reboot | 24 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_after_reboot | 27 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_before_reboot | 25 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/psh_mshta_html_application_execution | 7 | yes | T1218, T1218.005 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/psh_register_cimprovider_execute_dll | 2 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset001_minint_key | 25 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset_minint_key | 24 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset001_minint_key | 27 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset_minint_key | 26 | yes | T1685 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/purplesharp_pe_injection_createremotethread | 4 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/reg_cmd_process_commandline_logging_disabled | 0 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/reg_disable_eventlog_service_startuptype_modification_via_registry | 0 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/reg_meterpreter_process_commandline_logging_disabled | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset001_minint_key | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset_minint_key | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/wmic_remote_xsl_jscript | 2 | yes | T1220 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset001_minint_key | 1 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset_minint_key | 1 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/wmic_remote_xsl_jscript | 3 | yes | T1220 |
 | security-datasets/datasets/atomic/windows/discovery/host/cmd_discover_iexplorer_version_registry | 1 | yes | T1518 |
 | security-datasets/datasets/atomic/windows/discovery/host/cmd_seatbelt_group_user | 1 | no |  |
 | security-datasets/datasets/atomic/windows/discovery/host/covenant_getdomaingroup_ldap_searchrequest_domain_admins | 1 | no |  |
@@ -165,56 +165,56 @@ Runtime conversion errors during evaluation: n=0.
 | security-datasets/datasets/atomic/windows/discovery/host/empire_shell_net_localgroup_administrators | 2 | no |  |
 | security-datasets/datasets/atomic/windows/discovery/host/empire_shell_rpc_samr_smb_group_domain_admins_standard_user | 2 | no |  |
 | security-datasets/datasets/atomic/windows/discovery/host/empire_shell_samr_EnumDomainUsers | 0 | no |  |
-| security-datasets/datasets/atomic/windows/execution/host/cmd_sharpview_pcre_net | 3 | yes | T1059 |
+| security-datasets/datasets/atomic/windows/execution/host/cmd_sharpview_pcre_net | 6 | yes | T1059 |
 | security-datasets/datasets/atomic/windows/execution/host/empire_launcher_vbs | 6 | yes | T1059 |
 | security-datasets/datasets/atomic/windows/execution/host/psh_powershell_httplistener | 0 | no |  |
 | security-datasets/datasets/atomic/windows/execution/host/psh_python_webserver | 2 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/aadinternals_export_adfsdatabaseconfig_remotely | 0 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_copy_smb_CreateRequest | 0 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_executeexcel4macro_allowed | 4 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_iertutil_dll_hijack | 3 | yes | T1021, T1021.003 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_executeexcel4macro_allowed | 11 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_iertutil_dll_hijack | 7 | yes | T1021, T1021.003 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_registerxll | 170 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_psremoting_command | 97 | yes | T1021, T1021.006 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_psremoting_command | 98 | yes | T1021, T1021.006 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sc_query_dcerpc_smb_svcctl | 0 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_create_dcerpc_smb_svcctl | 0 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_query_dcerpc_smb_svcctl | 0 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_start_dcerpc_smb_svcctl | 176 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_start_dcerpc_smb_svcctl | 177 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_stop_dcerpc_smb_svcctl | 1 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpwmi_create_dcerpc_wmi | 2 | yes | T1047 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_remote_event_subscription_ActiveScriptEventConsumers | 1 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_wbemcomn_dll_hijack | 181 | yes | T1047 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_dcom_shellwindows_stager | 8 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_msbuild_dcerpc_wmi_smb | 10 | yes | T1047 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_psexec_dcerpc_tcp_svcctl | 11 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_remote_event_subscription_ActiveScriptEventConsumers | 5 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_wbemcomn_dll_hijack | 185 | yes | T1047 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_dcom_shellwindows_stager | 9 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_msbuild_dcerpc_wmi_smb | 11 | yes | T1047 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_psexec_dcerpc_tcp_svcctl | 19 | yes | T1021 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/empire_psremoting_stager | 11 | yes | T1021, T1021.006 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_shell_dcerpc_smb_service_dll_hijack | 175 | yes | T1574, T1574.001 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_smbexec_dcerpc_smb_svcctl | 13 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_shell_dcerpc_smb_service_dll_hijack | 177 | yes | T1574, T1574.001 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_smbexec_dcerpc_smb_svcctl | 21 | yes | T1021, T1021.002 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/empire_wmi_dcerpc_wmi_IWbemServices_ExecMethod | 280 | yes | T1047 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/empire_wmic_add_user_backdoor | 5 | yes | T1047 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/mimikatz_CVE-2020-1472_Unauthenticated_NetrServerAuthenticate2 | 3 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/purplesharp_ad_playbook_I | 295 | yes | T1021, T1021.006 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/purplesharp_ad_playbook_I | 297 | yes | T1021, T1021.006 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/schtask_create | 5 | yes | T1053, T1053.005 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/schtask_modification | 2 | no |  |
-| security-datasets/datasets/atomic/windows/other/aptsimulator_cobaltstrike | 6 | yes | T1134, T1134.001, T1134.002 |
-| security-datasets/datasets/atomic/windows/persistence/host/cmd_userinitmprlogonscript_batch | 1 | yes | T1037, T1037.001 |
-| security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_elevated_user | 0 | no |  |
-| security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_standard_user | 186 | no |  |
-| security-datasets/datasets/atomic/windows/persistence/host/empire_schtasks_creation_execution_elevated_user | 186 | yes | T1053, T1053.005 |
+| security-datasets/datasets/atomic/windows/other/aptsimulator_cobaltstrike | 9 | yes | T1134, T1134.001, T1134.002 |
+| security-datasets/datasets/atomic/windows/persistence/host/cmd_userinitmprlogonscript_batch | 4 | yes | T1037, T1037.001 |
+| security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_elevated_user | 2 | yes | T1547, T1547.001 |
+| security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_standard_user | 189 | yes | T1547, T1547.001 |
+| security-datasets/datasets/atomic/windows/persistence/host/empire_schtasks_creation_execution_elevated_user | 187 | yes | T1053, T1053.005 |
 | security-datasets/datasets/atomic/windows/persistence/host/empire_schtasks_creation_standard_user | 3 | yes | T1053, T1053.005 |
-| security-datasets/datasets/atomic/windows/persistence/host/empire_wmi_local_event_subscriptions_elevated_user | 239 | no |  |
+| security-datasets/datasets/atomic/windows/persistence/host/empire_wmi_local_event_subscriptions_elevated_user | 254 | yes | T1546, T1546.003 |
 | security-datasets/datasets/atomic/windows/persistence/host/proxylogon_ssrf_rce_poc | 7 | yes | T1505, T1505.003 |
-| security-datasets/datasets/atomic/windows/privilege_escalation/host/cmd_service_mod_fax | 5 | yes | T1543, T1543.003 |
-| security-datasets/datasets/atomic/windows/privilege_escalation/host/empire_uac_shellapi_fodhelper | 108 | yes | T1548, T1548.002 |
+| security-datasets/datasets/atomic/windows/privilege_escalation/host/cmd_service_mod_fax | 6 | yes | T1543, T1543.003 |
+| security-datasets/datasets/atomic/windows/privilege_escalation/host/empire_uac_shellapi_fodhelper | 112 | yes | T1548, T1548.002 |
 
-- without disclosed rules: n=110 files with techniques in the store; 86 have >=1 finding; 48 have a finding whose technique (parent) matches ground truth
+- without disclosed rules: n=110 files with techniques in the store; 90 have >=1 finding; 61 have a finding whose technique (parent) matches ground truth
 
 | file | findings (n) | technique match | matched techniques |
 | --- | --- | --- | --- |
 | security-datasets/datasets/atomic/windows/collection/host/msf_record_mic | 1 | no |  |
 | security-datasets/datasets/atomic/windows/credential_access/host/cmd_dumping_ntds_dit_file_ntdsutil | 3 | yes | T1003, T1003.003 |
 | security-datasets/datasets/atomic/windows/credential_access/host/cmd_lsass_memory_dumpert_syscalls | 6 | yes | T1003, T1003.001 |
-| security-datasets/datasets/atomic/windows/credential_access/host/cmd_psexec_lsa_secrets_dump | 4 | yes | T1003, T1003.004 |
-| security-datasets/datasets/atomic/windows/credential_access/host/cmd_sam_copy_esentutl | 2 | yes | T1003, T1003.002 |
+| security-datasets/datasets/atomic/windows/credential_access/host/cmd_psexec_lsa_secrets_dump | 6 | yes | T1003, T1003.004 |
+| security-datasets/datasets/atomic/windows/credential_access/host/cmd_sam_copy_esentutl | 39 | yes | T1003, T1003.002 |
 | security-datasets/datasets/atomic/windows/credential_access/host/covenant_dcsync_dcerpc_drsuapi_DsGetNCChanges | 0 | no |  |
 | security-datasets/datasets/atomic/windows/credential_access/host/empire_dcsync_dcerpc_drsuapi_DsGetNCChanges | 0 | no |  |
 | security-datasets/datasets/atomic/windows/credential_access/host/empire_mimikatz_backupkeys_dcerpc_smb_lsarpc | 3 | no |  |
@@ -241,36 +241,36 @@ Runtime conversion errors during evaluation: n=0.
 | security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_process_herpaderping_snippingtool | 1 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_psh_stop_netprofm_eventlog_after_reboot | 0 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_psh_stop_netprofm_eventlog_before_reboot | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset001_minint_key | 1 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset_minint_key | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_wevtutil_modify_security_eventlog_path | 2 | yes | T1685 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/covenant_installutil | 3 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset001_minint_key | 2 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset_minint_key | 1 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_wevtutil_modify_security_eventlog_path | 3 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/covenant_installutil | 9 | yes | T1218 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/covenant_lolbin_wuauclt_createremotethread | 2 | yes | T1218 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_dllinjection_LoadLibrary_CreateRemoteThread | 424 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_enable_rdp.tar.gz | 17 | yes | T1112 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_dllinjection_LoadLibrary_CreateRemoteThread | 427 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_enable_rdp.tar.gz | 19 | yes | T1112 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/empire_launcher_sct_regsvr32 | 11 | yes | T1218, T1218.010 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_monologue_netntlm_downgrade | 74 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_monologue_netntlm_downgrade | 77 | yes | T1112 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/empire_powerview_ldap_ntsecuritydescriptor | 12 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_psinject_PEinjection | 101 | yes | T1055 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/empire_psinject_PEinjection | 102 | yes | T1055 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/empire_wdigest_downgrade.tar.gz | 17 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_cmstp_execution_bypassuac | 5 | yes | T1218, T1218.003 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_control_panel_execution | 1 | yes | T1218, T1218.002 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_disable_eventlog_service_startuptype_modification | 23 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_cmstp_execution_bypassuac | 7 | yes | T1218, T1218.003 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_control_panel_execution | 2 | yes | T1218, T1218.002 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_disable_eventlog_service_startuptype_modification | 24 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/psh_hh_local_html_payload | 2 | yes | T1218, T1218.001 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/psh_mavinject_dll_notepad | 3 | yes | T1055 |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_after_reboot | 26 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_before_reboot | 24 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_after_reboot | 27 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_before_reboot | 25 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/psh_mshta_html_application_execution | 6 | yes | T1218, T1218.005 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/psh_register_cimprovider_execute_dll | 2 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset001_minint_key | 25 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset_minint_key | 24 | no |  |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset001_minint_key | 27 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset_minint_key | 26 | yes | T1685 |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/purplesharp_pe_injection_createremotethread | 4 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/reg_cmd_process_commandline_logging_disabled | 0 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/reg_disable_eventlog_service_startuptype_modification_via_registry | 0 | no |  |
 | security-datasets/datasets/atomic/windows/defense_evasion/host/reg_meterpreter_process_commandline_logging_disabled | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset001_minint_key | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset_minint_key | 0 | no |  |
-| security-datasets/datasets/atomic/windows/defense_evasion/host/wmic_remote_xsl_jscript | 2 | yes | T1220 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset001_minint_key | 1 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset_minint_key | 1 | yes | T1685 |
+| security-datasets/datasets/atomic/windows/defense_evasion/host/wmic_remote_xsl_jscript | 3 | yes | T1220 |
 | security-datasets/datasets/atomic/windows/discovery/host/cmd_discover_iexplorer_version_registry | 1 | yes | T1518 |
 | security-datasets/datasets/atomic/windows/discovery/host/cmd_seatbelt_group_user | 1 | no |  |
 | security-datasets/datasets/atomic/windows/discovery/host/covenant_getdomaingroup_ldap_searchrequest_domain_admins | 1 | no |  |
@@ -280,46 +280,46 @@ Runtime conversion errors during evaluation: n=0.
 | security-datasets/datasets/atomic/windows/discovery/host/empire_shell_net_localgroup_administrators | 2 | no |  |
 | security-datasets/datasets/atomic/windows/discovery/host/empire_shell_rpc_samr_smb_group_domain_admins_standard_user | 2 | no |  |
 | security-datasets/datasets/atomic/windows/discovery/host/empire_shell_samr_EnumDomainUsers | 0 | no |  |
-| security-datasets/datasets/atomic/windows/execution/host/cmd_sharpview_pcre_net | 3 | yes | T1059 |
+| security-datasets/datasets/atomic/windows/execution/host/cmd_sharpview_pcre_net | 6 | yes | T1059 |
 | security-datasets/datasets/atomic/windows/execution/host/empire_launcher_vbs | 6 | yes | T1059 |
 | security-datasets/datasets/atomic/windows/execution/host/psh_powershell_httplistener | 0 | no |  |
 | security-datasets/datasets/atomic/windows/execution/host/psh_python_webserver | 2 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/aadinternals_export_adfsdatabaseconfig_remotely | 0 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_copy_smb_CreateRequest | 0 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_executeexcel4macro_allowed | 4 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_iertutil_dll_hijack | 3 | yes | T1021, T1021.003 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_executeexcel4macro_allowed | 11 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_iertutil_dll_hijack | 7 | yes | T1021, T1021.003 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_registerxll | 170 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_psremoting_command | 97 | yes | T1021, T1021.006 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_psremoting_command | 98 | yes | T1021, T1021.006 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sc_query_dcerpc_smb_svcctl | 0 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_create_dcerpc_smb_svcctl | 0 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_query_dcerpc_smb_svcctl | 0 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_start_dcerpc_smb_svcctl | 176 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_start_dcerpc_smb_svcctl | 177 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_stop_dcerpc_smb_svcctl | 1 | no |  |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpwmi_create_dcerpc_wmi | 2 | yes | T1047 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_remote_event_subscription_ActiveScriptEventConsumers | 1 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_wbemcomn_dll_hijack | 181 | yes | T1047 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_dcom_shellwindows_stager | 8 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_msbuild_dcerpc_wmi_smb | 10 | yes | T1047 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_psexec_dcerpc_tcp_svcctl | 11 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_remote_event_subscription_ActiveScriptEventConsumers | 5 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_wbemcomn_dll_hijack | 185 | yes | T1047 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_dcom_shellwindows_stager | 9 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_msbuild_dcerpc_wmi_smb | 11 | yes | T1047 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_psexec_dcerpc_tcp_svcctl | 19 | yes | T1021 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/empire_psremoting_stager | 11 | yes | T1021, T1021.006 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_shell_dcerpc_smb_service_dll_hijack | 175 | yes | T1574, T1574.001 |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_smbexec_dcerpc_smb_svcctl | 13 | no |  |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_shell_dcerpc_smb_service_dll_hijack | 177 | yes | T1574, T1574.001 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/empire_smbexec_dcerpc_smb_svcctl | 21 | yes | T1021, T1021.002 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/empire_wmi_dcerpc_wmi_IWbemServices_ExecMethod | 280 | yes | T1047 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/empire_wmic_add_user_backdoor | 5 | yes | T1047 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/mimikatz_CVE-2020-1472_Unauthenticated_NetrServerAuthenticate2 | 3 | no |  |
-| security-datasets/datasets/atomic/windows/lateral_movement/host/purplesharp_ad_playbook_I | 295 | yes | T1021, T1021.006 |
+| security-datasets/datasets/atomic/windows/lateral_movement/host/purplesharp_ad_playbook_I | 297 | yes | T1021, T1021.006 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/schtask_create | 5 | yes | T1053, T1053.005 |
 | security-datasets/datasets/atomic/windows/lateral_movement/host/schtask_modification | 2 | no |  |
-| security-datasets/datasets/atomic/windows/other/aptsimulator_cobaltstrike | 6 | yes | T1134, T1134.001, T1134.002 |
-| security-datasets/datasets/atomic/windows/persistence/host/cmd_userinitmprlogonscript_batch | 1 | yes | T1037, T1037.001 |
-| security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_elevated_user | 0 | no |  |
-| security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_standard_user | 186 | no |  |
-| security-datasets/datasets/atomic/windows/persistence/host/empire_schtasks_creation_execution_elevated_user | 186 | yes | T1053, T1053.005 |
+| security-datasets/datasets/atomic/windows/other/aptsimulator_cobaltstrike | 9 | yes | T1134, T1134.001, T1134.002 |
+| security-datasets/datasets/atomic/windows/persistence/host/cmd_userinitmprlogonscript_batch | 4 | yes | T1037, T1037.001 |
+| security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_elevated_user | 2 | yes | T1547, T1547.001 |
+| security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_standard_user | 189 | yes | T1547, T1547.001 |
+| security-datasets/datasets/atomic/windows/persistence/host/empire_schtasks_creation_execution_elevated_user | 187 | yes | T1053, T1053.005 |
 | security-datasets/datasets/atomic/windows/persistence/host/empire_schtasks_creation_standard_user | 3 | yes | T1053, T1053.005 |
-| security-datasets/datasets/atomic/windows/persistence/host/empire_wmi_local_event_subscriptions_elevated_user | 239 | no |  |
+| security-datasets/datasets/atomic/windows/persistence/host/empire_wmi_local_event_subscriptions_elevated_user | 254 | yes | T1546, T1546.003 |
 | security-datasets/datasets/atomic/windows/persistence/host/proxylogon_ssrf_rce_poc | 7 | yes | T1505, T1505.003 |
-| security-datasets/datasets/atomic/windows/privilege_escalation/host/cmd_service_mod_fax | 5 | yes | T1543, T1543.003 |
-| security-datasets/datasets/atomic/windows/privilege_escalation/host/empire_uac_shellapi_fodhelper | 108 | yes | T1548, T1548.002 |
+| security-datasets/datasets/atomic/windows/privilege_escalation/host/cmd_service_mod_fax | 6 | yes | T1543, T1543.003 |
+| security-datasets/datasets/atomic/windows/privilege_escalation/host/empire_uac_shellapi_fodhelper | 111 | yes | T1548, T1548.002 |
 
 ## APT29 day-1 steps
 
@@ -332,12 +332,12 @@ the file total.
 | --- | --- | --- | --- | --- |
 | 1 Initial Breach | 2020-05-02T02:55:57Z .. 2020-05-02T03:02:06Z | 847 | yes | T1059, T1059.001 |
 | 2 Rapid Collection and Exfiltration | 2020-05-02T02:56:18Z .. 2020-05-02T03:03:16Z | 850 | no |  |
-| 3 Deploy Stealth Toolkit | 2020-05-02T02:57:01Z .. 2020-05-02T03:08:53Z | 880 | yes | T1027, T1112, T1548, T1548.002 |
-| 4 Defense Evasion and Discovery | 2020-05-02T02:59:44Z .. 2020-05-02T03:18:22Z | 1409 | yes | T1059, T1059.001, T1069 |
+| 3 Deploy Stealth Toolkit | 2020-05-02T02:57:01Z .. 2020-05-02T03:08:53Z | 886 | yes | T1027, T1112, T1548, T1548.002 |
+| 4 Defense Evasion and Discovery | 2020-05-02T02:59:44Z .. 2020-05-02T03:18:22Z | 1415 | yes | T1059, T1059.001, T1069 |
 | 5 Persistence | 2020-05-02T03:04:16Z .. 2020-05-02T03:04:24Z | 2 | yes | T1547, T1547.001 |
 | 6 Credential Access | 2020-05-02T03:00:37Z .. 2020-05-02T03:05:20Z | 562 | yes | T1003, T1003.001, T1036, T1552, T1552.004 |
-| 7 Collection and Exfiltration | 2020-05-02T03:05:46Z .. 2020-05-02T03:07:15Z | 11 | yes | T1056, T1056.001, T1113, T1115 |
-| 8 Lateral Movement | 2020-05-02T03:00:26Z .. 2020-05-02T03:18:22Z | 1408 | yes | T1021, T1021.002, T1021.006, T1027, T1569, T1569.002 |
+| 7 Collection and Exfiltration | 2020-05-02T03:05:46Z .. 2020-05-02T03:07:15Z | 17 | yes | T1056, T1056.001, T1113, T1115 |
+| 8 Lateral Movement | 2020-05-02T03:00:26Z .. 2020-05-02T03:18:22Z | 1414 | yes | T1021, T1021.002, T1021.006, T1027, T1569, T1569.002 |
 | 9 Collection | 2020-05-02T03:15:32Z .. 2020-05-02T03:17:43Z | 434 | yes | T1059, T1059.001, T1560, T1560.001 |
 | 10 Persistence Execution | 2020-05-02T03:19:53Z .. 2020-05-02T03:28:20Z | 44 | no |  |
 
@@ -347,12 +347,12 @@ the file total.
 | --- | --- | --- | --- | --- |
 | 1 Initial Breach | 2020-05-02T02:55:57Z .. 2020-05-02T03:02:06Z | 844 | yes | T1059, T1059.001 |
 | 2 Rapid Collection and Exfiltration | 2020-05-02T02:56:18Z .. 2020-05-02T03:03:16Z | 847 | no |  |
-| 3 Deploy Stealth Toolkit | 2020-05-02T02:57:01Z .. 2020-05-02T03:08:53Z | 873 | yes | T1027, T1548, T1548.002 |
-| 4 Defense Evasion and Discovery | 2020-05-02T02:59:44Z .. 2020-05-02T03:18:22Z | 1402 | yes | T1059, T1059.001, T1069 |
+| 3 Deploy Stealth Toolkit | 2020-05-02T02:57:01Z .. 2020-05-02T03:08:53Z | 879 | yes | T1027, T1548, T1548.002 |
+| 4 Defense Evasion and Discovery | 2020-05-02T02:59:44Z .. 2020-05-02T03:18:22Z | 1408 | yes | T1059, T1059.001, T1069 |
 | 5 Persistence | 2020-05-02T03:04:16Z .. 2020-05-02T03:04:24Z | 1 | yes | T1547, T1547.001 |
 | 6 Credential Access | 2020-05-02T03:00:37Z .. 2020-05-02T03:05:20Z | 561 | yes | T1003, T1003.001, T1036, T1552, T1552.004 |
-| 7 Collection and Exfiltration | 2020-05-02T03:05:46Z .. 2020-05-02T03:07:15Z | 10 | yes | T1056, T1056.001, T1113 |
-| 8 Lateral Movement | 2020-05-02T03:00:26Z .. 2020-05-02T03:18:22Z | 1401 | yes | T1021, T1021.002, T1021.006, T1027, T1569, T1569.002 |
+| 7 Collection and Exfiltration | 2020-05-02T03:05:46Z .. 2020-05-02T03:07:15Z | 16 | yes | T1056, T1056.001, T1113 |
+| 8 Lateral Movement | 2020-05-02T03:00:26Z .. 2020-05-02T03:18:22Z | 1407 | yes | T1021, T1021.002, T1021.006, T1027, T1569, T1569.002 |
 | 9 Collection | 2020-05-02T03:15:32Z .. 2020-05-02T03:17:43Z | 434 | yes | T1059, T1059.001, T1560, T1560.001 |
 | 10 Persistence Execution | 2020-05-02T03:19:53Z .. 2020-05-02T03:28:20Z | 44 | no |  |
 
@@ -380,6 +380,6 @@ without these rules.
 
 ## Runtime
 
-- full replay store: 73.6s evaluate (7190666 rows scanned across group passes), 166.7s end to end including rule load, the legacy measurement pass for the delta above, finding writes, and the report join
-- peak RSS: 5531 MiB (process max resident set)
+- full replay store: 98.3s evaluate (11178594 rows scanned across group passes), 226.9s end to end including rule load, the legacy measurement pass for the delta above, finding writes, and the report join
+- peak RSS: 6596 MiB (process max resident set)
 

@@ -130,6 +130,30 @@ DATASETS: list[dict[str, object]] = [
         # Relative to the data directory (not the repo root).
         "dest": "mitre-cti",
     },
+    {
+        "name": "ocsf-schema",
+        "repo": "ocsf/ocsf-schema",
+        "rev": "856d462bd20dc46cc1ffed2dfffe3b91ef0fbeba",
+        # Pinned OCSF v1.9.0 schema subset used by the conformance
+        # check (tag 1.9.0 resolves to this commit, verified
+        # 2026-10-28 via the git refs API): top-level dictionary,
+        # categories (class ids compose as category*1000+uid) and
+        # LICENSE plus the event, object and profile directories and
+        # the Windows extension (upstream path extensions/windows);
+        # nothing else is fetched.
+        "prefixes": [
+            "categories.json",
+            "dictionary.json",
+            "LICENSE",
+            "events",
+            "objects",
+            "profiles",
+            "extensions/windows",
+        ],
+        "include_root_samples": False,
+        # Relative to the data directory (not the repo root).
+        "dest": "ocsf-schema",
+    },
 ]
 
 MARKER = ".fetch_rev"

@@ -48,3 +48,13 @@ matches: every Detection Finding carries the Sigma rule author in
 `unmapped.sigma_author` and the versioned rule permalink in
 `finding_info.src_url`. Rule files and the pinned `LICENSE` live
 under git-ignored `data/sigma/` and are never committed.
+
+# OCSF schema
+
+`corvus/normalize/conformance.py` validates every emitted OCSF record
+against the pinned schema `ocsf/ocsf-schema` tag `1.9.0` (commit
+`856d462bd20dc46cc1ffed2dfffe3b91ef0fbeba`), fetched with checksums
+into git-ignored `data/ocsf-schema/` by `scripts/fetch_datasets.py`
+and never committed. The schema is published under the Apache License,
+Version 2.0 (pinned `LICENSE` in that directory); no OCSF schema text
+ships in this repository.

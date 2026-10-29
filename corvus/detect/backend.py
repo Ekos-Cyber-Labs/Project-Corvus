@@ -76,7 +76,7 @@ def validate_regex_patterns(sql: str) -> str | None:
                 connection.execute(
                     "SELECT regexp_matches('', $re)", {"re": pattern}
                 ).fetchall()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return pattern
     finally:
         connection.close()

@@ -29,12 +29,14 @@ Shared rules for all eleven classes:
   per `(channel, event id)` in `WindowsReadStats`, and archive members
   with no Windows event JSON (for example network pcaps) count as
   `unsupported` instead of raising.
-- `entity_keys` is a Corvus extension with canonical, lowercased keys for
-  deterministic correlation: `user` as `domain\user`, `host` as the short
-  hostname, `ip` as the device address, plus `src_ip` / `dst_ip` from the
-  endpoints. All classes compute them with the one shared
-  `compute_entity_keys` function from the actor, device and endpoint
-  fields, so a placeholder device address never hides an endpoint address.
+- `entity_keys` is Corvus-internal, not an OCSF attribute: canonical,
+  lowercased keys for deterministic correlation (`user` as `domain\user`,
+  `host` as the short hostname, `ip` as the device address, plus
+  `src_ip` / `dst_ip` from the endpoints). All classes compute them with
+  the one shared `compute_entity_keys` function from the actor, device
+  and endpoint fields, so a placeholder device address never hides an
+  endpoint address. The keys travel as store columns and are derived on
+  read; they are never serialized into the OCSF record.
 
 ## Classes and activity IDs
 
@@ -64,29 +66,40 @@ values Corvus mappers may emit.
 
 ## Class-specific fields
 
-- Authentication carries `status` (for example `Success` / `Failure`) and
-  `status_id` (0 Unknown, 1 Success, 2 Failure, 99 Other), which feed the
-  success-vs-attempt factor of the severity floor, plus `logon_type` /
-  `logon_type_id` (Windows LogonType mapped to the pinned OCSF 1.9.0 enum:
-  0 Unknown, 1 System, 2 Interactive, 3 Network, 4 Batch, 5 OS Service,
-  7 Unlock, 8 Network Cleartext, 9 New Credentials, 10 Remote Interactive,
-  11 Cached Interactive, 12 Cached Remote Interactive, 13 Cached Unlock,
-  99 Other; Windows 0 becomes 1, 12 and 13 pass straight through, and
-  anything else without an OCSF counterpart becomes 99; the raw value
-  stays in `unmapped`).
+- Every mapper output declares the `host` profile in
+  `metadata.profiles`: Windows records are host-observed and always
+  carry `device` (with schema `type_id` 0 Unknown) and `actor` context,
+  which the schema gates behind that profile. A record that cannot
+  supply a required attribute (a script without text, a registry value
+  without a target, a service without a name) is counted unmapped
+  instead of emitted half-formed.
+- Authentication carries the required top-level `user` subject (the same
+  identity sits under `actor.user`), `status` (for example `Success` /
+  `Failure`) and `status_id` (0 Unknown, 1 Success, 2 Failure, 99 Other),
+  which feed the success-vs-attempt factor of the severity floor, plus
+  `logon_type` / `logon_type_id` (Windows LogonType mapped to the pinned
+  OCSF 1.9.0 enum: 0 Unknown, 1 System, 2 Interactive, 3 Network, 4 Batch,
+  5 OS Service, 7 Unlock, 8 Network Cleartext, 9 New Credentials,
+  10 Remote Interactive, 11 Cached Interactive, 12 Cached Remote
+  Interactive, 13 Cached Unlock, 99 Other; Windows 0 becomes 1, 12 and
+  13 pass straight through, and anything else without an OCSF counterpart
+  becomes 99; the raw value stays in `unmapped`).
 - Process Activity carries `process` (`pid`, `name`, `cmd_line`, `file`,
-  `parent_process`); the actor may additionally carry the process object
-  for process events. For handle opens it also carries `actual_permissions`
-  (the platform-native granted access mask, kept as the original hex
-  string).
+  `parent_process`, always emitted); the actor may additionally carry
+  the process object for process events. For handle opens it also
+  carries `actual_permissions`, the platform-native granted access mask
+  parsed to an integer (`"0x1010"` becomes `4112`); an unparseable mask
+  stays verbatim in `unmapped`.
 - Script Activity carries `script` (`uid` holding the PowerShell
-  `ScriptBlockId`, `script_content`, `type_id` 2 / `type` `"PowerShell"`);
+  `ScriptBlockId`, `script_content` as the schema `long_string` object
+  with the text in `value`, `type_id` 2 / `type` `"PowerShell"`);
   `MessageNumber` / `MessageTotal` stay in `unmapped`, and the messages of
   a split block share the script `uid` for downstream grouping. Module
-  logging (4103, content in `Payload`) and classic pipeline execution
+  logging (4103, content in `Payload`, falling back to the NXLog
+  `Message` invocation detail) and classic pipeline execution
   (Windows PowerShell 800, content in `Message`) map to the same class
-  with no block id; Windows PowerShell 600 (provider lifecycle) stays
-  unmapped and counted.
+  with no block id; a script record with no text, and Windows
+  PowerShell 600 (provider lifecycle), stay unmapped and counted.
 - Registry Key Activity carries `reg_key` (`path`; object
   `extensions/windows/objects/registry_key.json`) and, for renames,
   `prev_reg_key` with the pre-rename path. Sysmon 12 `CreateKey`
@@ -118,9 +131,12 @@ values Corvus mappers may emit.
   `Domain`; no service-account field, so `service_start_name` stays
   empty). Raw type values stay in `unmapped`.
 - Network Activity carries `action` / `action_id` (0 Unknown, 1 Allowed,
-  2 Denied, 99 Other) alongside the endpoints.
-- File System Activity carries `file` (`path`, `name`; `name` is derived
-  from `path` when missing).
+  2 Denied, 99 Other) alongside the endpoints; records carrying an
+  action declare the `security_control` profile the schema gates it
+  behind.
+- File System Activity carries `file` (`path`, `name` derived from
+  `path`, schema `type_id` 1 Regular File; process images and loaded
+  modules use 8 Executable File).
 - Scheduled Job Activity carries `job` (`name`, `job_actions[]` with
   `cmd_line` plus `type_id` / `type`; `job.cmd_line` is deprecated since
   OCSF 1.9.0 and is never written). Security 4698 contributes the first

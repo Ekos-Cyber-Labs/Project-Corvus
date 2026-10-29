@@ -222,6 +222,20 @@ def flat_powershell_script() -> dict[str, Any]:
     }
 
 
+def flat_powershell_script_message() -> dict[str, Any]:
+    """Logstash 4104: the block is rendered in Message, no ScriptBlockText."""
+    return {
+        "Channel": "Microsoft-Windows-PowerShell/Operational",
+        "EventID": 4104,
+        "EventIdx": 121,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "User": "EXAMPLE\\jdoe",
+        "ScriptBlockId": "{eeeeeeee-1111-2222-3333-444444444444}",
+        "Message": "Creating Scriptblock text (1 of 1):\r\nGet-Process",
+    }
+
+
 def flat_powershell_script_split() -> list[dict[str, Any]]:
     """One 4104 script block split across three messages (hand-made parts)."""
     block = "{dddddddd-0000-1111-2222-333333333333}"
@@ -257,6 +271,35 @@ def flat_powershell_module() -> dict[str, Any]:
     }
 
 
+def flat_powershell_module_message() -> dict[str, Any]:
+    """NXLog 4103: module logging rendered in Message, no Payload key."""
+    return {
+        "Channel": "Microsoft-Windows-PowerShell/Operational",
+        "EventID": 4103,
+        "EventIdx": 122,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "AccountName": "jdoe",
+        "Domain": "EXAMPLE",
+        "ContextInfo": "Host Name = ConsoleHost (invented context).",
+        "Message": 'CommandInvocation(Get-Process): "Get-Process"',
+    }
+
+
+def flat_powershell_module_empty() -> dict[str, Any]:
+    """4103 with neither Payload nor Message: counted unmapped, never half-formed."""
+    return {
+        "Channel": "Microsoft-Windows-PowerShell/Operational",
+        "EventID": 4103,
+        "EventIdx": 123,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "AccountName": "jdoe",
+        "Domain": "EXAMPLE",
+        "ContextInfo": "Host Name = ConsoleHost (invented context).",
+    }
+
+
 def flat_windows_powershell_pipeline() -> dict[str, Any]:
     """Flat Windows PowerShell 800 (pipeline execution details)."""
     return {
@@ -266,6 +309,34 @@ def flat_windows_powershell_pipeline() -> dict[str, Any]:
         "Hostname": "web01.example.com",
         "TimeCreated": SYS_UTC,
         "Message": "Pipeline execution details for command line: Get-Process",
+    }
+
+
+def flat_windows_powershell_pipeline_data() -> dict[str, Any]:
+    """EVTX-form 800: pipeline detail in EventData.Data #text, no Message."""
+    return {
+        "Channel": "Windows PowerShell",
+        "EventID": 800,
+        "EventIdx": 124,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
+        "Data": {
+            "#text": [
+                "Get-Process",
+                "\tDetailSequence=1\r\n\tDetailTotal=1\r\n",
+            ]
+        },
+    }
+
+
+def flat_windows_powershell_pipeline_empty() -> dict[str, Any]:
+    """800 with no Message and no Data: counted unmapped, never half-formed."""
+    return {
+        "Channel": "Windows PowerShell",
+        "EventID": 800,
+        "EventIdx": 125,
+        "Hostname": "web01.example.com",
+        "TimeCreated": SYS_UTC,
     }
 
 
@@ -279,6 +350,27 @@ def flat_windows_powershell_provider() -> dict[str, Any]:
         "TimeCreated": SYS_UTC,
         "Message": 'Provider "Registry" is Started (invented text).',
     }
+
+
+def flat_sysmon_file_no_target() -> dict[str, Any]:
+    """Sysmon 11 without TargetFilename: counted unmapped, never half-formed."""
+    record = flat_sysmon_file()
+    del record["TargetFilename"]
+    return record
+
+
+def flat_sysmon_registry_value_no_target() -> dict[str, Any]:
+    """Sysmon 13 with details but no target: counted unmapped, never half-formed."""
+    record = flat_sysmon_registry_value()
+    del record["TargetObject"]
+    return record
+
+
+def flat_security_service_no_name() -> dict[str, Any]:
+    """Security 4697 without ServiceName: counted unmapped, never half-formed."""
+    record = flat_security_service()
+    del record["ServiceName"]
+    return record
 
 
 def flat_service_install(*, channel: str = "System") -> dict[str, Any]:
