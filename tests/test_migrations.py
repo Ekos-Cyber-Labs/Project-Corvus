@@ -14,6 +14,8 @@ EXPECTED_TABLES = {
     "checkpoints",
     "work_queue",
     "incidents",
+    "incident_signals",
+    "security_events",
     "agent_steps",
     "rules",
     "dispositions",
@@ -49,8 +51,27 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "severity_factors",
         "status",
         "ai_status",
+        "review_required",
         "created_at",
         "updated_at",
+    },
+    "incident_signals": {
+        "id",
+        "incident_id",
+        "kind",
+        "event_uid",
+        "field",
+        "pattern_id",
+        "requested_effect",
+        "detail",
+        "created_at",
+    },
+    "security_events": {
+        "id",
+        "incident_id",
+        "kind",
+        "detail",
+        "created_at",
     },
     "agent_steps": {
         "id",
@@ -156,6 +177,7 @@ def test_migrate_applies_twice_idempotently() -> None:
         assert "0002_core_tables.sql" in first
         assert "0003_severity_factors.sql" in first
         assert "0004_llm_audit.sql" in first
+        assert "0005_injection_signals.sql" in first
         assert migrate(test_url) == []
         with psycopg.connect(test_url) as conn:
             with conn.cursor() as cur:
@@ -165,6 +187,7 @@ def test_migrate_applies_twice_idempotently() -> None:
                     "0002_core_tables.sql",
                     "0003_severity_factors.sql",
                     "0004_llm_audit.sql",
+                    "0005_injection_signals.sql",
                 ]
 
         # File-level idempotency: executing 0002 and 0004 directly, twice, is safe.
@@ -183,6 +206,14 @@ def test_migrate_applies_twice_idempotently() -> None:
             with conn.cursor() as cur:
                 cur.execute(audit_text)
                 cur.execute(audit_text)
+            conn.commit()
+        signals_text = (Path(MIGRATIONS_DIR) / "0005_injection_signals.sql").read_text(
+            encoding="utf-8"
+        )
+        with psycopg.connect(test_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(signals_text)
+                cur.execute(signals_text)
             conn.commit()
 
         with psycopg.connect(test_url) as conn:
@@ -380,5 +411,71 @@ def test_migration_004_audit_constraints() -> None:
                 test_url,
                 "UPDATE spend_reservations SET status = 'spent'",
             )
+    finally:
+        _drop_database(admin_url, name)
+
+
+@pytest.mark.integration
+def test_migration_005_signal_constraints() -> None:
+    admin_url, test_url = _test_database_urls()
+    name = _create_database(admin_url, test_url)
+    try:
+        migrate(test_url)
+
+        with psycopg.connect(test_url, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO incidents "
+                    "(correlation_key, severity_floor, severity_id) "
+                    "VALUES ('signals-1', 3, 3) RETURNING id, review_required"
+                )
+                row = cur.fetchone()
+                assert row is not None
+                incident_id, review_required = row
+                assert review_required is False
+
+        signal_sql = (
+            "INSERT INTO incident_signals (incident_id, kind, event_uid,"
+            " field, pattern_id, requested_effect) "
+            "VALUES (%s, 'injection', 'ev-1', 'process.cmd_line',"
+            " 'steer.classify_benign', 'suppress')"
+        )
+        _execute(test_url, signal_sql, (incident_id,))
+        # Re-scans hit the natural key instead of duplicating the signal.
+        with pytest.raises(errors.UniqueViolation):
+            _execute(test_url, signal_sql, (incident_id,))
+        # Requested effects are a closed set.
+        with pytest.raises(errors.CheckViolation):
+            _execute(
+                test_url,
+                "INSERT INTO incident_signals (incident_id, kind, event_uid,"
+                " field, pattern_id, requested_effect) "
+                "VALUES (%s, 'injection', 'ev-2', 'process.cmd_line',"
+                " 'steer.classify_benign', 'escalate')",
+                (incident_id,),
+            )
+
+        # Security events may belong to no incident, but never to a
+        # missing one; signals cascade with their incident.
+        _execute(
+            test_url,
+            "INSERT INTO security_events (kind, detail) "
+            "VALUES ('egress_blocked', '{}')",
+        )
+        with pytest.raises(errors.ForeignKeyViolation):
+            _execute(
+                test_url,
+                "INSERT INTO security_events (incident_id, kind) "
+                "VALUES (424242, 'quarantined')",
+            )
+        _execute(test_url, "DELETE FROM incidents WHERE id = %s", (incident_id,))
+        with psycopg.connect(test_url, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM incident_signals")
+                row = cur.fetchone()
+                assert row is not None and row[0] == 0
+                cur.execute("SELECT COUNT(*) FROM security_events")
+                row = cur.fetchone()
+                assert row is not None and row[0] == 1
     finally:
         _drop_database(admin_url, name)

@@ -603,3 +603,43 @@ rules back to Wazuh (shadow first, human approval).
   the full `make test` (550 passed with Postgres). No normalizer,
   correlation, prompt or model changes, so no eval delta. Compose
   Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: added the deterministic prompt-injection signal
+  (`corvus/guardrails/injection.py`, security-reviewer): 16
+  documented patterns in 4 families (instruction override, role
+  reassignment, verdict steering, exfiltration requests) with stable
+  ids, examples, and suppress/inflate/exfiltrate/other effects, over
+  normalized attacker-controlled OCSF fields (Unicode NFKC, case
+  folding, zero-width/bidi removal, separator collapsing; spans refer
+  to normalized text), plus the echo predicate for the future
+  validator 5 and idempotent `scan_incident` (migration
+  `0005_injection_signals.sql`: `incident_signals`,
+  `security_events`, `incidents.review_required`; signals never move
+  the severity floor). Corpus: 31 injected strings flagged (every
+  pattern, several case/spacing/separator/zero-width/punctuation
+  encodings, imperative severity-to-info), benign strings clean;
+  rescans persist once; obeying outputs
+  flagged, quoted and honest outputs clean. Review follow-up fixed
+  two defects the synthetic set could not see: `raw_data` JSON
+  envelopes are walked leaf by leaf with mapped-field dedupe (keys
+  never scanned), and flat matches must be token-aligned in the
+  collapsed text; `informational`/`info` dropped from
+  `steer.severity_low` on measured telemetry (routine PowerShell and
+  Sysmon severity metadata). Real-data census
+  (`eval/injection_census.py`, every 20th event, n=40151 over the
+  attack and benign stores): 30935 signals on 27125 events before
+  (30926 severity_low from the envelopes, 9 act_as), 0 signals on 0
+  events after; act_as/you_are_now need no further tightening.
+  Second round: flat boundary relaxed to non-alphanumeric neighbours
+  (quoted/parenthesized payloads realign, in-word matches still
+  rejected); imperative "set severity to info|informational"
+  restored, bare form stays out; census still 0 on 0 at n=40151.
+  Corpus now 33 benign strings (react/assets, nowhere, severity 10,
+  whenever reported, Severity = Informational), all clean. Synthetic
+  benign set
+  (`eval/benign_windows.py`, seed 7): n=312, 0 false positives (rate
+  0.0). Honesty note (signal, not defence; no "detects all" claim)
+  in the module docstring and `docs/threat-model.md`. Verified with
+  `make lint` (green) and the full `make test` (575 passed with
+  Postgres). No normalizer, correlation, prompt or model changes, so
+  no eval delta. Compose Postgres left running. Awaiting maintainer
+  commit.
