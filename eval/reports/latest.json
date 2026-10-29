@@ -1,17 +1,17 @@
 {
   "meta": {
     "producing_command": "corvus eval run --replay-dir data/replay --rules-dir data/sigma/rules --attack data/attack/enterprise.json --ground-truth data/ground_truth.json --benign-hosts 4 --benign-hours 24 --benign-seed 7",
-    "git_commit": "577d3fac4987bc44b3b887c3454631a3eed0c5b9",
-    "generated_at": "2026-10-28",
-    "dirty_tree": true,
-    "dirty_paths_n": 6,
+    "git_commit": "ef4233419b22cb9570f5b31c7d4b9d370edc4d5b",
+    "generated_at": "2026-10-29",
+    "dirty_tree": false,
+    "dirty_paths_n": 0,
     "data_window": {
       "start": "2019-02-02T09:16:58.787000Z",
       "end": "2023-07-19T12:25:28.432000Z"
     },
-    "runtime_seconds": 319.1,
-    "detect_seconds": 115.8,
-    "correlate_seconds": 4.2
+    "runtime_seconds": 255.1,
+    "detect_seconds": 107.7,
+    "correlate_seconds": 2.9
   },
   "inputs": {
     "rules": {

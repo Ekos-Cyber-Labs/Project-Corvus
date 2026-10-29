@@ -1,9 +1,9 @@
 # Corvus eval — latest
 
-Producing command: `corvus eval run --replay-dir data/replay --rules-dir data/sigma/rules --attack data/attack/enterprise.json --ground-truth data/ground_truth.json --benign-hosts 4 --benign-hours 24 --benign-seed 7` (n = 1 run, git commit `577d3fac4987bc44b3b887c3454631a3eed0c5b9`, generated 2026-10-28).
-Data window: 2019-02-02T09:16:58.787000Z to 2023-07-19T12:25:28.432000Z (`time` min/max over n=798471 stored events). Runtime: 319.1 s wall (detect 115.8 s, correlate 4.2 s).
+Producing command: `corvus eval run --replay-dir data/replay --rules-dir data/sigma/rules --attack data/attack/enterprise.json --ground-truth data/ground_truth.json --benign-hosts 4 --benign-hours 24 --benign-seed 7` (n = 1 run, git commit `ef4233419b22cb9570f5b31c7d4b9d370edc4d5b`, generated 2026-10-29).
+Data window: 2019-02-02T09:16:58.787000Z to 2023-07-19T12:25:28.432000Z (`time` min/max over n=798471 stored events). Runtime: 255.1 s wall (detect 107.7 s, correlate 2.9 s).
 Gates: benign Critical gate pass, leakage gate pass.
-Working tree: dirty at run start (n=6 changed paths, excluding eval/reports/latest.*); the commit recorded above is the parent of uncommitted work.
+Working tree: clean at run start.
 
 ## Inputs
 
@@ -252,6 +252,8 @@ n=110 with events in the store, n=34 without (network/pcap, never ingested: excl
 - benign incidents: n=4 -> n=4 (+0)
 - benign Critical+ incidents: n=0 -> n=0 (+0)
 - atomic files with a technique match: n=53 -> n=53 (+0)
+- atomic files with an exact technique match: n=48 -> n=48 (+0)
+- atomic files matching at parent level only: n=5 -> n=5 (+0)
 - findings: n=6074 -> n=6074 (+0)
 - incidents: n=234 -> n=234 (+0)
 - in-band events: n=130 -> n=130 (+0)
