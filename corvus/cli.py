@@ -134,12 +134,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "replay" and args.replay_command == "load":
         from corvus.adapters.replay import format_summary, load_path
 
-        summary = load_path(
-            args.path,
-            replay_dir=args.replay_dir,
-            data_dir=args.data_dir,
-            batch_size=args.batch_size,
-        )
+        try:
+            summary = load_path(
+                args.path,
+                replay_dir=args.replay_dir,
+                data_dir=args.data_dir,
+                batch_size=args.batch_size,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
         print(format_summary(summary, args.replay_dir))
         return 0
     if args.command == "replay" and args.replay_command == "detect":

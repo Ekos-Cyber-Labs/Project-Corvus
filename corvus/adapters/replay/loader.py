@@ -78,8 +78,11 @@ def discover_dataset_files(source: Path) -> list[Path]:
     also skip bare ``.json`` files: OTRF ships some payloads both zipped
     and bare (byte-identical), and the metadata links only the archive,
     so loading both would duplicate the events with new uids. Pass a
-    ``.json`` path directly to load it explicitly.
+    ``.json`` path directly to load it explicitly. A path that does not
+    exist raises instead of loading zero events.
     """
+    if not source.exists():
+        raise ValueError(f"dataset path does not exist: {source}")
     if source.is_file():
         if not _supported_suffix(source):
             raise ValueError(f"unsupported dataset file suffix for {source}")

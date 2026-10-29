@@ -370,3 +370,33 @@ rules back to Wazuh (shadow first, human approval).
   settings need a fresh database. Verified with `make lint` and the
   full `make test` (297 passed with Postgres). Awaiting maintainer
   commit.
+- 2026-10-28: built the two eval inputs for the next harness prompt
+  (no harness itself). `eval/benign_windows.py` generates a declared
+  synthetic benign Windows set (flat NXLog records in a `.zip` under
+  git-ignored `data/benign/`, default 4 hosts and 24 h from
+  2024-05-02, fixed seed, byte-stable bundle via a fixed zip member
+  timestamp, per-host counts scaling with `--hours` as a per-hour
+  rate): interactive/service logons, typo failures with no success
+  after, benign admin processes, update tasks, installer registry
+  writes including legitimate Run keys, benign PowerShell, `0x1000`
+  lsass queries. The first run tripped two rules on invented record
+  shapes (explorer-parented svchost, ConsoleHost-only module-logging
+  context); both were corrected to the real benign shapes with the
+  reasons documented in the script. Measured (seed 7): n=312 records
+  at 24 h and n=108 at 6 h; replay load maps all 312 with zero
+  unmapped and zero in-band; `corvus replay detect` gives 4 findings,
+  all medium from the Autorun-keys rule on the documented installer
+  Run keys; `corvus correlate replay` gives 4 incidents, all floor 3,
+  factor 4 silent, none Critical. `eval/train_test_split.py` splits
+  OTRF *recordings* (host/network siblings collapsed) per technique
+  by hash rank: 55 techniques, 18 testable, 37 untestable (fewer than
+  2 recordings, including purge-emptied test sides); `T0000` excluded
+  and reported (2 files); multi-label files disclosed; zero test
+  recordings trained anywhere, verified on the real ground truth.
+  Small fixes alongside: relative `--out` resolves against the cwd,
+  and `corvus replay load` of a missing path exits 2 with a clear
+  error. Covered by the tests in `tests/test_benign_windows.py`,
+  `tests/test_train_test_split.py` and `tests/test_replay.py`.
+  Verified with `make lint` (green) and the full `make test` (316
+  passed with Postgres). Compose Postgres left running. Awaiting
+  maintainer commit.

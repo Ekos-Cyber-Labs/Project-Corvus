@@ -192,6 +192,37 @@ def test_load_unsupported_file_suffix_loads_nothing(tmp_path: Path) -> None:
         load_path(data_dir / "notes.txt", replay_dir=replay_dir, data_dir=data_dir)
 
 
+def test_load_missing_path_raises_instead_of_loading_zero(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    replay_dir = tmp_path / "replay"
+    missing = data_dir / "no-such-file.zip"
+    with pytest.raises(ValueError, match="does not exist"):
+        load_path(missing, replay_dir=replay_dir, data_dir=data_dir)
+    with pytest.raises(ValueError, match="does not exist"):
+        load_path(tmp_path / "no-such-dir", replay_dir=replay_dir, data_dir=data_dir)
+
+
+def test_cli_load_missing_path_exits_nonzero(tmp_path: Path, capsys: object) -> None:
+    from corvus.cli import main as cli_main
+
+    missing = tmp_path / "no-such-file.zip"
+    with pytest.raises(SystemExit) as exc:
+        cli_main(
+            [
+                "replay",
+                "load",
+                str(missing),
+                "--replay-dir",
+                str(tmp_path / "replay"),
+                "--data-dir",
+                str(tmp_path / "data"),
+            ]
+        )
+    assert exc.value.code != 0
+    assert "does not exist" in capsys.readouterr().err
+
+
 def _write_small_json(path: Path) -> Path:
     path.write_text(
         "\n".join(
