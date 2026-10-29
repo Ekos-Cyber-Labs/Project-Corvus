@@ -452,6 +452,8 @@
       ],
       "match_kind": "direct",
       "note": "Plan 8.A-8.C: LDAP remote discovery (T1018), remote PowerShell (plan T1028 -> current T1021.006), UPX-packed payload (plan T1045 -> current T1027.002), PsExec service execution (plan T1077/T1035 -> current T1021.002/T1569.002) with a stolen valid account (plan T1078, refined to T1078.002).",
+      "lateral_source": "scranton",
+      "lateral_target": "nashua",
       "window": {
         "start": "2020-05-02T03:00:26Z",
         "end": "2020-05-02T03:18:22Z"

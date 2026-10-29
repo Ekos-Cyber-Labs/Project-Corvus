@@ -113,6 +113,13 @@ Every prompt names the role it works under. Changes under `corvus/llm`, `corvus/
 - Every emitted OCSF record passes the conformance test; a new class or object is added to it in the same change.
 - Changes to normalizers, correlation, or prompts report the eval delta.
 
+## Review lessons
+
+- Date `.agents/MEMORY.md` entries with the maintainer's local date
+  (UTC-6), not the sandbox clock, which runs in UTC.
+- Leave the compose Postgres in the state you found it (do not stop
+  or remove it after the tests).
+
 ## Known pitfalls (check before finishing)
 
 - Graceful shutdown on SIGTERM.

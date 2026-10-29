@@ -79,6 +79,30 @@ def build_parser() -> argparse.ArgumentParser:
         default="data/attack/enterprise.json",
         help="Compact ATT&CK dictionary (default: data/attack/enterprise.json).",
     )
+
+    correlate = sub.add_parser("correlate", help="Deterministic correlation commands.")
+    correlate_sub = correlate.add_subparsers(dest="correlate_command", required=True)
+    replay_corr = correlate_sub.add_parser(
+        "replay",
+        help="Correlate replay findings into Postgres incidents (upsert by "
+        "correlation_key; measurements with different settings should "
+        "use a fresh database).",
+    )
+    replay_corr.add_argument(
+        "--replay-dir",
+        default="data/replay",
+        help="Replay Parquet store directory (default: data/replay).",
+    )
+    replay_corr.add_argument(
+        "--attack",
+        default="data/attack/enterprise.json",
+        help="Compact ATT&CK dictionary (default: data/attack/enterprise.json).",
+    )
+    replay_corr.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
     return parser
 
 
@@ -151,6 +175,50 @@ def main(argv: list[str] | None = None) -> int:
         )
         for rule_id in sorted(eval_stats.rules_errored):
             print(f"  error {rule_id}: {eval_stats.rules_errored[rule_id]}")
+        return 0
+    if args.command == "correlate" and args.correlate_command == "replay":
+        from collections import Counter
+
+        from corvus.correlate.replay import correlate_replay_store
+        from corvus.settings import get_settings
+        from corvus.state.incidents import (
+            stored_correlation_keys,
+            stored_incident_count,
+            upsert_incidents,
+        )
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        settings = get_settings()
+        migrate(args.database_url)
+        incidents = correlate_replay_store(
+            replay_dir=args.replay_dir,
+            attack_path=args.attack,
+            settings=settings,
+        )
+        upsert_incidents(args.database_url, incidents)
+        floors = Counter(incident["severity_floor"] for incident in incidents)
+        factor4 = sum(
+            1
+            for incident in incidents
+            if incident["severity_factors"]["factor_4_success_vs_attempt"].get("fired")
+        )
+        print(
+            f"correlated {len(incidents)} incidents "
+            f"(floors {dict(sorted(floors.items()))}, "
+            f"factor 4 fired on {factor4})"
+        )
+        print(f"stored {stored_incident_count(args.database_url)} incidents")
+        stale = len(
+            stored_correlation_keys(args.database_url)
+            - {incident["correlation_key"] for incident in incidents}
+        )
+        print(
+            f"{stale} stored incidents were not produced by this run "
+            "(stale keys from earlier settings are kept; use a fresh "
+            "database when settings change)"
+        )
         return 0
     parser.error("unknown command")
     return 2

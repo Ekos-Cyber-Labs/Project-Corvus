@@ -337,3 +337,36 @@ rules back to Wazuh (shadow first, human approval).
   SigmaHQ entries merged into one. Verified with `make lint` (green)
   and the full `make test` (269 passed with Postgres). Awaiting
   maintainer commit.
+- 2026-10-28: stored deterministic incidents in Postgres and measured
+  them over the replay store (`corvus correlate replay`, migration
+  `0003_severity_factors.sql`, `corvus/state/incidents.py`,
+  `corvus/correlate/replay.py`). The CLI loads every replay finding,
+  the referenced events plus Authentication events in the padded
+  window through the replay store, and passes the session gap, max
+  span and failure threshold from `get_settings()`; re-runs upsert by
+  `correlation_key` with no duplicates. Census
+  (`eval/correlate_census.py`, `eval/reports/day2_correlate.md`,
+  counts only): 798471 events -> 6074 findings -> 234 incidents
+  (floors 2:7, 3:115, 4:87, 5:25; factor 4 fires once); the APT29
+  day-1 file contributes 152491 events -> 1483 findings -> 3
+  incidents; max 971 / median 3 findings per incident. The two chain
+  incidents cover 3 and 8 of the 10 ground-truth steps; the lateral
+  step stays split across two incidents. Stored run identical to the
+  in-memory run (n=234). Verified with `make lint` and the full
+  `make test` (296 passed with Postgres). Awaiting maintainer commit.
+- 2026-10-28: fix pass on the correlation storage and report. The
+  step-8 lateral conclusion ranked hosts inside the wide window, so
+  step 8 of `eval/apt29_day1_ground_truth.json` now names the
+  lateral source/target hosts, verified from
+  PsExec/PSEXESVC/Invoke-Command-marked replay events by class and
+  count, and `eval/correlate_census.py` reads them from the ground
+  truth and names the join rule from the incident's own findings and
+  referenced events (a shared human user). `upsert_incidents` keeps a
+  stored `severity_id` still within the new [floor, floor+1] on
+  conflict and resets to the new floor otherwise; a new Postgres
+  test pins both halves (it fails on the old SQL). `corvus correlate
+  replay` prints how many stored incidents the run did not produce,
+  and the report plus the CLI help say measurements with different
+  settings need a fresh database. Verified with `make lint` and the
+  full `make test` (297 passed with Postgres). Awaiting maintainer
+  commit.

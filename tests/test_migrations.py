@@ -44,6 +44,7 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "deterministic_score",
         "severity_floor",
         "severity_id",
+        "severity_factors",
         "status",
         "ai_status",
         "created_at",
@@ -131,6 +132,7 @@ def test_migrate_applies_twice_idempotently() -> None:
         first = migrate(test_url)
         assert "0001_schema_migrations.sql" in first
         assert "0002_core_tables.sql" in first
+        assert "0003_severity_factors.sql" in first
         assert migrate(test_url) == []
         with psycopg.connect(test_url) as conn:
             with conn.cursor() as cur:
@@ -138,6 +140,7 @@ def test_migrate_applies_twice_idempotently() -> None:
                 assert [row[0] for row in cur.fetchall()] == [
                     "0001_schema_migrations.sql",
                     "0002_core_tables.sql",
+                    "0003_severity_factors.sql",
                 ]
 
         # File-level idempotency: executing 0002 directly, twice, is safe.
