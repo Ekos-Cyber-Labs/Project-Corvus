@@ -532,3 +532,31 @@ rules back to Wazuh (shadow first, human approval).
   failures. Verified with `make lint` (green) and the full `make test`
   (427 passed with Postgres). No eval delta. Compose Postgres left
   running. Awaiting maintainer commit.
+- 2026-10-29: added the single-attempt LLM transport
+  (`corvus/llm/transport.py`, `corvus/llm/attempts.py`, no validators
+  or retry loop yet). One attempt over httpx2 returns content,
+  reasoning, finish reason, typed tool calls, exact token counts with
+  source, latency and status; Glimmer token ids split on channel
+  headers (reasoning 267, answer 88, overhead 10 on the recorded ok
+  reply) with detokenize caching and an estimated fallback; errors use
+  the recorded Meta shape; retries only on 429/5xx; secrets never in
+  errors. `record_attempt` writes the attempt row plus the billed
+  spend row in one transaction. 32 new tests (recorded fixtures,
+  derived reasoning-only case, stub server, injected clock). One new
+  assertion expected unrounded spend (fixed; the code was right).
+  Verified with `make lint` (green) and the full `make test` (460
+  passed with Postgres). No eval delta. Compose Postgres left
+  running. Awaiting maintainer commit.
+- 2026-10-29: routed LLM spend through the reservation exactly once
+  (`corvus/llm/spend.py` gains a `conn` parameter on `record_spend`
+  and `convert_reservation`; `corvus/llm/attempts.py` takes
+  `reservation_id` and converts inside the attempt transaction).
+  Channel split now keys on the `=self`/`=user` marker, the header
+  cache keys on root plus model, latency starts after the limiter
+  slot, and attempt errors accept strings or string-keyed mappings.
+  10 new tests (double conversion, rollback keeps the hold, derived
+  marker case, per-root cache, injected-clock latency). One new test
+  passed `reservation_id` twice (fixed; the code was right).
+  Verified with `make lint` (green) and the full `make test` (470
+  passed with Postgres). No eval delta. Compose Postgres left
+  running. Awaiting maintainer commit.

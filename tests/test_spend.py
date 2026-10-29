@@ -207,3 +207,28 @@ def test_reserve_rejects_non_finite_amounts(spend_db: str) -> None:
 def test_non_finite_cap_rejected(spend_db: str) -> None:
     with pytest.raises(ValueError, match="finite"):
         budget_state(float("nan"), spend_db)
+
+
+def test_record_spend_with_conn_defers_commit(spend_db: str) -> None:
+    """A passed-in connection carries the row; rollback removes it."""
+    with psycopg.connect(spend_db) as conn:
+        record_spend("muse-spark-1.3", 1000, 200, 500, None, spend_db, conn=conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM spend")
+            row = cur.fetchone()
+            assert row is not None and int(row[0]) == 1
+        conn.rollback()
+    assert spent_usd(spend_db) == 0.0
+
+
+def test_convert_with_conn_defers_commit(spend_db: str) -> None:
+    """A passed-in connection carries lock, conversion and spend row."""
+    hold = reserve(0.6, spend_db, cap_usd=1.0)
+    with psycopg.connect(spend_db) as conn:
+        result = convert_reservation(
+            hold.id, "muse-spark-1.3", 100, 0, 100, None, spend_db, conn=conn
+        )
+        assert result.hold_active is True
+        conn.rollback()
+    assert spent_usd(spend_db) == 0.0
+    assert held_usd(spend_db) == pytest.approx(0.6)

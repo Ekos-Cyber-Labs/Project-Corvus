@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -135,6 +136,23 @@ def budget_state(
     return "degraded" if spent_usd(database_url) >= cap else "ok"
 
 
+def _insert_spend(
+    cur: psycopg.Cursor,
+    model: str,
+    tokens_in: int,
+    tokens_cached: int,
+    tokens_out: int,
+    usd: float,
+    incident_id: int | None,
+) -> None:
+    """Insert one ``spend`` row on an already-open cursor (no commit)."""
+    cur.execute(
+        "INSERT INTO spend (model, tokens_in, tokens_out, usd, "
+        "incident_id) VALUES (%s, %s, %s, %s, %s)",
+        (model, tokens_in, tokens_out, usd, incident_id),
+    )
+
+
 def record_spend(
     model: str,
     tokens_in: int,
@@ -142,20 +160,28 @@ def record_spend(
     tokens_out: int,
     incident_id: int | None,
     database_url: str | None = None,
-    prices: dict[str, ModelPrice] | None = None,
+    prices: Mapping[str, ModelPrice] | None = None,
+    conn: psycopg.Connection | None = None,
 ) -> float:
     """Write one row to ``spend`` with the price-book USD cost; return it.
 
     ``tokens_cached`` is the subset of ``tokens_in`` served from cache.
+    When ``conn`` (an open connection already in a transaction) is
+    given, the row is written on it and the caller commits; otherwise
+    a private autocommit connection is used exactly as before.
     """
     table = prices if prices is not None else load_price_book()
     usd = cost_usd(table, model, tokens_in, tokens_cached, tokens_out)
-    with psycopg.connect(_database_url(database_url), autocommit=True) as conn:
+    if conn is not None:
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO spend (model, tokens_in, tokens_out, usd, "
-                "incident_id) VALUES (%s, %s, %s, %s, %s)",
-                (model, tokens_in, tokens_out, usd, incident_id),
+            _insert_spend(
+                cur, model, tokens_in, tokens_cached, tokens_out, usd, incident_id
+            )
+        return usd
+    with psycopg.connect(_database_url(database_url), autocommit=True) as fresh:
+        with fresh.cursor() as cur:
+            _insert_spend(
+                cur, model, tokens_in, tokens_cached, tokens_out, usd, incident_id
             )
     return usd
 
@@ -264,6 +290,35 @@ def release_reservation(reservation_id: int, database_url: str | None = None) ->
             return cur.rowcount == 1
 
 
+def _convert_locked(
+    cur: psycopg.Cursor,
+    reservation_id: int,
+    model: str,
+    tokens_in: int,
+    tokens_cached: int,
+    tokens_out: int,
+    usd: float,
+    incident_id: int | None,
+) -> ConversionResult:
+    """Flip one live hold to converted and insert its spend row.
+
+    Runs on an already-open cursor inside the caller's transaction;
+    the transaction-scoped advisory lock serializes concurrent
+    converters. Spend is always recorded, even when the hold expired,
+    was purged, or never existed.
+    """
+    cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SPEND_ADVISORY_LOCK,))
+    cur.execute(
+        "UPDATE spend_reservations SET status = 'converted' "
+        "WHERE id = %s AND status = 'held' AND expires_at > NOW() "
+        "RETURNING id",
+        (reservation_id,),
+    )
+    hold_active = cur.fetchone() is not None
+    _insert_spend(cur, model, tokens_in, tokens_cached, tokens_out, usd, incident_id)
+    return ConversionResult(usd=usd, hold_active=hold_active)
+
+
 def convert_reservation(
     reservation_id: int,
     model: str,
@@ -272,7 +327,8 @@ def convert_reservation(
     tokens_out: int,
     incident_id: int | None = None,
     database_url: str | None = None,
-    prices: dict[str, ModelPrice] | None = None,
+    prices: Mapping[str, ModelPrice] | None = None,
+    conn: psycopg.Connection | None = None,
 ) -> ConversionResult:
     """Convert a held reservation into real spend; report the outcome.
 
@@ -280,27 +336,40 @@ def convert_reservation(
     purged, or never existed — because a call that outlived its hold is
     a bookkeeping event, never lost spend. ``hold_active`` reports
     whether the hold was still live when the call finished. The
-    function logs nothing.
+    function logs nothing. When ``conn`` (an open connection already
+    in a transaction) is given, the conversion joins it — lock,
+    update and spend row all land in the caller's transaction and the
+    caller commits; otherwise a private connection is used exactly as
+    before.
     """
     table = prices if prices is not None else load_price_book()
     usd = cost_usd(table, model, tokens_in, tokens_cached, tokens_out)
-    with psycopg.connect(_database_url(database_url)) as conn:
+    if conn is not None:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SPEND_ADVISORY_LOCK,))
-            cur.execute(
-                "UPDATE spend_reservations SET status = 'converted' "
-                "WHERE id = %s AND status = 'held' AND expires_at > NOW() "
-                "RETURNING id",
-                (reservation_id,),
+            return _convert_locked(
+                cur,
+                reservation_id,
+                model,
+                tokens_in,
+                tokens_cached,
+                tokens_out,
+                usd,
+                incident_id,
             )
-            hold_active = cur.fetchone() is not None
-            cur.execute(
-                "INSERT INTO spend (model, tokens_in, tokens_out, usd, "
-                "incident_id) VALUES (%s, %s, %s, %s, %s)",
-                (model, tokens_in, tokens_out, usd, incident_id),
+    with psycopg.connect(_database_url(database_url)) as fresh:
+        with fresh.cursor() as cur:
+            result = _convert_locked(
+                cur,
+                reservation_id,
+                model,
+                tokens_in,
+                tokens_cached,
+                tokens_out,
+                usd,
+                incident_id,
             )
-        conn.commit()
-    return ConversionResult(usd=usd, hold_active=hold_active)
+        fresh.commit()
+    return result
 
 
 def purge_expired_reservations(database_url: str | None = None) -> int:
