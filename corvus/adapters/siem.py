@@ -111,12 +111,20 @@ DEFAULT_STREAM_PAGE_SIZE = 500
 
 
 class Cursor(BaseModel):
-    """Opaque ingestion checkpoint (``search_after`` state)."""
+    """Opaque ingestion checkpoint (``search_after`` state).
+
+    ``last_time`` bounds the overlap re-read; ``seen`` holds
+    ``(time_ms, uid)`` pairs for every record emitted from the current
+    overlap window, oldest first, so a re-read record is dropped only
+    when its uid is already present. Pruned to the window on every
+    poll and capped in length.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     last_time: int | None = None
     last_uid: str | None = None
+    seen: tuple[tuple[int, str], ...] = ()
 
 
 class Entity(BaseModel):
@@ -369,7 +377,7 @@ def _category_for_classes(
     counts: dict[int, int] = {}
     for event in events:
         counts[event.class_uid] = counts.get(event.class_uid, 0) + 1
-    top = min(classes, key=lambda uid: (-counts[uid], uid))
+    top = min(classes, key=lambda uid: (-counts.get(uid, 0), uid))
     return _CLASS_CATEGORY.get(top, "endpoint process")
 
 

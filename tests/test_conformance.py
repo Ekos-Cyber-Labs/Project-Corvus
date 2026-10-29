@@ -175,6 +175,30 @@ def test_siem_fixtures_conform() -> None:
         assert errors == [], "\n".join(errors)
 
 
+def test_wazuh_fixtures_conform() -> None:
+    """Every Wazuh-mapped record (finding, event, archive) conforms."""
+    import json as jsonlib
+
+    from corvus.normalize import wazuh as wazuh_mapper
+
+    fixture_dir = Path(__file__).parent / "fixtures" / "wazuh"
+    for name in sorted(path.name for path in fixture_dir.glob("*.json")):
+        hit = jsonlib.loads((fixture_dir / name).read_text(encoding="utf-8"))
+        if "wazuh-archives" in hit.get("_index", ""):
+            event, key = wazuh_mapper.map_archive(hit)
+            assert key is None, f"{name}: unexpectedly unmapped ({key})"
+            assert event is not None, f"{name}: no event mapped"
+            errors = check_record(_stored(event))
+            assert errors == [], f"{name}:\n" + "\n".join(errors)
+            continue
+        finding, event, _key = wazuh_mapper.map_alert(hit)
+        errors = check_record(_stored(finding))
+        assert errors == [], f"{name} finding:\n" + "\n".join(errors)
+        if event is not None:
+            errors = check_record(_stored(event))
+            assert errors == [], f"{name} event:\n" + "\n".join(errors)
+
+
 def _attack() -> AttackDictionary:
     return AttackDictionary.from_compact(
         {

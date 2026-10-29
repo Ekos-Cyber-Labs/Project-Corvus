@@ -1,0 +1,53 @@
+{
+  "_index": "wazuh-alerts-4.x-2024-05-02",
+  "_id": "mNt3dY8B9example0003",
+  "_source": {
+    "timestamp": "2024-05-02T12:02:00.000+0000",
+    "@timestamp": "2024-05-02T12:02:00.000Z",
+    "id": "1714651320.10003",
+    "agent": {
+      "id": "001",
+      "name": "web01",
+      "ip": "192.0.2.10"
+    },
+    "manager": {
+      "name": "wazuh-manager"
+    },
+    "cluster": {
+      "name": "wazuh-cluster",
+      "node": "wazuh-manager"
+    },
+    "location": "/var/log/secure",
+    "full_log": "May  2 12:02:00 web01 sudo:   deploy : TTY=pts/0 ; PWD=/home/deploy ; USER=root ; COMMAND=/usr/bin/systemctl restart nginx",
+    "decoder": {
+      "name": "sudo",
+      "parent": "sudo"
+    },
+    "srcuser": "deploy",
+    "dstuser": "root",
+    "tty": "pts/0",
+    "pwd": "/home/deploy",
+    "command": "/usr/bin/systemctl restart nginx",
+    "rule": {
+      "id": 5402,
+      "level": 3,
+      "description": "Successful sudo to ROOT executed.",
+      "groups": [
+        "syslog",
+        "sudo"
+      ],
+      "firedtimes": 1,
+      "mitre": {
+        "id": [
+          "T1548.003"
+        ],
+        "tactic": [
+          "Privilege Escalation"
+        ],
+        "technique": [
+          "Sudo and Sudo Caching"
+        ]
+      }
+    }
+  }
+}

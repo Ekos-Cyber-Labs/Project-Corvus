@@ -1,0 +1,54 @@
+{
+  "_index": "wazuh-alerts-4.x-2024-05-02",
+  "_id": "mNt3dY8B9example0005",
+  "_source": {
+    "timestamp": "2024-05-02T12:04:00.000+0000",
+    "@timestamp": "2024-05-02T12:04:00.000Z",
+    "id": "1714651440.10005",
+    "agent": {
+      "id": "001",
+      "name": "web01",
+      "ip": "192.0.2.10"
+    },
+    "manager": {
+      "name": "wazuh-manager"
+    },
+    "cluster": {
+      "name": "wazuh-cluster",
+      "node": "wazuh-manager"
+    },
+    "location": "syscheck",
+    "full_log": "File '/etc/cron.d/evil' modified",
+    "decoder": {
+      "name": "syscheck_integrity_changed",
+      "parent": "syscheck"
+    },
+    "data": {
+      "syscheck": {
+        "path": "/etc/cron.d/evil",
+        "event": "modified",
+        "md5_after": "d41d8cd98f00b204e9800998ecf8427e",
+        "sha1_after": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+        "sha256_after": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "uid_after": "0",
+        "uname_after": "root",
+        "perm_after": "rw-r--r--"
+      }
+    },
+    "rule": {
+      "id": 550,
+      "level": 7,
+      "description": "Integrity checksum changed.",
+      "groups": [
+        "ossec",
+        "syscheck"
+      ],
+      "firedtimes": 1,
+      "mitre": {
+        "id": [
+          "T1222"
+        ]
+      }
+    }
+  }
+}

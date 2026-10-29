@@ -1,0 +1,43 @@
+{
+  "_index": "wazuh-alerts-4.x-2024-05-02",
+  "_id": "mNt3dY8B9example0002",
+  "_source": {
+    "timestamp": "2024-05-02T12:01:00.112+0000",
+    "@timestamp": "2024-05-02T12:01:00.112Z",
+    "id": "1714651260.10002",
+    "agent": {
+      "id": "001",
+      "name": "web01",
+      "ip": "192.0.2.10"
+    },
+    "manager": {
+      "name": "wazuh-manager"
+    },
+    "cluster": {
+      "name": "wazuh-cluster",
+      "node": "wazuh-manager"
+    },
+    "location": "/var/log/secure",
+    "full_log": "May  2 12:01:00 web01 sshd[10031]: Accepted password for deploy from 198.51.100.23 port 4451 ssh2",
+    "decoder": {
+      "name": "sshd",
+      "parent": "sshd"
+    },
+    "data": {
+      "srcuser": "deploy",
+      "srcip": "198.51.100.23",
+      "srcport": "4451"
+    },
+    "rule": {
+      "id": 5715,
+      "level": 3,
+      "description": "sshd: authentication success.",
+      "groups": [
+        "syslog",
+        "sshd",
+        "authentication_success"
+      ],
+      "firedtimes": 1
+    }
+  }
+}

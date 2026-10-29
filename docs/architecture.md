@@ -231,10 +231,32 @@ or model inputs. Details: `datasets/README.md`.
     periodically; goes into the stable part of the Spark context
     (cache-augmented generation: identical prompt prefix — instructions,
     schemas, playbooks — first, variable incident last).
-- `WazuhAdapter`: indexer REST API read-only for `wazuh-alerts-*` /
-  `wazuh-archives-*`, polled with a `search_after` cursor stored as a
-  checkpoint; server API with a limited role for logtest, rule files, CDB
-  lists, config validation and manager restart.
+- `WazuhAdapter` (`corvus/adapters/wazuh/`, read-only): the indexer
+  REST client pages `wazuh-alerts-4.x-*` with `search_after` on the
+  stable sort `[timestamp, _id]` inside one point in time per call
+  (the archive `id` repeats, so only `_id` orders without skipping),
+  re-reads a 120 s overlap window behind the cursor dropping only
+  records whose uid is already in the cursor's seen set, and persists
+  the cursor in `checkpoints` (adapter `wazuh`, stream `alerts`) as
+  the last time plus the window's `(time, uid)` pairs; checkpoint
+  load failures raise instead of re-reading from the beginning.
+  `wazuh-archives-4.x-*` serves entity/time-window queries (agent
+  name, `data.srcuser`/`dstuser`/`srcip`) and the inventory
+  aggregation (a second cheap alerts aggregation marks which decoders
+  have findings). TLS is always verified (`WAZUH_INDEXER_CA`, no off
+  flag) through an `ssl.SSLContext` that clears only
+  `VERIFY_X509_STRICT`, which a stock Wazuh root CA (no Key Usage /
+  Authority Key Identifier) otherwise trips; chain and hostname
+  checks stay on. Only search, PIT open/close and the read endpoints
+  used are allowlisted by strict index regex, with bounded retries on
+  429/5xx only. Mapping (`corvus/normalize/wazuh.py`): alerts to
+  Detection Finding 2004 plus the decoded event (sshd, sudo, auditd
+  SYSCALL only, `syscheck_new_entry` / `syscheck_integrity_changed` /
+  `syscheck_deleted`; the rest counted per decoder and rule id;
+  `auid` 4294967295 falls back to `uid`). Rule translation, backtest
+  and deployment stay `NotImplementedError` for the shadow-deployment
+  milestone; server API with a limited role for logtest, rule files,
+  CDB lists, config validation and manager restart.
 - `ReplayAdapter`: public datasets normalized with `corvus replay load`
   into per-file events/provenance Parquet under `data/replay/`
   (explicit schemas, batched streaming, atomic writes) and queried

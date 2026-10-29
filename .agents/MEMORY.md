@@ -465,3 +465,40 @@ rules back to Wazuh (shadow first, human approval).
   `make lint` (green) and the full `make test` (332 passed with
   Postgres). Compose Postgres left running. Awaiting maintainer
   commit.
+- 2026-10-29: added the read-only Wazuh adapter
+  (`corvus/adapters/wazuh/`, checkpoints in
+  `corvus/state/checkpoints.py`) and the Wazuh normalizer
+  (`corvus/normalize/wazuh.py`) with 7 hand-written fixtures under
+  `tests/fixtures/wazuh/` (one per mapped decoder plus an unknown
+  decoder and an archive doc). Alerts page with point in time plus
+  `search_after` on the stable sort `[timestamp, id]`, re-read a 120 s
+  overlap window behind the cursor dropping already-seen ids, and
+  persist the cursor in `checkpoints`; archives serve entity and
+  time-window queries; rule translation and deployment stay
+  `NotImplementedError` for the later shadow-deployment milestone.
+  TLS is always verified through a CA-bundle setting (the old off
+  flag is removed from settings and the env example). The OCSF models
+  gained two schema-defined optional fields the mapper needs
+  (`Analytic.category`, `Process.user`); the shared category fallback
+  now counts absent classes as zero instead of raising. Verified with
+  `make lint` (green) and the full `make test` (376 passed with
+  Postgres). Eval harness re-run to throwaway reports: every metric
+  delta +0 vs the committed baseline, both gates pass, 237 s wall.
+  Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: fixed six live-review defects in the Wazuh adapter and
+  normalizer. The resume floor dropped late-indexed alerts, so the
+  cursor now carries a seen set of window `(time, uid)` pairs and only
+  seen uids are skipped; decoder names now match the live indexer
+  (auditd SYSCALL only with unset-auid fallback, three syscheck
+  decoders) with 8 live-shape fixtures; TLS uses a context clearing
+  only the strict flag a stock root CA trips, with localhost tests for
+  connect, unknown CA, and hostname mismatch; sorting is
+  `[timestamp, _id]` with archive event uids from the document `_id`;
+  the endpoint allowlist is a strict index regex; inventory aggregates
+  archives with an alerts decoder check for class 2004. Fixed along
+  the way: one reworked test expected the wrong unmapped key until
+  archive samples stopped carrying a rule block. Verified with
+  `make lint` (green) and the full `make test` (387 passed with
+  Postgres). Eval harness re-run to throwaway reports: every metric
+  delta +0 vs the committed baseline, both gates pass, 237 s wall.
+  Compose Postgres left running. Awaiting maintainer commit.

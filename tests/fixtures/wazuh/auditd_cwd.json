@@ -1,0 +1,43 @@
+{
+  "_index": "wazuh-alerts-4.x-2024-05-02",
+  "_id": "mNt3dY8B9example0008",
+  "_source": {
+    "timestamp": "2024-05-02T12:07:00.000+0000",
+    "@timestamp": "2024-05-02T12:07:00.000Z",
+    "id": "1714651620.10008",
+    "agent": {
+      "id": "001",
+      "name": "web01",
+      "ip": "192.0.2.10"
+    },
+    "manager": {
+      "name": "wazuh-manager"
+    },
+    "cluster": {
+      "name": "wazuh-cluster",
+      "node": "wazuh-manager"
+    },
+    "location": "/var/log/audit/audit.log",
+    "full_log": "type=CWD msg=audit(1714651620.000:1325): cwd=\"/home/deploy\"",
+    "decoder": {
+      "name": "auditd",
+      "parent": "auditd"
+    },
+    "data": {
+      "audit": {
+        "type": "CWD",
+        "id": "1325",
+        "cwd": "/home/deploy"
+      }
+    },
+    "rule": {
+      "id": 80790,
+      "level": 3,
+      "description": "Audit: Working directory.",
+      "groups": [
+        "audit"
+      ],
+      "firedtimes": 1
+    }
+  }
+}

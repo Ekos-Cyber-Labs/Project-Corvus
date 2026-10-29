@@ -1,0 +1,43 @@
+{
+  "_index": "wazuh-alerts-4.x-2024-05-02",
+  "_id": "mNt3dY8B9example0006",
+  "_source": {
+    "timestamp": "2024-05-02T12:05:00.000+0000",
+    "@timestamp": "2024-05-02T12:05:00.000Z",
+    "id": "1714651500.10006",
+    "agent": {
+      "id": "002",
+      "name": "db01",
+      "ip": "192.0.2.20"
+    },
+    "manager": {
+      "name": "wazuh-manager"
+    },
+    "cluster": {
+      "name": "wazuh-cluster",
+      "node": "wazuh-manager"
+    },
+    "location": "/var/log/nginx/access.log",
+    "full_log": "203.0.113.7 - - [02/May/2024:12:05:00 +0000] \"GET /login.php?user=' OR 1=1-- HTTP/1.1\" 200 1234",
+    "decoder": {
+      "name": "nginx-access",
+      "parent": "nginx"
+    },
+    "data": {
+      "srcip": "203.0.113.7",
+      "url": "/login.php?user=' OR 1=1--",
+      "status": "200"
+    },
+    "rule": {
+      "id": 100002,
+      "level": 10,
+      "description": "Local: possible SQL injection probe.",
+      "groups": [
+        "local",
+        "web",
+        "attack"
+      ],
+      "firedtimes": 1
+    }
+  }
+}

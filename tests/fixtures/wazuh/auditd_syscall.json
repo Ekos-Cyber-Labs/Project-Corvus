@@ -1,0 +1,63 @@
+{
+  "_index": "wazuh-alerts-4.x-2024-05-02",
+  "_id": "mNt3dY8B9example0004",
+  "_source": {
+    "timestamp": "2024-05-02T12:03:00.500+0000",
+    "@timestamp": "2024-05-02T12:03:00.500Z",
+    "id": "1714651380.10004",
+    "agent": {
+      "id": "001",
+      "name": "web01",
+      "ip": "192.0.2.10"
+    },
+    "manager": {
+      "name": "wazuh-manager"
+    },
+    "cluster": {
+      "name": "wazuh-cluster",
+      "node": "wazuh-manager"
+    },
+    "location": "/var/log/audit/audit.log",
+    "full_log": "type=SYSCALL msg=audit(1714651380.500:1325): arch=c000003e syscall=59 success=yes exit=0 a0=70d060 items=2 ppid=4406 pid=4425 auid=1001 uid=0 gid=0 euid=0 tty=pts0 ses=8 comm=\"touch\" exe=\"/usr/bin/touch\"",
+    "decoder": {
+      "name": "auditd",
+      "parent": "auditd"
+    },
+    "data": {
+      "audit": {
+        "type": "SYSCALL",
+        "id": "1325",
+        "arch": "c000003e",
+        "syscall": "59",
+        "success": "yes",
+        "ppid": "4406",
+        "pid": "4425",
+        "auid": "1001",
+        "uid": "0",
+        "gid": "0",
+        "euid": "0",
+        "tty": "pts0",
+        "session": "8",
+        "command": "touch",
+        "exe": "/usr/bin/touch",
+        "key": "audit-wazuh-c",
+        "cwd": "/home/deploy",
+        "execve": {
+          "a0": "touch",
+          "a1": "/tmp/malicious_file",
+          "argc": "2"
+        }
+      }
+    },
+    "rule": {
+      "id": 80792,
+      "level": 3,
+      "description": "Audit: Command: /usr/bin/touch",
+      "groups": [
+        "audit",
+        "audit_command"
+      ],
+      "firedtimes": 1
+    }
+  }
+}

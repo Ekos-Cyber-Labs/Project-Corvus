@@ -35,7 +35,9 @@ class Settings(BaseSettings):
     wazuh_api_password: str | None = Field(
         default=None, validation_alias="WAZUH_API_PASSWORD"
     )
-    wazuh_verify_tls: bool = Field(default=True, validation_alias="WAZUH_VERIFY_TLS")
+    wazuh_indexer_ca: str | None = Field(
+        default=None, validation_alias="WAZUH_INDEXER_CA"
+    )
     # Deterministic correlation windows (corvus/correlate): two findings
     # join the same incident when they share a join key and the gap from
     # the incident's last finding is at most the session gap; an incident

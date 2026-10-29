@@ -429,7 +429,13 @@ class File(BaseModel):
 
 
 class Process(BaseModel):
-    """OCSF process object, with an optional parent process."""
+    """OCSF process object, with an optional parent process.
+
+    ``user`` is the user the process runs as (pinned OCSF 1.9.0
+    ``objects/process.json``: "The user under which this process is
+    running", recommended): the Wazuh sudo mapper sets the ``USER=``
+    target there.
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -437,6 +443,7 @@ class Process(BaseModel):
     name: str | None = None
     cmd_line: str | None = None
     file: File | None = None
+    user: User | None = None
     parent_process: Process | None = None
 
 
@@ -947,6 +954,7 @@ class Analytic(BaseModel):
     name: str | None = None
     uid: str | None = None
     desc: str | None = None
+    category: str | None = None
     type: str | None = None
     type_id: int | None = None
 
