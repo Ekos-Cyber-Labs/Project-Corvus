@@ -400,3 +400,33 @@ rules back to Wazuh (shadow first, human approval).
   Verified with `make lint` (green) and the full `make test` (316
   passed with Postgres). Compose Postgres left running. Awaiting
   maintainer commit.
+- 2026-10-28: built the eval harness (`eval/harness.py`, `corvus eval
+  run`): load inventory plus the product detect (`load_rules`,
+  `evaluate`, `write_findings`) and correlate (`correlate_replay_store`)
+  calls over the replay store, then the benign pipeline (generate,
+  load, detect, correlate on a fresh git-ignored store) and the
+  metric joins, writing `eval/reports/latest.md` and `latest.json`
+  (every number with n, window, producing command and git commit).
+  Metrics: benign false positives by severity (gate: zero Critical+);
+  chain step coverage per step for the best incident and all incidents
+  (APT29 day-1: 8/10 both; steps 2 and 10 have in-window findings but
+  no technique match, so detection gaps, not correlation gaps);
+  atomic OTRF-metadata coverage (110 files in store, 90 with a
+  finding, 53 with a technique match); compression per dataset
+  (whole store 798471 events -> 6074 findings -> 234 incidents);
+  in-band technique ids (130 events) and the train/test split record
+  (55 techniques, 18 testable). Anti-leakage runs every time (dataset,
+  file and window markers everywhere; technique ids outside
+  loader-flagged rows and scrubbed detector output; anchors only on
+  the synthetic benign probe, since anchors are legitimate evidence
+  in the attack store) and fails the run. Deltas compare against the
+  committed `latest.json` via its git HEAD version (inputs differing
+  voids the delta); with no committed baseline the report says so.
+  Two interim bugs were fixed before finishing (uid/file join used
+  finding uids instead of related event uids; row-level in-band
+  exemption). Measured: 325 s wall (detect 135 s, correlate 6 s,
+  leakage scan 118 s). Covered by `tests/test_eval_harness.py`
+  (benign gate trips on synthetic Critical, leakage trips on planted
+  strings, baseline provenance). Verified with `make lint` (green)
+  and the full `make test` (327 passed with Postgres). Compose
+  Postgres left running. Awaiting maintainer commit.

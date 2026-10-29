@@ -1,0 +1,1930 @@
+{
+  "meta": {
+    "producing_command": "corvus eval run --replay-dir data/replay --rules-dir data/sigma/rules --attack data/attack/enterprise.json --ground-truth data/ground_truth.json --benign-hosts 4 --benign-hours 24 --benign-seed 7",
+    "git_commit": "632005169532abf38bb71797d4dedf69cfede578",
+    "generated_at": "2026-10-28",
+    "data_window": {
+      "start": "2019-02-02T09:16:58.787000Z",
+      "end": "2023-07-19T12:25:28.432000Z"
+    },
+    "runtime_seconds": 325.1,
+    "detect_seconds": 135.5,
+    "correlate_seconds": 6.4
+  },
+  "inputs": {
+    "rules": {
+      "files": 2240,
+      "parsed": 2240,
+      "evaluated": 1792,
+      "skipped": {
+        "logsource": 183,
+        "status": 145,
+        "event_id": 104,
+        "unmapped_field": 16
+      }
+    },
+    "datasets": {
+      "replay_files": 442,
+      "replay_events": 798471,
+      "ground_truth_files": 445,
+      "ground_truth_sha256": "df5a74396c50fb2bce5d03b0fee41a25ad45acf7c6add2852e2d0ce6e0a80bc5",
+      "chains": [
+        {
+          "chain_id": "apt29-day1",
+          "dataset_sha256": "98a073140860560d70080ace9142961be4f64b4862bae892d62d0f254d0fdbe5"
+        }
+      ]
+    },
+    "benign": {
+      "hosts": 4,
+      "hours": 24,
+      "seed": 7
+    },
+    "correlation": {
+      "session_gap_minutes": 30,
+      "max_span_hours": 24,
+      "auth_failure_threshold": 3
+    },
+    "ground_truth": {
+      "label_sources": [
+        "evtx-filename",
+        "evtx-filename",
+        "evtx-filename",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "evtx-folder",
+        "otrf-compound-chain",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-folder",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata",
+        "otrf-metadata"
+      ]
+    }
+  },
+  "n": {
+    "events": 798471,
+    "findings": 6074,
+    "incidents": 234
+  },
+  "benign": {
+    "synthetic": true,
+    "hosts": 4,
+    "hours": 24,
+    "seed": 7,
+    "records_n": 312,
+    "events_n": 312,
+    "unmapped_n": 0,
+    "findings_n": 4,
+    "incidents_n": 4,
+    "by_severity": {
+      "1": 0,
+      "2": 0,
+      "3": 4,
+      "4": 0,
+      "5": 0,
+      "6": 0
+    },
+    "tripping": [],
+    "replay_dir": "data/.harness-benign-replay"
+  },
+  "benign_incidents": 4,
+  "benign_critical": 0,
+  "chains": [
+    {
+      "chain_id": "apt29-day1",
+      "dataset_file": "security-datasets/datasets/compound/apt29/day1/apt29_evals_day1_manual.zip",
+      "window": {
+        "start": "2020-05-02T02:55:26Z",
+        "end": "2020-05-02T03:28:20Z",
+        "basis": "min/max @timestamp over all 196081 records, streaming probe of the pinned file"
+      },
+      "steps": [
+        {
+          "step": 1,
+          "name": "Initial Breach",
+          "window": {
+            "start": "2020-05-02T02:55:57Z",
+            "end": "2020-05-02T03:02:06Z"
+          },
+          "techniques": [
+            "T1204.002",
+            "T1036.002",
+            "T1571",
+            "T1059.003",
+            "T1059.001"
+          ],
+          "covered_by_best": true,
+          "covered_by_all": true
+        },
+        {
+          "step": 2,
+          "name": "Rapid Collection and Exfiltration",
+          "window": {
+            "start": "2020-05-02T02:56:18Z",
+            "end": "2020-05-02T03:03:16Z"
+          },
+          "techniques": [
+            "T1083",
+            "T1119",
+            "T1005",
+            "T1560.001",
+            "T1074.001",
+            "T1041"
+          ],
+          "covered_by_best": false,
+          "covered_by_all": false
+        },
+        {
+          "step": 3,
+          "name": "Deploy Stealth Toolkit",
+          "window": {
+            "start": "2020-05-02T02:57:01Z",
+            "end": "2020-05-02T03:08:53Z"
+          },
+          "techniques": [
+            "T1105",
+            "T1027",
+            "T1546.015",
+            "T1112",
+            "T1548.002",
+            "T1071.001",
+            "T1573"
+          ],
+          "covered_by_best": true,
+          "covered_by_all": true
+        },
+        {
+          "step": 4,
+          "name": "Defense Evasion and Discovery",
+          "window": {
+            "start": "2020-05-02T02:59:44Z",
+            "end": "2020-05-02T03:18:22Z"
+          },
+          "techniques": [
+            "T1059.001",
+            "T1140",
+            "T1057",
+            "T1070.004",
+            "T1083",
+            "T1033",
+            "T1082",
+            "T1016",
+            "T1518.001",
+            "T1069",
+            "T1106"
+          ],
+          "covered_by_best": true,
+          "covered_by_all": true
+        },
+        {
+          "step": 5,
+          "name": "Persistence",
+          "window": {
+            "start": "2020-05-02T03:04:16Z",
+            "end": "2020-05-02T03:04:24Z"
+          },
+          "techniques": [
+            "T1543.003",
+            "T1547.001"
+          ],
+          "covered_by_best": true,
+          "covered_by_all": true
+        },
+        {
+          "step": 6,
+          "name": "Credential Access",
+          "window": {
+            "start": "2020-05-02T03:00:37Z",
+            "end": "2020-05-02T03:05:20Z"
+          },
+          "techniques": [
+            "T1552.001",
+            "T1555.003",
+            "T1003.001",
+            "T1036",
+            "T1552.004"
+          ],
+          "covered_by_best": true,
+          "covered_by_all": true
+        },
+        {
+          "step": 7,
+          "name": "Collection and Exfiltration",
+          "window": {
+            "start": "2020-05-02T03:05:46Z",
+            "end": "2020-05-02T03:07:15Z"
+          },
+          "techniques": [
+            "T1113",
+            "T1115",
+            "T1056.001",
+            "T1005",
+            "T1560.001",
+            "T1048"
+          ],
+          "covered_by_best": true,
+          "covered_by_all": true
+        },
+        {
+          "step": 8,
+          "name": "Lateral Movement",
+          "window": {
+            "start": "2020-05-02T03:00:26Z",
+            "end": "2020-05-02T03:18:22Z"
+          },
+          "techniques": [
+            "T1018",
+            "T1021.006",
+            "T1021.002",
+            "T1057",
+            "T1027.002",
+            "T1569.002",
+            "T1078.002"
+          ],
+          "covered_by_best": true,
+          "covered_by_all": true
+        },
+        {
+          "step": 9,
+          "name": "Collection",
+          "window": {
+            "start": "2020-05-02T03:15:32Z",
+            "end": "2020-05-02T03:17:43Z"
+          },
+          "techniques": [
+            "T1105",
+            "T1059.001",
+            "T1083",
+            "T1119",
+            "T1005",
+            "T1560.001",
+            "T1074.001",
+            "T1041",
+            "T1070.004"
+          ],
+          "covered_by_best": true,
+          "covered_by_all": true
+        },
+        {
+          "step": 10,
+          "name": "Persistence Execution",
+          "window": {
+            "start": "2020-05-02T03:19:53Z",
+            "end": "2020-05-02T03:28:20Z"
+          },
+          "techniques": [
+            "T1543.003",
+            "T1547.001",
+            "T1569.002",
+            "T1106",
+            "T1134.001"
+          ],
+          "covered_by_best": false,
+          "covered_by_all": false
+        }
+      ],
+      "best_covered_n": 8,
+      "all_covered_n": 8,
+      "steps_n": 10
+    }
+  ],
+  "atomic": {
+    "files_with_ground_truth_n": 144,
+    "in_store_n": 110,
+    "not_in_store_n": 34,
+    "with_finding_n": 90,
+    "with_match_n": 53
+  },
+  "atomic_match": 53,
+  "atomic_detail": [
+    {
+      "file": "security-datasets/datasets/atomic/windows/collection/host/msf_record_mic.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/cmd_dumping_ntds_dit_file_ntdsutil.zip",
+      "findings_n": 3,
+      "matched": true,
+      "matched_techniques": [
+        "T1003",
+        "T1003.003"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/cmd_lsass_memory_dumpert_syscalls.zip",
+      "findings_n": 6,
+      "matched": true,
+      "matched_techniques": [
+        "T1003",
+        "T1003.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/cmd_psexec_lsa_secrets_dump.zip",
+      "findings_n": 6,
+      "matched": true,
+      "matched_techniques": [
+        "T1003",
+        "T1003.004"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/cmd_sam_copy_esentutl.zip",
+      "findings_n": 39,
+      "matched": true,
+      "matched_techniques": [
+        "T1003",
+        "T1003.002"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/covenant_dcsync_dcerpc_drsuapi_DsGetNCChanges.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_dcsync_dcerpc_drsuapi_DsGetNCChanges.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_mimikatz_backupkeys_dcerpc_smb_lsarpc.zip",
+      "findings_n": 3,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_mimikatz_extract_keys.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_mimikatz_logonpasswords.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_mimikatz_lsadump_patch.zip",
+      "findings_n": 1,
+      "matched": true,
+      "matched_techniques": [
+        "T1003",
+        "T1003.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_mimikatz_sam_access.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_ninjacopy_dumping_ntds_dit_file.zip",
+      "findings_n": 5,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_over_pth_patch_lsass.zip",
+      "findings_n": 166,
+      "matched": true,
+      "matched_techniques": [
+        "T1550",
+        "T1550.002"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_powerdump_sam_access.zip",
+      "findings_n": 3,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_shell_reg_dump_sam.zip",
+      "findings_n": 1,
+      "matched": true,
+      "matched_techniques": [
+        "T1003",
+        "T1003.002"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_shell_rubeus_asktgt_createnetonly.zip",
+      "findings_n": 5,
+      "matched": true,
+      "matched_techniques": [
+        "T1003"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/empire_shell_rubeus_asktgt_ptt.zip",
+      "findings_n": 2,
+      "matched": true,
+      "matched_techniques": [
+        "T1003"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/psh_input_capture_promptforcreds.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/psh_lsass_memory_dump_comsvcs.zip",
+      "findings_n": 7,
+      "matched": true,
+      "matched_techniques": [
+        "T1003",
+        "T1003.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/psh_windows_vault_web_credentials.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/credential_access/host/rdp_interactive_taskmanager_lsass_dump.zip",
+      "findings_n": 5,
+      "matched": true,
+      "matched_techniques": [
+        "T1003",
+        "T1003.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/auditpol_system_user_auditpolicy_modification.zip",
+      "findings_n": 6,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_bitsadmin_download_psh_script.zip",
+      "findings_n": 4,
+      "matched": true,
+      "matched_techniques": [
+        "T1197"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_disable_eventlog_service_startuptype_modification_via_registry.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_mshta_javascript_getobject_sct.zip",
+      "findings_n": 2,
+      "matched": true,
+      "matched_techniques": [
+        "T1218",
+        "T1218.005"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_mshta_vbscript_execute_psh.zip",
+      "findings_n": 4,
+      "matched": true,
+      "matched_techniques": [
+        "T1218",
+        "T1218.005"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_netsh_fw_mod_open_ports.zip",
+      "findings_n": 2,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_process_herpaderping_snippingtool.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_psh_stop_netprofm_eventlog_after_reboot.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_psh_stop_netprofm_eventlog_before_reboot.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset001_minint_key.zip",
+      "findings_n": 2,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_stop_event_logging_controlset_minint_key.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/cmd_wevtutil_modify_security_eventlog_path.zip",
+      "findings_n": 3,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/covenant_installutil.zip",
+      "findings_n": 9,
+      "matched": true,
+      "matched_techniques": [
+        "T1218"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/covenant_lolbin_wuauclt_createremotethread.zip",
+      "findings_n": 2,
+      "matched": true,
+      "matched_techniques": [
+        "T1218"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/empire_dllinjection_LoadLibrary_CreateRemoteThread.zip",
+      "findings_n": 427,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/empire_enable_rdp.tar.gz",
+      "findings_n": 19,
+      "matched": true,
+      "matched_techniques": [
+        "T1112"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/empire_launcher_sct_regsvr32.zip",
+      "findings_n": 11,
+      "matched": true,
+      "matched_techniques": [
+        "T1218",
+        "T1218.010"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/empire_monologue_netntlm_downgrade.zip",
+      "findings_n": 77,
+      "matched": true,
+      "matched_techniques": [
+        "T1112"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/empire_powerview_ldap_ntsecuritydescriptor.zip",
+      "findings_n": 12,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/empire_psinject_PEinjection.zip",
+      "findings_n": 102,
+      "matched": true,
+      "matched_techniques": [
+        "T1055"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/empire_wdigest_downgrade.tar.gz",
+      "findings_n": 17,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_cmstp_execution_bypassuac.zip",
+      "findings_n": 7,
+      "matched": true,
+      "matched_techniques": [
+        "T1218",
+        "T1218.003"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_control_panel_execution.zip",
+      "findings_n": 2,
+      "matched": true,
+      "matched_techniques": [
+        "T1218",
+        "T1218.002"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_disable_eventlog_service_startuptype_modification.zip",
+      "findings_n": 24,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_hh_local_html_payload.zip",
+      "findings_n": 2,
+      "matched": true,
+      "matched_techniques": [
+        "T1218",
+        "T1218.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_mavinject_dll_notepad.zip",
+      "findings_n": 3,
+      "matched": true,
+      "matched_techniques": [
+        "T1055"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_after_reboot.zip",
+      "findings_n": 27,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_metasploit_stop_netprofm_eventlog_before_reboot.zip",
+      "findings_n": 25,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_mshta_html_application_execution.zip",
+      "findings_n": 7,
+      "matched": true,
+      "matched_techniques": [
+        "T1218",
+        "T1218.005"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_register_cimprovider_execute_dll.zip",
+      "findings_n": 2,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset001_minint_key.zip",
+      "findings_n": 27,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/psh_stop_event_logging_controlset_minint_key.zip",
+      "findings_n": 26,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/purplesharp_pe_injection_createremotethread.zip",
+      "findings_n": 4,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/reg_cmd_process_commandline_logging_disabled.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/reg_disable_eventlog_service_startuptype_modification_via_registry.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/reg_meterpreter_process_commandline_logging_disabled.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset001_minint_key.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/reg_stop_event_logging_controlset_minint_key.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/defense_evasion/host/wmic_remote_xsl_jscript.zip",
+      "findings_n": 3,
+      "matched": true,
+      "matched_techniques": [
+        "T1220"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/cmd_discover_iexplorer_version_registry.zip",
+      "findings_n": 1,
+      "matched": true,
+      "matched_techniques": [
+        "T1518"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/cmd_seatbelt_group_user.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/covenant_getdomaingroup_ldap_searchrequest_domain_admins.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/empire_find_localadmin_smb_svcctl_OpenSCManager.zip",
+      "findings_n": 67,
+      "matched": true,
+      "matched_techniques": [
+        "T1069",
+        "T1069.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/empire_getsession_dcerpc_smb_srvsvc_NetSessEnum.zip",
+      "findings_n": 277,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/empire_shell_net_local_users.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/empire_shell_net_localgroup_administrators.zip",
+      "findings_n": 2,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/empire_shell_rpc_samr_smb_group_domain_admins_standard_user.zip",
+      "findings_n": 2,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/discovery/host/empire_shell_samr_EnumDomainUsers.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/execution/host/cmd_sharpview_pcre_net.zip",
+      "findings_n": 6,
+      "matched": true,
+      "matched_techniques": [
+        "T1059"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/execution/host/empire_launcher_vbs.zip",
+      "findings_n": 6,
+      "matched": true,
+      "matched_techniques": [
+        "T1059"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/execution/host/psh_powershell_httplistener.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/execution/host/psh_python_webserver.zip",
+      "findings_n": 2,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/aadinternals_export_adfsdatabaseconfig_remotely.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_copy_smb_CreateRequest.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_executeexcel4macro_allowed.zip",
+      "findings_n": 11,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_iertutil_dll_hijack.zip",
+      "findings_n": 7,
+      "matched": true,
+      "matched_techniques": [
+        "T1021",
+        "T1021.003"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_dcom_registerxll.zip",
+      "findings_n": 170,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_psremoting_command.zip",
+      "findings_n": 98,
+      "matched": true,
+      "matched_techniques": [
+        "T1021",
+        "T1021.006"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sc_query_dcerpc_smb_svcctl.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_create_dcerpc_smb_svcctl.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_query_dcerpc_smb_svcctl.zip",
+      "findings_n": 0,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_start_dcerpc_smb_svcctl.zip",
+      "findings_n": 177,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpsc_stop_dcerpc_smb_svcctl.zip",
+      "findings_n": 1,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_sharpwmi_create_dcerpc_wmi.zip",
+      "findings_n": 2,
+      "matched": true,
+      "matched_techniques": [
+        "T1047"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_remote_event_subscription_ActiveScriptEventConsumers.zip",
+      "findings_n": 5,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/covenant_wmi_wbemcomn_dll_hijack.zip",
+      "findings_n": 185,
+      "matched": true,
+      "matched_techniques": [
+        "T1047"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/empire_dcom_shellwindows_stager.zip",
+      "findings_n": 9,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/empire_msbuild_dcerpc_wmi_smb.zip",
+      "findings_n": 11,
+      "matched": true,
+      "matched_techniques": [
+        "T1047"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/empire_psexec_dcerpc_tcp_svcctl.zip",
+      "findings_n": 19,
+      "matched": true,
+      "matched_techniques": [
+        "T1021"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/empire_psremoting_stager.zip",
+      "findings_n": 11,
+      "matched": true,
+      "matched_techniques": [
+        "T1021",
+        "T1021.006"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/empire_shell_dcerpc_smb_service_dll_hijack.zip",
+      "findings_n": 177,
+      "matched": true,
+      "matched_techniques": [
+        "T1574",
+        "T1574.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/empire_smbexec_dcerpc_smb_svcctl.zip",
+      "findings_n": 21,
+      "matched": true,
+      "matched_techniques": [
+        "T1021",
+        "T1021.002"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/empire_wmi_dcerpc_wmi_IWbemServices_ExecMethod.zip",
+      "findings_n": 280,
+      "matched": true,
+      "matched_techniques": [
+        "T1047"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/empire_wmic_add_user_backdoor.zip",
+      "findings_n": 5,
+      "matched": true,
+      "matched_techniques": [
+        "T1047"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/mimikatz_CVE-2020-1472_Unauthenticated_NetrServerAuthenticate2.zip",
+      "findings_n": 3,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/purplesharp_ad_playbook_I.zip",
+      "findings_n": 297,
+      "matched": true,
+      "matched_techniques": [
+        "T1021",
+        "T1021.006"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/schtask_create.zip",
+      "findings_n": 5,
+      "matched": true,
+      "matched_techniques": [
+        "T1053",
+        "T1053.005"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/lateral_movement/host/schtask_modification.zip",
+      "findings_n": 2,
+      "matched": false,
+      "matched_techniques": []
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/other/aptsimulator_cobaltstrike.zip",
+      "findings_n": 9,
+      "matched": true,
+      "matched_techniques": [
+        "T1134",
+        "T1134.001",
+        "T1134.002"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/persistence/host/cmd_userinitmprlogonscript_batch.zip",
+      "findings_n": 4,
+      "matched": true,
+      "matched_techniques": [
+        "T1037",
+        "T1037.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_elevated_user.zip",
+      "findings_n": 2,
+      "matched": true,
+      "matched_techniques": [
+        "T1547",
+        "T1547.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/persistence/host/empire_persistence_registry_modification_run_keys_standard_user.zip",
+      "findings_n": 189,
+      "matched": true,
+      "matched_techniques": [
+        "T1547",
+        "T1547.001"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/persistence/host/empire_schtasks_creation_execution_elevated_user.zip",
+      "findings_n": 187,
+      "matched": true,
+      "matched_techniques": [
+        "T1053",
+        "T1053.005"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/persistence/host/empire_schtasks_creation_standard_user.zip",
+      "findings_n": 3,
+      "matched": true,
+      "matched_techniques": [
+        "T1053",
+        "T1053.005"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/persistence/host/empire_wmi_local_event_subscriptions_elevated_user.zip",
+      "findings_n": 254,
+      "matched": true,
+      "matched_techniques": [
+        "T1546",
+        "T1546.003"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/persistence/host/proxylogon_ssrf_rce_poc.zip",
+      "findings_n": 7,
+      "matched": true,
+      "matched_techniques": [
+        "T1505",
+        "T1505.003"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/privilege_escalation/host/cmd_service_mod_fax.zip",
+      "findings_n": 6,
+      "matched": true,
+      "matched_techniques": [
+        "T1543",
+        "T1543.003"
+      ]
+    },
+    {
+      "file": "security-datasets/datasets/atomic/windows/privilege_escalation/host/empire_uac_shellapi_fodhelper.zip",
+      "findings_n": 112,
+      "matched": true,
+      "matched_techniques": [
+        "T1548",
+        "T1548.002"
+      ]
+    }
+  ],
+  "atomic_not_in_store": [
+    "security-datasets/datasets/atomic/windows/credential_access/network/covenant_dcsync_dcerpc_drsuapi_DsGetNCChanges.zip",
+    "security-datasets/datasets/atomic/windows/credential_access/network/empire_dcsync_dcerpc_drsuapi_DsGetNCChanges.zip",
+    "security-datasets/datasets/atomic/windows/credential_access/network/empire_mimikatz_backupkeys_dcerpc_smb_lsarpc.zip",
+    "security-datasets/datasets/atomic/windows/credential_access/network/empire_ninjacopy_dumping_ntds_dit_file_pcap.zip",
+    "security-datasets/datasets/atomic/windows/credential_access/network/empire_shell_rubeus_asktgt_createnetonly.zip",
+    "security-datasets/datasets/atomic/windows/credential_access/network/empire_shell_rubeus_asktgt_ptt.zip",
+    "security-datasets/datasets/atomic/windows/defense_evasion/network/empire_powerview_ldap_ntsecuritydescriptor.zip",
+    "security-datasets/datasets/atomic/windows/discovery/network/covenant_getdomaingroup_ldap_searchrequest_domain_admins.zip",
+    "security-datasets/datasets/atomic/windows/discovery/network/empire_getsession_dcerpc_smb_srvsvc_NetSessEnum.zip",
+    "security-datasets/datasets/atomic/windows/discovery/network/empire_shell_rpc_samr_smb_group_domain_admins_standard_user.zip",
+    "security-datasets/datasets/atomic/windows/discovery/network/empire_shell_samr_EnumDomainUsers.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/aadinternals_export_adfsdatabaseconfig_remotely.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_dcom_executeexcel4macro_allowed.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_dcom_iertutil_dll_hijack.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_dcom_registerxll.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_psremoting_command.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_sc_query_dcerpc_smb_svcctl.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_sharpsc_create_dcerpc_smb_svcctl.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_sharpsc_query_dcerpc_smb_svcctl.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_sharpsc_start_dcerpc_smb_svcctl.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_sharpsc_stop_dcerpc_smb_svcctl.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_sharpwmi_create_dcerpc_wmi.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_wmi_remote_event_subscription_ActiveScriptEventConsumers.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/covenant_wmi_wbemcomn_dll_hijack.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/empire_msbuild_dcerpc_wmi_smb.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/empire_psexec_dcerpc_tcp_svcctl.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/empire_psremoting_stager.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/empire_shell_dcerpc_smb_service_dll_hijack.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/empire_smbexec_dcerpc_smb_svcctl.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/empire_wmi_dcerpc_wmi_IWbemServices_ExecMethod.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/mimikatz_CVE-2020-1472_Unauthenticated_NetrServerAuthenticate2.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/purplesharp_ad_playbook_I.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/schtask_create.zip",
+    "security-datasets/datasets/atomic/windows/lateral_movement/network/schtask_modification.zip"
+  ],
+  "findings": 6074,
+  "incidents": 234,
+  "incidents_by_floor": {
+    "2": 7,
+    "3": 115,
+    "4": 87,
+    "5": 25
+  },
+  "compression": [
+    {
+      "scope": "whole store",
+      "events_n": 798471,
+      "findings_n": 6074,
+      "incidents_n": 234
+    },
+    {
+      "scope": "dataset evtx-attack-samples",
+      "events_n": 3096,
+      "findings_n": 776,
+      "incidents_n": 132
+    },
+    {
+      "scope": "dataset security-datasets",
+      "events_n": 795375,
+      "findings_n": 5298,
+      "incidents_n": 102
+    },
+    {
+      "scope": "chain file security-datasets/datasets/compound/apt29/day1/apt29_evals_day1_manual.zip",
+      "events_n": 152491,
+      "findings_n": 1483,
+      "incidents_n": 3
+    },
+    {
+      "scope": "synthetic benign set",
+      "events_n": 312,
+      "findings_n": 4,
+      "incidents_n": 4
+    }
+  ],
+  "in_band_events": 130,
+  "in_band": {
+    "events_with_flag_n": 130,
+    "files_with_flag_n": 21
+  },
+  "leakage": {
+    "status": "pass",
+    "hits_n": 0,
+    "hits": []
+  },
+  "gates": {
+    "benign_critical_gate": "pass",
+    "leakage_gate": "pass"
+  },
+  "split": {
+    "techniques_n": 55,
+    "testable_n": 18,
+    "untestable_n": 37,
+    "per_technique": {
+      "T1003": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1003.001": {
+        "train_n": 3,
+        "test_n": 2,
+        "untestable": false
+      },
+      "T1003.002": {
+        "train_n": 2,
+        "test_n": 2,
+        "untestable": false
+      },
+      "T1003.003": {
+        "train_n": 5,
+        "test_n": 2,
+        "untestable": false
+      },
+      "T1003.004": {
+        "train_n": 1,
+        "test_n": 1,
+        "untestable": false
+      },
+      "T1003.006": {
+        "train_n": 2,
+        "test_n": 2,
+        "untestable": false
+      },
+      "T1012": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1021": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1021.002": {
+        "train_n": 8,
+        "test_n": 5,
+        "untestable": false
+      },
+      "T1021.003": {
+        "train_n": 4,
+        "test_n": 3,
+        "untestable": false
+      },
+      "T1021.006": {
+        "train_n": 4,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1037.001": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1047": {
+        "train_n": 5,
+        "test_n": 6,
+        "untestable": false
+      },
+      "T1049": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1053.005": {
+        "train_n": 2,
+        "test_n": 4,
+        "untestable": false
+      },
+      "T1055": {
+        "train_n": 2,
+        "test_n": 1,
+        "untestable": false
+      },
+      "T1055.001": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1055.002": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1055.003": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1056.002": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1059": {
+        "train_n": 1,
+        "test_n": 1,
+        "untestable": false
+      },
+      "T1059.001": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1059.005": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1069.001": {
+        "train_n": 1,
+        "test_n": 1,
+        "untestable": false
+      },
+      "T1069.002": {
+        "train_n": 2,
+        "test_n": 2,
+        "untestable": false
+      },
+      "T1087.001": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1087.002": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1110.003": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1112": {
+        "train_n": 2,
+        "test_n": 1,
+        "untestable": false
+      },
+      "T1123": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1134.001": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1134.002": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1135": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1197": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1210": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1218": {
+        "train_n": 1,
+        "test_n": 1,
+        "untestable": false
+      },
+      "T1218.001": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1218.002": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1218.003": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1218.004": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1218.005": {
+        "train_n": 2,
+        "test_n": 1,
+        "untestable": false
+      },
+      "T1218.010": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1220": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1222.001": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1505.003": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1518": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1543.003": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1546.003": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1547.001": {
+        "train_n": 1,
+        "test_n": 1,
+        "untestable": false
+      },
+      "T1548.002": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1550.002": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1558.003": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1562.002": {
+        "train_n": 9,
+        "test_n": 8,
+        "untestable": false
+      },
+      "T1562.004": {
+        "train_n": 1,
+        "test_n": 0,
+        "untestable": true
+      },
+      "T1574.001": {
+        "train_n": 2,
+        "test_n": 0,
+        "untestable": true
+      }
+    },
+    "multi_label_files_n": 3,
+    "multi_label_files": {
+      "security-datasets/datasets/atomic/windows/lateral_movement/host/purplesharp_ad_playbook_I.zip": [
+        "T1021.006",
+        "T1110.003",
+        "T1135",
+        "T1558.003"
+      ],
+      "security-datasets/datasets/atomic/windows/lateral_movement/network/purplesharp_ad_playbook_I.zip": [
+        "T1021.006",
+        "T1110.003",
+        "T1135",
+        "T1558.003"
+      ],
+      "security-datasets/datasets/atomic/windows/other/aptsimulator_cobaltstrike.zip": [
+        "T1134.001",
+        "T1134.002"
+      ]
+    },
+    "excluded": {
+      "T0000": 2
+    }
+  }
+}

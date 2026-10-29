@@ -103,6 +103,61 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("DATABASE_URL"),
         help="Postgres URL (default: $DATABASE_URL).",
     )
+
+    evaluation = sub.add_parser("eval", help="Evaluation harness commands.")
+    eval_sub = evaluation.add_subparsers(dest="eval_command", required=True)
+    eval_run = eval_sub.add_parser(
+        "run",
+        help="Run load -> detect -> correlate over the replay store and "
+        "write eval/reports/latest.md and latest.json.",
+    )
+    eval_run.add_argument(
+        "--replay-dir",
+        default="data/replay",
+        help="Replay Parquet store directory (default: data/replay).",
+    )
+    eval_run.add_argument(
+        "--rules-dir",
+        default="data/sigma/rules",
+        help="Sigma rules directory (default: data/sigma/rules).",
+    )
+    eval_run.add_argument(
+        "--attack",
+        default="data/attack/enterprise.json",
+        help="Compact ATT&CK dictionary (default: data/attack/enterprise.json).",
+    )
+    eval_run.add_argument(
+        "--ground-truth",
+        default="data/ground_truth.json",
+        help="Ground-truth mapping (default: data/ground_truth.json).",
+    )
+    eval_run.add_argument(
+        "--benign-hosts", type=int, default=4, help="Benign hosts (default: 4)."
+    )
+    eval_run.add_argument(
+        "--benign-hours", type=int, default=24, help="Benign hours (default: 24)."
+    )
+    eval_run.add_argument(
+        "--benign-seed", type=int, default=7, help="Benign seed (default: 7)."
+    )
+    eval_run.add_argument(
+        "--report-md",
+        default="eval/reports/latest.md",
+        help="Markdown report path (default: eval/reports/latest.md).",
+    )
+    eval_run.add_argument(
+        "--report-json",
+        default="eval/reports/latest.json",
+        help="JSON report path (default: eval/reports/latest.json).",
+    )
+    eval_run.add_argument(
+        "--baseline",
+        default="eval/reports/latest.json",
+        help=(
+            "Committed baseline for deltas (the git HEAD version is used "
+            "for in-repo paths; default: eval/reports/latest.json)."
+        ),
+    )
     return parser
 
 
@@ -223,6 +278,33 @@ def main(argv: list[str] | None = None) -> int:
             "database when settings change)"
         )
         return 0
+    if args.command == "eval" and args.eval_command == "run":
+        from eval.harness import main as harness_main
+
+        return harness_main(
+            [
+                "--replay-dir",
+                args.replay_dir,
+                "--rules-dir",
+                args.rules_dir,
+                "--attack",
+                args.attack,
+                "--ground-truth",
+                args.ground_truth,
+                "--benign-hosts",
+                str(args.benign_hosts),
+                "--benign-hours",
+                str(args.benign_hours),
+                "--benign-seed",
+                str(args.benign_seed),
+                "--report-md",
+                args.report_md,
+                "--report-json",
+                args.report_json,
+                "--baseline",
+                args.baseline,
+            ]
+        )
     parser.error("unknown command")
     return 2
 
