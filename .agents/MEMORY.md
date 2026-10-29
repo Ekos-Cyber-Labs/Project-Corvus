@@ -643,3 +643,50 @@ rules back to Wazuh (shadow first, human approval).
   Postgres). No normalizer, correlation, prompt or model changes, so
   no eval delta. Compose Postgres left running. Awaiting maintainer
   commit.
+- 2026-10-29: built the single model entry point `corvus/llm/call.py`
+  (llm-engineer, security-reviewer pass included): budget reservation
+  first (over-cap refuses `pending_ai` before any contact), then
+  `prepare_payload` per trust, egress pre-check for cloud, transport,
+  validators 1-5 in order (syntax `invalid_output`/`truncated`,
+  schema with unknown-field rejection, semantics for uids/techniques/
+  pseudonyms/language, policy floor/cap/cited-escalation with missing
+  floor an error, security via `echoes_injection` quarantining once
+  with a `security_events` row and `review_required`, never retried),
+  3-try self-correction (structured-error repeat, attempt-3
+  temperature 0 plus one reasoning step up plus simplified schema,
+  early stop on a repeated code), profile fallback, deterministic
+  `ai_failed`, all-empty `indeterminate` (value None, escalated).
+  On-prem reasoning stored in `llm_attempts.reasoning`, cloud stores
+  NULL; every answer recorded with exact tokens; spend only via the
+  reservation conversion. `corvus/llm/stats.py` adds pure per-model
+  per-purpose metrics (calls, first-pass rate, average attempts,
+  failure rate, tokens/USD per resolved call, n on every number).
+  21 new stub-transport tests in `tests/test_llm_call.py`. Failures
+  found and fixed first: indeterminate rule compared error codes
+  instead of validator names (2 tests red), one test-side dataclass
+  subscript, two mypy errors (`**dict` unpack, error-var redef).
+  Verified with `make lint` (green: ruff check, format, mypy on 55
+  files) and the full `make test` (596 passed with Postgres). No
+  normalizer, correlation, prompt or model changes, so no eval delta.
+  Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: fix round on `corvus/llm/call.py` (one budget defect,
+  four smaller ones; 10 new tests, 31 in `tests/test_llm_call.py`).
+  Budget holds are now per transport try (worst case of one
+  attempt): at most one live hold per in-flight try, conversion
+  through that try's `record_attempt`, release when a try yields no
+  answer; a mid-loop refusal stops the loop and ends `ai_failed`
+  with `budget_exceeded` (`pending_ai` only when nothing was sent).
+  Validator 5 cannot run silently off: stored signals with empty
+  context signals raise `ValueError` before any reservation.
+  `ai_failed` now escalates `review_required` like `indeterminate`.
+  Dictionary-load and `simplified()` failures propagate instead of
+  blaming the model. Hygiene: ASCII `egress` naming, filter-build
+  failures release and return fatal (no escape with a live hold),
+  release failures log call/reservation ids without secrets. Two
+  red tests during the round (simplified-schema third scripts,
+  instance `__call__` never intercepts) fixed test-side; one
+  pre-commit hiccup (Go cache outside the sandbox) fixed with
+  redirected caches. Verified with `make lint` (green), the full
+  `make test` (606 passed with Postgres) and `pre-commit run
+  gitleaks --all-files` (Passed). No eval delta. Compose Postgres
+  left running. Awaiting maintainer commit.
