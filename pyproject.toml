@@ -17,6 +17,10 @@ dependencies = [
     # SigmaHQ rules, the sqlite backend emits the match SQL.
     "pySigma==2.0.1",
     "pySigma-backend-sqlite==2.1.1",
+    # Declared explicitly (was transitive via uvicorn): the static LLM
+    # price book (config/price_book.yaml) loads through it. PyYAML 6.0.3
+    # is the latest stable release, checked 2026-10-29.
+    "pyyaml>=6.0.3",
     "uvicorn[standard]>=0.30",
 ]
 

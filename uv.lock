@@ -245,6 +245,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pysigma" },
     { name = "pysigma-backend-sqlite" },
+    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -267,6 +268,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pysigma", specifier = "==2.0.1" },
     { name = "pysigma-backend-sqlite", specifier = "==2.1.1" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

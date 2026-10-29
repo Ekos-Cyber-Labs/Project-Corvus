@@ -20,6 +20,8 @@ EXPECTED_TABLES = {
     "pseudonyms",
     "spend",
     "llm_attempts",
+    "incident_analyses",
+    "spend_reservations",
 }
 
 # Key columns per table, exactly as named in the migration-002 spec.
@@ -103,6 +105,26 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "overhead_tokens",
         "latency_ms",
         "outcome",
+        "reasoning",
+        "token_source",
+        "created_at",
+    },
+    "incident_analyses": {
+        "id",
+        "incident_id",
+        "stage",
+        "status",
+        "payload",
+        "language",
+        "model",
+        "deterministic_floor",
+        "created_at",
+    },
+    "spend_reservations": {
+        "id",
+        "amount_usd",
+        "status",
+        "expires_at",
         "created_at",
     },
 }
@@ -133,6 +155,7 @@ def test_migrate_applies_twice_idempotently() -> None:
         assert "0001_schema_migrations.sql" in first
         assert "0002_core_tables.sql" in first
         assert "0003_severity_factors.sql" in first
+        assert "0004_llm_audit.sql" in first
         assert migrate(test_url) == []
         with psycopg.connect(test_url) as conn:
             with conn.cursor() as cur:
@@ -141,9 +164,10 @@ def test_migrate_applies_twice_idempotently() -> None:
                     "0001_schema_migrations.sql",
                     "0002_core_tables.sql",
                     "0003_severity_factors.sql",
+                    "0004_llm_audit.sql",
                 ]
 
-        # File-level idempotency: executing 0002 directly, twice, is safe.
+        # File-level idempotency: executing 0002 and 0004 directly, twice, is safe.
         sql_text = (Path(MIGRATIONS_DIR) / "0002_core_tables.sql").read_text(
             encoding="utf-8"
         )
@@ -151,6 +175,14 @@ def test_migrate_applies_twice_idempotently() -> None:
             with conn.cursor() as cur:
                 cur.execute(sql_text)
                 cur.execute(sql_text)
+            conn.commit()
+        audit_text = (Path(MIGRATIONS_DIR) / "0004_llm_audit.sql").read_text(
+            encoding="utf-8"
+        )
+        with psycopg.connect(test_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(audit_text)
+                cur.execute(audit_text)
             conn.commit()
 
         with psycopg.connect(test_url) as conn:
@@ -253,5 +285,100 @@ def test_migration_002_constraints() -> None:
         )
         with pytest.raises(errors.RestrictViolation):
             _execute(test_url, "DELETE FROM incidents WHERE id = %s", (incident_id,))
+    finally:
+        _drop_database(admin_url, name)
+
+
+@pytest.mark.integration
+def test_migration_004_audit_constraints() -> None:
+    admin_url, test_url = _test_database_urls()
+    name = _create_database(admin_url, test_url)
+    try:
+        migrate(test_url)
+
+        with psycopg.connect(test_url, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO incidents "
+                    "(correlation_key, severity_floor, severity_id) "
+                    "VALUES ('audit-1', 2, 2) RETURNING id"
+                )
+                row = cur.fetchone()
+                assert row is not None
+                incident_id = row[0]
+
+        # reasoning is nullable; token_source accepts the three provenances.
+        _execute(
+            test_url,
+            "INSERT INTO llm_attempts "
+            "(call_id, incident_id, model, purpose, attempt_number, outcome) "
+            "VALUES ('call-1', %s, 'glimmer', 'triage', 1, 'ok')",
+            (incident_id,),
+        )
+        _execute(
+            test_url,
+            "UPDATE llm_attempts SET reasoning = 'trace', "
+            "token_source = 'exact_ids' WHERE call_id = 'call-1'",
+        )
+        with pytest.raises(errors.CheckViolation):
+            _execute(
+                test_url,
+                "UPDATE llm_attempts SET token_source = 'guess' "
+                "WHERE call_id = 'call-1'",
+            )
+
+        # One analysis row per (incident, stage); stages and statuses are closed.
+        _execute(
+            test_url,
+            "INSERT INTO incident_analyses "
+            "(incident_id, stage, status, deterministic_floor) "
+            "VALUES (%s, 'triage', 'resolved', 2)",
+            (incident_id,),
+        )
+        with pytest.raises(errors.UniqueViolation):
+            _execute(
+                test_url,
+                "INSERT INTO incident_analyses (incident_id, stage, status) "
+                "VALUES (%s, 'triage', 'resolved')",
+                (incident_id,),
+            )
+        with pytest.raises(errors.CheckViolation):
+            _execute(
+                test_url,
+                "INSERT INTO incident_analyses (incident_id, stage, status) "
+                "VALUES (%s, 'review', 'resolved')",
+                (incident_id,),
+            )
+        with pytest.raises(errors.CheckViolation):
+            _execute(
+                test_url,
+                "INSERT INTO incident_analyses (incident_id, stage, status) "
+                "VALUES (%s, 'analysis', 'maybe')",
+                (incident_id,),
+            )
+
+        # Analyses cascade with their incident.
+        _execute(test_url, "DELETE FROM incidents WHERE id = %s", (incident_id,))
+        with psycopg.connect(test_url, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM incident_analyses")
+                row = cur.fetchone()
+                assert row is not None and row[0] == 0
+
+        # Reservations default to held with an expiry; amounts stay non-negative.
+        _execute(
+            test_url,
+            "INSERT INTO spend_reservations (amount_usd) VALUES (1.5) RETURNING id",
+        )
+        with pytest.raises(errors.CheckViolation):
+            _execute(
+                test_url,
+                "INSERT INTO spend_reservations (amount_usd) VALUES (-0.5)",
+            )
+        with pytest.raises(errors.CheckViolation):
+            _execute(
+                test_url,
+                "UPDATE spend_reservations SET status = 'spent'",
+            )
     finally:
         _drop_database(admin_url, name)

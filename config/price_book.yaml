@@ -1,0 +1,16 @@
+# Static per-token prices in USD per million tokens.
+# Checked 2026-10-29: muse-spark-1.3 row is published Meta pricing;
+# glimmer is served on-prem, so per-token charges are 0 (electricity not included).
+muse-spark-1.3:
+  input_per_mtok: 1.25
+  cached_input_per_mtok: 0.15
+  output_per_mtok: 4.25
+  source: "published Meta pricing"
+  date: "2026-10-28"
+glimmer:
+  input_per_mtok: 0
+  cached_input_per_mtok: 0
+  output_per_mtok: 0
+  source: "on-prem model, no per-token charge"
+  date: "2026-10-28"
+  note: "on-prem: electricity not included"

@@ -186,7 +186,8 @@ or model inputs. Details: `datasets/README.md`.
   client only talks to allowlisted hosts.
 - Degraded mode (simple): deterministic detection keeps alerting; incidents
   wait as "pending AI analysis". A USD spend cap stops Spark calls near the
-  limit (static `price_book` YAML maps models to per-token prices).
+  limit (static `price_book` YAML maps models to per-token prices). All
+  billed model calls must reserve before the call and convert after it.
   `[ROADMAP]` Operating modes with schedules, "what would another model cost".
 - Resume after being stopped: ingestion checkpoints (`search_after` cursors),
   durable work queue, persisted agent steps, plus a written summary so a new
@@ -290,7 +291,12 @@ or model inputs. Details: `datasets/README.md`.
   `work_queue`, `incidents`, `agent_steps`, `rules`, `dispositions`,
   `pseudonyms` (deployment-stable, so the same entity keeps its pseudonym
   across incidents and the UI can map back to real values), `spend`, and
-  `llm_attempts`. All timestamps are `timestamptz` (`updated_at` is set
+  `llm_attempts`; `0004_llm_audit.sql` adds the audit-only nullable
+  `llm_attempts.reasoning` (stays on-prem) and `token_source`
+  (`exact_ids` / `usage` / `estimated`), the `incident_analyses` table
+  (one row per incident and stage, `triage` / `analysis`), and
+  `spend_reservations` for the USD budget guard. All timestamps are
+  `timestamptz` (`updated_at` is set
   by the application; there are no triggers). Partial indexes support the
   queue claim/lease queries, and composite indexes support the
   newest-first incident list filtered by status, AI status, and severity;

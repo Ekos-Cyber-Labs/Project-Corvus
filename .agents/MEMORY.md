@@ -502,3 +502,33 @@ rules back to Wazuh (shadow first, human approval).
   Postgres). Eval harness re-run to throwaway reports: every metric
   delta +0 vs the committed baseline, both gates pass, 237 s wall.
   Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: built the LLM foundations every model call will use (no
+  model calls yet): per-purpose backend config in `corvus/llm/config.py`
+  (triage/analysis purposes, MODEL_PROFILE routing, secret redaction),
+  the static price book in `config/price_book.yaml` plus
+  `corvus/llm/price_book.py` (PyYAML declared explicitly in
+  `pyproject.toml`; 6.0.3 confirmed latest stable on 2026-10-29),
+  migration `0004_llm_audit.sql` (audit-only `llm_attempts.reasoning`,
+  `token_source`, `incident_analyses`, `spend_reservations`), and the
+  Postgres-backed spend/budget guard in `corvus/llm/spend.py`
+  (pre-call reservations under an advisory lock, expiring holds, local
+  spend at 0). One self-authored budget assertion had the wrong
+  threshold (fixed; the code was right). Verified with `make lint`
+  (green) and the full `make test` (417 passed with Postgres). No
+  normalizer, correlation, prompt or model changes, so no eval delta.
+  Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: small three-part fix on the LLM foundations, nothing else
+  changed. Startup now requires a price-book row for every configured
+  model (`corvus/llm/config.py`, `PRICE_BOOK_PATH` override for tests;
+  no implicit zero for on-prem) and refuses on-prem trust on a public
+  endpoint unless `<PURPOSE>_ALLOW_PUBLIC_ONPREM=1` (stub-injected
+  resolver in tests, short-timeout getaddrinfo in production).
+  `convert_reservation` in `corvus/llm/spend.py` always records the
+  spend and returns a `ConversionResult` with `hold_active`; new
+  `hold_ttl` helper derives the hold from timeout x attempts plus
+  margin (600 s stays the fallback). One architecture sentence added
+  (reserve before, convert after). Lint nits (line length, format,
+  one mypy arg-type) found and fixed before the test runs; no test
+  failures. Verified with `make lint` (green) and the full `make test`
+  (427 passed with Postgres). No eval delta. Compose Postgres left
+  running. Awaiting maintainer commit.
