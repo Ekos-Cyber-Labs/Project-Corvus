@@ -225,6 +225,29 @@ rules back to Wazuh (shadow first, human approval).
   Verified with the lint gate and the full suite (178 passed; only
   the Postgres-guarded tests failing, no database reachable).
   Awaiting maintainer commit.
+- 2026-10-28: fixed the `serialize_ocsf` docstring carry-over from the
+  9L review (typed `None` fields are dropped at every nesting level,
+  but the free-form `unmapped` object keeps nulls verbatim as logged)
+  and built deterministic correlation as pure logic in
+  `corvus/correlate/` (no storage, CLI, or report; the follow-up adds
+  those). Findings join on host, user (service identities never join),
+  endpoint IPs, and host-scoped process lineage within a 30-minute
+  session gap and a 24-hour max span (defaults in `corvus/settings.py`
+  with comments); cross-host joins need a shared human user or a
+  remote-IP-to-device-IP lateral link. The severity floor (1-5, never
+  6) scores factors 1, 2, and 4 with per-factor explanations in
+  `severity_factors`; every incident field matches the `incidents`
+  table of migration `0002` plus that column. Fix pass: merges keep
+  the oldest cluster's key (no string comparison), breadth counts
+  distinct per-finding primary tactics (one multi-tactic finding earns
+  no bonus), factor 4 scans every matching Authentication event in the
+  passed map inside `[first_seen - session gap, last_seen]`, and the
+  score step is the named `SCORE_BREADTH_STEP`. Covered by 23 tests in
+  `tests/test_correlate.py`; census over the replay store (6074
+  findings) yields 234 incidents with floors 2:7, 3:115, 4:87, 5:25,
+  58 at breadth >= 3, and 1 firing factor 4. Verified with `make lint`
+  (green) and the full `make test` (294 passed with Postgres).
+  Awaiting maintainer commit.
 - 2026-10-28: platform pin refresh (every pin re-checked against its
   upstream release list on 2026-10-28). Python 3.12 -> 3.14
   (`requires-python`, ruff target, mypy, `python:3.14-slim` base; 3.15

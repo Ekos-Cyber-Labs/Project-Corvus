@@ -91,13 +91,18 @@ def dataset_for_rel(data_rel: str) -> str:
 def serialize_ocsf(event: OcsfEvent) -> str:
     """Serialize one OCSF record exactly as the store keeps it.
 
-    Drops ``None`` values at every nesting level alongside the
-    Corvus-internal ``entity_keys``, so a null-valued name the class
-    does not define can never hide in the stored JSON. Readers only
-    ever ``.get()`` stored fields (or revalidate with pydantic), and
-    ``raw_data`` placeholders such as ``"-"`` are strings, so omitting
-    nulls changes no value the detector reads; reading a stored record
-    back revalidates and recomputes ``entity_keys``.
+    Drops ``None``-valued typed fields at every nesting level
+    alongside the Corvus-internal ``entity_keys``, so a null-valued
+    name the class does not define can never hide in the stored JSON.
+    The free-form ``unmapped`` object is the one exception: it keeps
+    ``None`` values verbatim as logged (1,168 stored Script Activity
+    records carry ``unmapped`` ``UserData``, ``Path`` or ``Binary`` as
+    null), because it records what the source logged, nulls included.
+    Readers only ever ``.get()`` stored fields (or revalidate with
+    pydantic), and ``raw_data`` placeholders such as ``"-"`` are
+    strings, so omitting typed nulls changes no value the detector
+    reads; reading a stored record back revalidates and recomputes
+    ``entity_keys``.
     """
     return event.model_dump_json(exclude={"entity_keys"}, exclude_none=True)
 
