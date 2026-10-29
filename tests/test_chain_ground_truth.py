@@ -15,7 +15,6 @@ import pytest
 
 from corvus.adapters.replay import load_path
 from corvus.adapters.replay.adapter import ReplayAdapter
-from corvus.normalize.technique_ids import find_technique_ids
 from eval.chain_ground_truth import (
     evaluate_mapped,
     event_text_fields,
@@ -25,6 +24,7 @@ from eval.chain_ground_truth import (
     step_window_ms,
 )
 from eval.ground_truth import build_ground_truth
+from eval.leakage import scan_dumps
 from tests.fixtures import windows_events as fx
 
 CHAIN = load_chain()
@@ -264,19 +264,15 @@ def test_apt29_shaped_path_never_leaks_into_records(tmp_path: Path) -> None:
     dumps = [event.model_dump_json() for event in adapter.query_events()]
     dumps += [entry.model_dump_json() for entry in adapter.describe_sources().sources]
     assert len(dumps) >= 3
-    for dump in dumps:
-        lowered = dump.lower()
-        assert "apt29" not in lowered
-        assert "apt29_evals_day1_manual" not in dump
-        assert "compound" not in lowered
-        assert find_technique_ids(dump) == []
-        for step in CHAIN["steps"]:
-            for technique in step["techniques"] + step["plan_techniques"]:
-                assert technique not in dump
-            for anchor in step["anchors"]:
-                assert anchor not in lowered
-            assert step["window"]["start"] not in dump
-            assert step["window"]["end"] not in dump
+    substrings = ["apt29", "apt29_evals_day1_manual", "compound"]
+    ids: list[str] = []
+    for step in CHAIN["steps"]:
+        ids.extend(step["techniques"])
+        ids.extend(step["plan_techniques"])
+        substrings.extend(step["anchors"])
+        substrings.append(step["window"]["start"])
+        substrings.append(step["window"]["end"])
+    assert scan_dumps(dumps, substrings, ids) == []
 
 
 @pytest.mark.skipif(not DATASET.is_file(), reason="APT29 dataset not fetched")

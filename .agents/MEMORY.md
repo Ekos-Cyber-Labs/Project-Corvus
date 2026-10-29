@@ -430,3 +430,38 @@ rules back to Wazuh (shadow first, human approval).
   strings, baseline provenance). Verified with `make lint` (green)
   and the full `make test` (327 passed with Postgres). Compose
   Postgres left running. Awaiting maintainer commit.
+- 2026-10-28: fixed four review findings on the eval harness, no
+  measure changed: shared leakage assertions live in
+  `eval/leakage.py` (`scan_dumps`), called by `tests/test_replay.py`,
+  `tests/test_chain_ground_truth.py` and the `corvus eval run` gate;
+  atomic coverage now splits `with_match_n` into exact
+  (sub-technique to sub-technique, technique to technique) and
+  parent-only, with a per-file match column; every chain step carries
+  in-window findings n plus whether any matches a step technique
+  (APT29 day-1 steps 2 and 10 uncovered with n=850 and n=44
+  in-window findings, none technique-match); the report meta records
+  a dirty-tree flag plus changed-path count (latest.* excluded).
+  Regenerated once: 6074 findings, 234 incidents, chain 8/10 best
+  and all, 4 benign Medium incidents, atomic 53 = 46 exact +
+  7 parent-only, both gates pass, deltas all +0 vs the committed
+  baseline, 254 s wall. `tests/test_eval_harness.py` grew by the
+  shared-planted-string test, the exact/parent-only/unmatched trio,
+  the chain gap test and a temp-repo dirty-tree test. Verified with
+  `make lint` (green) and the full `make test` (332 passed with
+  Postgres). Compose Postgres left running. Awaiting maintainer
+  commit.
+- 2026-10-28: fixed the atomic exact/parent-only misclassification in
+  `eval/harness.py`: exact now matches at the ground truth's own
+  granularity (stated technique equals a ground-truth technique, or a
+  sub-technique of a parent ground-truth technique), so parent-GT
+  files matching via the parent or a sub-technique are exact, not
+  parent-only. The now-unused `stated_techniques` row field is gone;
+  nothing else changed. Regenerated once: 6074 findings,
+  234 incidents, chain 8/10 best and all, 4 benign Medium incidents,
+  atomic 53 = 48 exact + 5 parent-only (was 46 + 7), both gates pass,
+  deltas all +0 vs the committed baseline, 319 s wall. The
+  exact/parent-only test gained the two parent-GT fixtures (finding
+  states the parent; finding states a sub-technique). Verified with
+  `make lint` (green) and the full `make test` (332 passed with
+  Postgres). Compose Postgres left running. Awaiting maintainer
+  commit.

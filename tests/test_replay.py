@@ -17,7 +17,7 @@ from corvus.adapters.replay import format_summary, load_path
 from corvus.adapters.replay.adapter import ReplayAdapter
 from corvus.adapters.replay.schema import provenance_dir
 from corvus.adapters.siem import Cursor, Entity
-from corvus.normalize.technique_ids import find_technique_ids
+from eval.leakage import scan_dumps
 from tests.fixtures import windows_events as fx
 
 TECHNIQUE_ARCHIVE = "T1003_credprobe_fixture.zip"
@@ -148,11 +148,14 @@ def test_adapter_returns_never_leak_paths_or_technique_ids(
     dumps.extend(event.model_dump_json() for event in adapter.query_events())
     for entry in adapter.describe_sources().sources:
         dumps.append(entry.model_dump_json())
-    for dump in dumps:
-        assert "T1003" not in dump
-        assert "credprobe" not in dump
-        assert "datasets/atomic/windows" not in dump
-        assert find_technique_ids(dump) == []
+    assert (
+        scan_dumps(
+            dumps,
+            ["T1003", "credprobe", "datasets/atomic/windows"],
+            ["T1003"],
+        )
+        == []
+    )
 
 
 def test_load_summary_reports_counts(tmp_path: Path, capsys: object) -> None:

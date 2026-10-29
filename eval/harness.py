@@ -24,7 +24,7 @@ Gates (a failing gate exits 1 and fails the run):
   or chain anchor reaches an OCSF event, finding or incident row,
   except rule tags in findings (detector output) and rows the loader
   flagged in-band (reported under the in-band metric instead). The
-  string logic reuses ``find_technique_ids`` and the assertions of
+  string assertions live in ``eval.leakage.scan_dumps``, shared with
   ``tests/test_replay.py`` and ``tests/test_chain_ground_truth.py``.
 
 Deltas: ``latest.json`` is committed; each run compares the fresh
@@ -104,6 +104,40 @@ def maintainer_today() -> str:
     return (datetime.now(tz=UTC) - timedelta(hours=6)).date().isoformat()
 
 
+def git_tree_status(repo_root: Path = REPO_ROOT) -> tuple[bool, int]:
+    """Return (dirty, changed-paths n) for the working tree.
+
+    Counts every ``git status --porcelain`` entry except this run's own
+    outputs (``eval/reports/latest.*``); untracked files count as
+    changes. Recorded when the run starts, before the reports are
+    written. Returns ``(False, 0)`` when git is unavailable or the
+    directory is not a repository.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except OSError, subprocess.SubprocessError:
+        return False, 0
+    if out.returncode != 0:
+        return False, 0
+    excluded = {"eval/reports/latest.md", "eval/reports/latest.json"}
+    count = 0
+    for line in out.stdout.splitlines():
+        rest = line[3:] if len(line) > 3 else ""
+        if " -> " in rest:
+            rest = rest.split(" -> ", 1)[1]
+        if rest.strip().strip('"') in excluded:
+            continue
+        if rest.strip():
+            count += 1
+    return count > 0, count
+
+
 def parse_ms(moment: str) -> int:
     """Parse an ISO-8601 UTC moment to epoch milliseconds."""
     parsed = datetime.fromisoformat(moment.replace("Z", "+00:00"))
@@ -142,48 +176,6 @@ def benign_gate_fails(incidents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for incident in incidents
         if int(incident.get("severity_id", 0)) >= SEVERITY_IDS["critical"]
     ]
-
-
-def check_leakage(
-    dumps: list[str],
-    forbidden_substrings: list[str],
-    forbidden_ids: list[str],
-    *,
-    check_techniques: bool = True,
-) -> list[str]:
-    """Scan serialized rows for ground-truth leakage (pure, testable).
-
-    Mirrors the assertions of ``tests/test_replay.py`` (file names and
-    technique ids never reach adapter returns) and
-    ``tests/test_chain_ground_truth.py`` (dataset, technique, anchor and
-    window strings never reach records): every dump must contain none
-    of the forbidden substrings (case-insensitive) and, when
-    ``check_techniques`` holds, none of the forbidden technique ids,
-    with ``find_technique_ids`` over the dump empty. Callers choose
-    which markers to pass: dataset/file/window markers for every store,
-    chain anchors only for the synthetic benign store (anchors are real
-    attack evidence in the attack store — the chain census counts anchor
-    hits in mapped events — so only the benign probe can fail on them).
-    Callers also scrub detector output (finding attacks, incident
-    techniques) and exempt loader-flagged in-band rows before calling.
-    Returns the hit descriptions (empty when clean).
-    """
-    from corvus.normalize.technique_ids import find_technique_ids
-
-    hits: list[str] = []
-    for index, dump in enumerate(dumps):
-        lowered = dump.lower()
-        for marker in forbidden_substrings:
-            if marker and marker.lower() in lowered:
-                hits.append(f"row {index}: forbidden substring {marker!r}")
-        if not check_techniques:
-            continue
-        for technique in forbidden_ids:
-            if technique and technique in dump:
-                hits.append(f"row {index}: forbidden technique id {technique!r}")
-        if find_technique_ids(dump):
-            hits.append(f"row {index}: technique token {find_technique_ids(dump)!r}")
-    return hits
 
 
 def inventory_store(replay_dir: Path) -> dict[str, Any]:
@@ -268,9 +260,9 @@ def load_finding_rows(
 
     Each row carries the finding uid, time, rule, level, host, the
     data-relative file of its related event, and the parent-expanded
-    technique set. Technique expansion matches ``eval/detect_census.py``
-    (parent or self on both sides); the join only reads what the
-    product detector wrote.
+    technique set. Technique expansion matches
+    ``eval/detect_census.py`` (parent or self on both sides); the join
+    only reads what the product detector wrote.
     """
     import pyarrow.parquet as pq
 
@@ -375,15 +367,24 @@ def chain_step_coverage(
         window = step.get("window", {})
         start = parse_ms(window["start"])
         end = parse_ms(window["end"])
+        ground = ground_expanded(list(step["techniques"]))
+        in_window = [
+            row
+            for row in finding_rows
+            if row["file"] == chain_file and start <= row["time"] <= end
+        ]
         steps.append(
             {
                 "step": int(step["step"]),
                 "name": str(step["name"]),
                 "window": dict(window),
                 "techniques": list(step["techniques"]),
-                "ground": ground_expanded(list(step["techniques"])),
-                "start": start,
-                "end": end,
+                "ground": ground,
+                "in_window": in_window,
+                "findings_in_window_n": len(in_window),
+                "window_has_technique_match": any(
+                    bool(row["techniques"] & ground) for row in in_window
+                ),
             }
         )
     per_incident: list[list[int]] = []
@@ -391,11 +392,8 @@ def chain_step_coverage(
         covered: list[int] = []
         for step in steps:
             hit = any(
-                row["file"] == chain_file
-                and step["start"] <= row["time"] <= step["end"]
-                and bool(row["techniques"] & step["ground"])
-                for row in finding_rows
-                if row["uid"] in members
+                row["uid"] in members and bool(row["techniques"] & step["ground"])
+                for row in step["in_window"]
             )
             if hit:
                 covered.append(step["step"])
@@ -422,6 +420,8 @@ def chain_step_coverage(
                 "techniques": step["techniques"],
                 "covered_by_best": step["step"] in best,
                 "covered_by_all": step["step"] in all_covered,
+                "findings_in_window_n": step["findings_in_window_n"],
+                "window_has_technique_match": step["window_has_technique_match"],
             }
             for step in steps
         ],
@@ -440,19 +440,29 @@ def atomic_coverage(
 
     A file counts as matched when at least one of its findings carries
     a technique whose parent (or self) is one of the file's ground-truth
-    techniques. Files with no events in the replay store (network/pcap
-    datasets, never ingested) are reported separately instead of being
-    counted as misses. The parent-or-self comparison matches
+    techniques; ``with_match_n`` is that count, split at the ground
+    truth's own granularity into exact files (``with_exact_n``: some
+    finding states a ground-truth technique, or a sub-technique of a
+    ground-truth technique that is itself a parent) and parent-only
+    files (``with_parent_only_n``: the finding is less specific than a
+    sub-technique ground truth, or a sibling sub-technique). Files with
+    no events in the replay store (network/pcap datasets, never
+    ingested) are reported separately instead of being counted as
+    misses. The parent-or-self comparison matches
     ``eval/detect_census.py``.
     """
     from corvus.attack import normalize_id
 
-    def expanded(techniques: list[Any]) -> set[str]:
+    def canonical_ids(techniques: list[Any]) -> set[str]:
         out: set[str] = set()
         for raw in techniques:
             canonical = normalize_id(str(raw)) or str(raw)
             out.add(canonical)
-            out.add(canonical.split(".")[0])
+        return out
+
+    def expanded(techniques: list[Any]) -> set[str]:
+        out = canonical_ids(techniques)
+        out.update(parent.split(".")[0] for parent in list(out))
         return out
 
     truth_files = sorted(
@@ -470,10 +480,23 @@ def atomic_coverage(
     per_file = []
     with_finding = 0
     with_match = 0
+    with_exact = 0
+    with_parent_only = 0
     for data_file in in_store:
         rows = by_file.get(data_file, [])
+        ground_exact = canonical_ids(
+            list(ground_truth[data_file].get("techniques", []))
+        )
         ground = expanded(list(ground_truth[data_file].get("techniques", [])))
-        matched = sorted(
+        exact = sorted(
+            {
+                technique
+                for row in rows
+                for technique in row["techniques"]
+                if technique in ground_exact
+            }
+        )
+        shared = sorted(
             {
                 technique
                 for row in rows
@@ -481,15 +504,29 @@ def atomic_coverage(
                 if technique in ground
             }
         )
+        if exact:
+            match_kind = "exact"
+            matched = exact
+        elif shared:
+            match_kind = "parent-only"
+            matched = shared
+        else:
+            match_kind = "none"
+            matched = []
         if rows:
             with_finding += 1
         if matched:
             with_match += 1
+        if match_kind == "exact":
+            with_exact += 1
+        elif match_kind == "parent-only":
+            with_parent_only += 1
         per_file.append(
             {
                 "file": data_file,
                 "findings_n": len(rows),
-                "matched": bool(matched),
+                "matched": bool(shared),
+                "match_kind": match_kind,
                 "matched_techniques": matched,
             }
         )
@@ -500,6 +537,8 @@ def atomic_coverage(
         "not_in_store": not_in_store,
         "with_finding_n": with_finding,
         "with_match_n": with_match,
+        "with_exact_n": with_exact,
+        "with_parent_only_n": with_parent_only,
         "per_file": per_file,
     }
 
@@ -862,8 +901,9 @@ def _leakage_over_stores(
     injection probe: benign records contain no attack artifacts, so any
     anchor there proves the pipeline injected ground truth. Cheap
     pre-filters (a few short substrings plus two small regexes) select
-    the rare candidate rows of the 798k-row event scan; ``check_leakage``
-    still names every hit.
+    the rare candidate rows of the 798k-row event scan; shared
+    ``eval.leakage.scan_dumps`` (also used by ``tests/test_replay.py``
+    and ``tests/test_chain_ground_truth.py``) still names every hit.
     """
     import re
 
@@ -871,6 +911,7 @@ def _leakage_over_stores(
 
     from corvus.adapters.replay.schema import events_dir, findings_dir
     from corvus.normalize.technique_ids import find_technique_ids
+    from eval.leakage import scan_dumps
 
     markers = _forbidden_markers(ground_truth)
     datasets = markers["datasets"]
@@ -890,13 +931,13 @@ def _leakage_over_stores(
         for record in pq.read_table(path, columns=["uid", "event_json"]).to_pylist():
             dump = str(record["event_json"])
             if dataset_trigger.search(dump):
-                hits.extend(check_leakage([dump], datasets, [], check_techniques=False))
+                hits.extend(scan_dumps([dump], datasets, [], check_techniques=False))
             if file_trigger.search(dump):
-                hits.extend(check_leakage([dump], files, [], check_techniques=False))
+                hits.extend(scan_dumps([dump], files, [], check_techniques=False))
             if window_trigger.search(dump):
-                hits.extend(check_leakage([dump], windows, [], check_techniques=False))
+                hits.extend(scan_dumps([dump], windows, [], check_techniques=False))
             if str(record["uid"]) not in flagged and find_technique_ids(dump):
-                hits.extend(check_leakage([dump], [], ids))
+                hits.extend(scan_dumps([dump], [], ids))
 
     for path in sorted(findings_dir(replay_dir).glob("*.parquet")):
         for record in pq.read_table(path).to_pylist():
@@ -913,13 +954,13 @@ def _leakage_over_stores(
             finding["finding_info"]["attacks"] = []
             dump = json.dumps(finding)
             if dataset_trigger.search(dump):
-                hits.extend(check_leakage([dump], datasets, [], check_techniques=False))
+                hits.extend(scan_dumps([dump], datasets, [], check_techniques=False))
             if file_trigger.search(dump):
-                hits.extend(check_leakage([dump], files, [], check_techniques=False))
+                hits.extend(scan_dumps([dump], files, [], check_techniques=False))
             if window_trigger.search(dump):
-                hits.extend(check_leakage([dump], windows, [], check_techniques=False))
+                hits.extend(scan_dumps([dump], windows, [], check_techniques=False))
             if related not in flagged and find_technique_ids(dump):
-                hits.extend(check_leakage([dump], [], ids))
+                hits.extend(scan_dumps([dump], [], ids))
 
     scrubbed_incidents = []
     for incident in incidents:
@@ -928,7 +969,7 @@ def _leakage_over_stores(
         scrubbed_incidents.append(json.dumps(scrubbed, sort_keys=True, default=str))
     if scrubbed_incidents:
         all_meta = datasets + files + windows + anchors
-        hits.extend(check_leakage(scrubbed_incidents, all_meta, ids))
+        hits.extend(scan_dumps(scrubbed_incidents, all_meta, ids))
 
     benign_meta = datasets + files + windows + anchors
     for path in sorted(events_dir(benign_replay_dir).glob("*.parquet")):
@@ -937,7 +978,7 @@ def _leakage_over_stores(
             for record in pq.read_table(path, columns=["event_json"]).to_pylist()
         ]
         if dumps:
-            hits.extend(check_leakage(dumps, benign_meta, ids))
+            hits.extend(scan_dumps(dumps, benign_meta, ids))
     for path in sorted(findings_dir(benign_replay_dir).glob("*.parquet")):
         dumps = []
         for record in pq.read_table(path).to_pylist():
@@ -945,14 +986,14 @@ def _leakage_over_stores(
             (finding.get("finding_info") or {})["attacks"] = []
             dumps.append(json.dumps(finding))
         if dumps:
-            hits.extend(check_leakage(dumps, benign_meta, ids))
+            hits.extend(scan_dumps(dumps, benign_meta, ids))
     scrubbed_benign = []
     for incident in benign_incidents:
         scrubbed = dict(incident)
         scrubbed["techniques"] = []
         scrubbed_benign.append(json.dumps(scrubbed, sort_keys=True, default=str))
     if scrubbed_benign:
-        hits.extend(check_leakage(scrubbed_benign, benign_meta, ids))
+        hits.extend(scan_dumps(scrubbed_benign, benign_meta, ids))
     return hits
 
 
@@ -1016,6 +1057,8 @@ def format_deltas(baseline: dict[str, Any], current: dict[str, Any]) -> list[str
         ("benign_incidents", "benign incidents"),
         ("benign_critical", "benign Critical+ incidents"),
         ("atomic_match", "atomic files with a technique match"),
+        ("atomic_exact", "atomic files with an exact technique match"),
+        ("atomic_parent_only", "atomic files matching at parent level only"),
         ("findings", "findings"),
         ("incidents", "incidents"),
         ("in_band_events", "in-band events"),
@@ -1077,6 +1120,7 @@ def run_harness(
 
     wall_started = time.monotonic()
     notes: list[str] = []
+    dirty_tree, dirty_paths_n = git_tree_status()
     attack = load_dictionary(attack_path)
     ground_truth: dict[str, Any] = json.loads(
         ground_truth_path.read_text(encoding="utf-8")
@@ -1173,6 +1217,8 @@ def run_harness(
             ),
             "git_commit": git_commit(),
             "generated_at": maintainer_today(),
+            "dirty_tree": dirty_tree,
+            "dirty_paths_n": dirty_paths_n,
             "data_window": {
                 "start": format_ms(window_start) if window_start else None,
                 "end": format_ms(window_end) if window_end else None,
@@ -1197,8 +1243,12 @@ def run_harness(
             "not_in_store_n": atomic["not_in_store_n"],
             "with_finding_n": atomic["with_finding_n"],
             "with_match_n": atomic["with_match_n"],
+            "with_exact_n": atomic["with_exact_n"],
+            "with_parent_only_n": atomic["with_parent_only_n"],
         },
         "atomic_match": atomic["with_match_n"],
+        "atomic_exact": atomic["with_exact_n"],
+        "atomic_parent_only": atomic["with_parent_only_n"],
         "atomic_detail": atomic["per_file"],
         "atomic_not_in_store": atomic["not_in_store"],
         "findings": detect_stats["findings"],
@@ -1260,6 +1310,13 @@ def render_markdown(results: dict[str, Any], delta_lines: list[str]) -> str:
         f"correlate {meta['correlate_seconds']} s).",
         f"Gates: benign Critical gate {results['gates']['benign_critical_gate']}, "
         f"leakage gate {results['gates']['leakage_gate']}.",
+        (
+            f"Working tree: dirty at run start (n={results['meta']['dirty_paths_n']} "
+            "changed paths, excluding eval/reports/latest.*); the commit "
+            "recorded above is the parent of uncommitted work."
+            if results["meta"]["dirty_tree"]
+            else "Working tree: clean at run start."
+        ),
         "",
         "## Inputs",
         "",
@@ -1306,16 +1363,34 @@ def render_markdown(results: dict[str, Any], delta_lines: list[str]) -> str:
             f"- Best incident covers n={chain['best_covered_n']} steps; "
             f"all incidents together cover n={chain['all_covered_n']} steps.",
             "",
-            "| step | window (UTC) | techniques | best | all |",
-            "| --- | --- | --- | --- | --- |",
+            "| step | window (UTC) | techniques | best | all | "
+            "in-window (n) | window match |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ]
         for step in chain["steps"]:
             lines.append(
                 f"| {step['step']} {step['name']} | {step['window']['start']} .. "
                 f"{step['window']['end']} | {', '.join(step['techniques'])} | "
                 f"{'yes' if step['covered_by_best'] else 'no'} | "
-                f"{'yes' if step['covered_by_all'] else 'no'} |"
+                f"{'yes' if step['covered_by_all'] else 'no'} | "
+                f"{step['findings_in_window_n']} | "
+                f"{'yes' if step['window_has_technique_match'] else 'no'} |"
             )
+        for step in chain["steps"]:
+            if step["covered_by_all"]:
+                continue
+            if step["findings_in_window_n"] > 0:
+                gap = (
+                    f"in-window findings exist (n={step['findings_in_window_n']}), "
+                    + (
+                        "some technique-match"
+                        if step["window_has_technique_match"]
+                        else "none technique-match"
+                    )
+                )
+            else:
+                gap = "no findings in the window (n=0)"
+            lines.append(f"- Step {step['step']} {step['name']} uncovered: {gap}.")
         lines.append("")
     lines += [
         "## Atomic technique coverage (OTRF otrf-metadata files only)",
@@ -1326,17 +1401,21 @@ def render_markdown(results: dict[str, Any], delta_lines: list[str]) -> str:
         f"n={results['atomic']['not_in_store_n']} without (network/pcap, never "
         "ingested: excluded, not counted as misses).",
         f"- n={results['atomic']['with_finding_n']} with >= 1 finding; "
-        f"n={results['atomic']['with_match_n']} with a finding whose technique "
-        "parent matches the ground truth.",
+        f"n={results['atomic']['with_match_n']} with a finding matching the "
+        "ground truth at its own granularity "
+        f"(n={results['atomic']['with_exact_n']} exact — stated technique "
+        "equals a ground-truth technique or a sub-technique of a parent "
+        "ground-truth technique, "
+        f"n={results['atomic']['with_parent_only_n']} parent-only).",
         "",
-        "| file | findings (n) | technique match | matched techniques |",
+        "| file | findings (n) | match | matched techniques |",
         "| --- | --- | --- | --- |",
     ]
     for row in results["atomic_detail"]:
         slug = str(row["file"]).replace(".zip", "").replace(".evtx", "")
         lines.append(
             f"| {slug} | {row['findings_n']} | "
-            f"{'yes' if row['matched'] else 'no'} | "
+            f"{row['match_kind']} | "
             f"{', '.join(row['matched_techniques'])} |"
         )
     lines += [
@@ -1494,6 +1573,8 @@ def main(argv: list[str] | None = None) -> int:
                     "benign_incidents": baseline.get("benign_incidents"),
                     "benign_critical": baseline.get("benign_critical"),
                     "atomic_match": baseline.get("atomic_match"),
+                    "atomic_exact": baseline.get("atomic_exact"),
+                    "atomic_parent_only": baseline.get("atomic_parent_only"),
                     "findings": baseline.get("findings"),
                     "incidents": baseline.get("incidents"),
                     "in_band_events": baseline.get("in_band_events"),
@@ -1503,6 +1584,8 @@ def main(argv: list[str] | None = None) -> int:
                     "benign_incidents": results["benign_incidents"],
                     "benign_critical": results["benign_critical"],
                     "atomic_match": results["atomic_match"],
+                    "atomic_exact": results["atomic_exact"],
+                    "atomic_parent_only": results["atomic_parent_only"],
                     "findings": results["findings"],
                     "incidents": results["incidents"],
                     "in_band_events": results["in_band_events"],
@@ -1524,6 +1607,8 @@ def main(argv: list[str] | None = None) -> int:
                     "benign_incidents": baseline.get("benign_incidents"),
                     "benign_critical": baseline.get("benign_critical"),
                     "atomic_match": baseline.get("atomic_match"),
+                    "atomic_exact": baseline.get("atomic_exact"),
+                    "atomic_parent_only": baseline.get("atomic_parent_only"),
                     "findings": baseline.get("findings"),
                     "incidents": baseline.get("incidents"),
                     "in_band_events": baseline.get("in_band_events"),
@@ -1533,6 +1618,8 @@ def main(argv: list[str] | None = None) -> int:
                     "benign_incidents": results["benign_incidents"],
                     "benign_critical": results["benign_critical"],
                     "atomic_match": results["atomic_match"],
+                    "atomic_exact": results["atomic_exact"],
+                    "atomic_parent_only": results["atomic_parent_only"],
                     "findings": results["findings"],
                     "incidents": results["incidents"],
                     "in_band_events": results["in_band_events"],
