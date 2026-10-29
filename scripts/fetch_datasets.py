@@ -28,7 +28,54 @@ from urllib.parse import quote
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+#: Pinned SigmaHQ release asset (detection rules, not log data). The zip
+#: carries no license file, so LICENSE is fetched separately at the
+#: release commit. Both live under data/ and are never committed.
+#:
+#: NOTE (2026-10-28): the task brief printed the zip SHA-256 as
+#: ``...1595f5f818d...`` (66 hex chars, not a valid SHA-256). The asset
+#: downloaded from the pinned official release URL digests to the 64-hex
+#: value below, which is exactly the brief string minus the duplicated
+#: ``5f``; that verified digest is what is pinned here.
+SIGMA_RULES_SHA256 = "5725c91b5813587ad6a4b0b8e0233fa44348b1595f818d8b7fd39d6033385085"
+SIGMA_RULES_TAG = "r2026-07-01"
+
 DATASETS: list[dict[str, object]] = [
+    {
+        "name": "sigma",
+        "kind": "release_asset",
+        "rev": SIGMA_RULES_TAG,
+        "dest": "sigma",
+        "assets": [
+            {
+                "url": "https://github.com/SigmaHQ/sigma/releases/download/"
+                "r2026-07-01/sigma_all_rules.zip",
+                "sha256": SIGMA_RULES_SHA256,
+                "dest": "sigma/sigma_all_rules.zip",
+            },
+        ],
+        # NOTE (2026-10-28): the brief names release commit
+        # 5523f7ee420ef232a8e5790c4fae591847e32347 for LICENSE, but that
+        # SHA does not resolve in SigmaHQ/sigma ("No commit found for
+        # SHA", api.github.com, 2026-10-28). LICENSE is the 384-byte
+        # pointer file at the release tag, which is the same release
+        # content; the substitution is recorded here and in the report.
+        "raw_files": [
+            {
+                "repo": "SigmaHQ/sigma",
+                "rev": SIGMA_RULES_TAG,
+                "path": "LICENSE",
+                "dest": "sigma/LICENSE",
+            },
+        ],
+        "extract": [
+            {
+                "archive": "sigma/sigma_all_rules.zip",
+                "prefix": "rules/windows/",
+                "dest": "sigma/rules/",
+            },
+        ],
+    },
     {
         "name": "evtx-attack-samples",
         "repo": "sbousseaden/EVTX-ATTACK-SAMPLES",
@@ -249,6 +296,167 @@ def fetch_dataset(
     return entries, unverified
 
 
+def download_verified(url: str, dest: Path, expected_sha256: str) -> str:
+    """Download ``url`` to ``dest``, refusing anything but ``expected_sha256``.
+
+    The digest is enforced unconditionally (not only in verify mode): a
+    pinned release asset must never be recorded from the network. A
+    mismatch deletes the partial file and raises.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    with urllib.request.urlopen(_request(url), timeout=120) as resp:
+        with open(tmp, "wb") as handle:
+            for chunk in iter(lambda: resp.read(CHUNK), b""):
+                handle.write(chunk)
+    actual = sha256_of(tmp)
+    if actual != expected_sha256:
+        tmp.unlink()
+        raise RuntimeError(
+            f"checksum mismatch for {url}: got {actual}, expected {expected_sha256}"
+        )
+    os.replace(tmp, dest)
+    return actual
+
+
+#: Largest single rule file extracted from the rules zip (zip-bomb guard).
+MAX_RULE_BYTES = 10 * 1024 * 1024
+
+
+def safe_extract_prefix(archive: Path, prefix: str, dest_dir: Path) -> list[Path]:
+    """Extract ``prefix`` members of ``archive`` under ``dest_dir``.
+
+    Only regular ``.yml``/``.yaml`` files are extracted; directories,
+    symlinks, absolute paths and ``..`` components raise instead of
+    falling back silently. Returns the extracted file paths, sorted
+    by file name (then path) so order is deterministic.
+    """
+    import zipfile
+
+    extracted: list[Path] = []
+    root = dest_dir.resolve()
+    with zipfile.ZipFile(archive) as bundle:
+        for info in bundle.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename
+            parts = name.split("/")
+            if name.startswith("/") or ".." in parts:
+                raise RuntimeError(f"refusing out-of-root zip member: {name!r}")
+            if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                raise RuntimeError(f"refusing symlink zip member: {name!r}")
+            if not name.startswith(prefix):
+                continue
+            rel = name[len(prefix) :]
+            if not rel or rel.endswith("/"):
+                continue
+            if not rel.lower().endswith((".yml", ".yaml")):
+                continue
+            if info.file_size > MAX_RULE_BYTES:
+                raise RuntimeError(f"refusing oversized zip member: {name!r}")
+            target = (dest_dir / rel).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError:
+                raise RuntimeError(
+                    f"refusing out-of-root zip member: {name!r}"
+                ) from None
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with bundle.open(info) as source, open(target, "wb") as out:
+                for chunk in iter(lambda: source.read(CHUNK), b""):
+                    out.write(chunk)
+            extracted.append(target)
+    if not extracted:
+        raise RuntimeError(f"no .yml rules under {prefix!r} in {archive}")
+    return sorted(extracted, key=lambda path: (path.name, str(path)))
+
+
+def fetch_release_asset(
+    dataset: dict[str, object],
+    data_dir: Path,
+    checks: dict[str, str],
+    update: bool,
+) -> tuple[dict[str, str], list[str]]:
+    """Ensure one pinned release-asset dataset is on disk.
+
+    Release assets (GitHub ``releases/download`` zips) are not part of
+    any git tree, so their digests come from the dataset entry itself
+    and are enforced on every download; ``raw_files`` (single files at
+    a pinned commit) verify against ``checksums.txt`` like tree files.
+    ``extract`` entries unpack a verified archive prefix deterministically
+    (re-extracted when missing or, in verify mode, when a checksum drifts).
+    """
+    rev = str(dataset["rev"])
+    dest_root = data_dir / str(dataset["dest"])
+    rel_data = data_dir.relative_to(REPO_ROOT).as_posix()
+    entries: dict[str, str] = {}
+    unverified: list[str] = []
+
+    for raw_asset in dataset.get("assets", []):  # type: ignore[union-attr]
+        asset = dict(raw_asset)  # type: ignore[arg-type]
+        target = data_dir / str(asset["dest"])
+        rel = f"{rel_data}/{asset['dest']}"
+        expected = str(asset["sha256"])
+        if target.is_file() and sha256_of(target) == expected:
+            entries[rel] = expected
+            continue
+        if target.is_file():
+            print(f"re-downloading (checksum mismatch): {rel}", file=sys.stderr)
+            target.unlink()
+        print(f"downloading asset: {asset['url']}")
+        entries[rel] = download_verified(str(asset["url"]), target, expected)
+
+    for raw_spec in dataset.get("raw_files", []):  # type: ignore[union-attr]
+        spec = dict(raw_spec)  # type: ignore[arg-type]
+        target = data_dir / str(spec["dest"])
+        rel = f"{rel_data}/{spec['dest']}"
+        if target.is_file():
+            actual = sha256_of(target)
+            if update or checks.get(rel) == actual:
+                entries[rel] = actual
+                continue
+            if rel not in checks:
+                entries[rel] = actual
+                unverified.append(rel)
+                continue
+            print(f"re-downloading (checksum mismatch): {rel}", file=sys.stderr)
+            target.unlink()
+        print(f"downloading: {spec['repo']}@{str(spec['rev'])[:12]} {spec['path']}")
+        download(str(spec["repo"]), str(spec["rev"]), str(spec["path"]), target)
+        entries[rel] = sha256_of(target)
+        if update:
+            continue
+        if rel not in checks:
+            unverified.append(rel)
+        elif entries[rel] != checks[rel]:
+            raise RuntimeError(f"checksum mismatch after re-download: {rel}")
+
+    for raw_spec in dataset.get("extract", []):  # type: ignore[union-attr]
+        spec = dict(raw_spec)  # type: ignore[arg-type]
+        archive = data_dir / str(spec["archive"])
+        prefix = str(spec["prefix"])
+        dest_dir = data_dir / str(spec["dest"])
+        rel_prefix = f"{rel_data}/{spec['dest']}"
+        extracted = safe_extract_prefix(archive, prefix, dest_dir)
+        for path in extracted:
+            rel = f"{rel_prefix}{path.relative_to(dest_dir).as_posix()}"
+            actual = sha256_of(path)
+            if not update and rel in checks and checks[rel] != actual:
+                raise RuntimeError(f"checksum mismatch for extracted file: {rel}")
+            entries[rel] = actual
+            if not update and rel not in checks:
+                unverified.append(rel)
+
+    marker = dest_root / MARKER
+    if marker.is_file() and marker.read_text(encoding="utf-8").strip() != rev:
+        print(
+            f"warning: {dest_root} fetched at another revision; refreshed",
+            file=sys.stderr,
+        )
+    marker.write_text(rev + "\n", encoding="utf-8")
+    return entries, unverified
+
+
 def verify_extra_files(dest: Path, expected_rels: set[str]) -> list[str]:
     """Find files under dest that are neither expected nor dotfiles."""
     rel_dest = dest.relative_to(REPO_ROOT).as_posix()
@@ -286,9 +494,14 @@ def main(argv: list[str] | None = None) -> int:
     pending: list[str] = []
     try:
         for dataset in DATASETS:
-            entries, unverified = fetch_dataset(
-                dataset, data_dir, checks, args.update_checksums
-            )
+            if dataset.get("kind") == "release_asset":
+                entries, unverified = fetch_release_asset(
+                    dataset, data_dir, checks, args.update_checksums
+                )
+            else:
+                entries, unverified = fetch_dataset(
+                    dataset, data_dir, checks, args.update_checksums
+                )
             pending.extend(unverified)
             rel_data = data_dir.relative_to(REPO_ROOT).as_posix()
             dest_prefix = f"{rel_data}/{dataset['dest']}/"

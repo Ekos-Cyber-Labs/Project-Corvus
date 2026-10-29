@@ -33,3 +33,18 @@ ORGANIZATION HE/SHE REPRESENTS OR IS SPONSORED BY (IF ANY), THE MITRE CORPORATIO
 AGENTS, AND EMPLOYEES, DISCLAIM ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTY THAT THE
 USE OF THE INFORMATION THEREIN WILL NOT INFRINGE ANY RIGHTS OR ANY IMPLIED WARRANTIES OF MERCHANTABILITY OR FITNESS
 FOR A PARTICULAR PURPOSE.
+
+# SigmaHQ rules
+
+The replay detector evaluates the SigmaHQ rule set, release
+`r2026-07-01` (`sigma_all_rules.zip`, SHA-256 pinned in
+`scripts/fetch_datasets.py`), plus the `LICENSE` pointer file at the
+release tag. The rules are released under the Detection Rule License
+1.1 (https://github.com/SigmaHQ/Detection-Rule-License, SPDX
+`DRL-1.1`); only the `rules/windows` subset is evaluated, and only
+`status: test` and `status: stable` rules. Corvus is not affiliated
+with SigmaHQ. DRL 1.1 requires author attribution in views showing
+matches: every Detection Finding carries the Sigma rule author in
+`unmapped.sigma_author` and the versioned rule permalink in
+`finding_info.src_url`. Rule files and the pinned `LICENSE` live
+under git-ignored `data/sigma/` and are never committed.

@@ -112,6 +112,7 @@ __all__ = [
     "extract_json_parts",
     "extract_old_beat_parts",
     "extract_winlog_parts",
+    "wire_fields",
     "iter_dataset_file",
     "make_uid",
     "normalize_event",
@@ -1628,6 +1629,33 @@ def extract_json_parts(
     ):
         return extract_old_beat_parts(record, lineno)
     return extract_flat_parts(record, lineno)
+
+
+def wire_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the pre-mapper payload for one raw record.
+
+    Reuses the layout dispatch the normalizer itself uses
+    (:func:`extract_evtx_parts` for the EVTX ``Event`` / ``System`` /
+    ``EventData`` envelope — the store keeps the trimmed
+    ``{"System", "EventData"}`` form, which rewraps exactly — and
+    :func:`extract_json_parts` for the flat, old-beat and winlog JSON
+    layouts), so the detector's raw fallback reads precisely the value
+    the mapper saw under each wire name. Returns an empty mapping
+    when the record is not a mappable event in any layout.
+    """
+    candidate = record
+    system = record.get("System")
+    eventdata = record.get("EventData")
+    if isinstance(system, dict) and isinstance(eventdata, dict):
+        candidate = {"Event": record}
+    try:
+        if isinstance(candidate.get("Event"), dict):
+            _, _, _, fields, _, _ = extract_evtx_parts(candidate)
+        else:
+            _, _, _, fields, _, _ = extract_json_parts(candidate, 0)
+    except UnmappedEvent, ValueError, TypeError, AttributeError, KeyError:
+        return {}
+    return dict(fields) if isinstance(fields, dict) else {}
 
 
 def _normalize_parts(

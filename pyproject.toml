@@ -12,6 +12,11 @@ dependencies = [
     "psycopg[binary]>=3.1",
     "pyarrow>=26.0.0",
     "pydantic-settings>=2.5",
+    # Pinned exactly for the Sigma replay detector (LGPL, AGENTS.md
+    # exception for this prompt): pySigma parses and converts the
+    # SigmaHQ rules, the sqlite backend emits the match SQL.
+    "pySigma==2.0.1",
+    "pySigma-backend-sqlite==2.1.1",
     "uvicorn[standard]>=0.30",
 ]
 

@@ -99,6 +99,25 @@ def test_technique_tactics_carry_display_names() -> None:
     ]
 
 
+def test_tactics_keep_mitre_external_ids() -> None:
+    compact = _compact()
+    assert compact["tactics"] == {
+        "persistence": {"name": "Persistence", "id": "TA9002"},
+        "execution": {"name": "Execution", "id": "TA9001"},
+        "discovery": {"name": "Discovery", "id": "TA9003"},
+    }
+    dictionary = _dictionary()
+    assert dictionary.tactic("execution") is not None
+    assert dictionary.tactic("execution").uid == "TA9001"  # type: ignore[union-attr]
+    assert dictionary.tactic("bogus") is None
+    entry = dictionary.get("T9001")
+    assert entry is not None
+    assert [(t.uid, t.name) for t in entry.tactics] == [
+        ("TA9001", "Execution"),
+        ("TA9003", "Discovery"),
+    ]
+
+
 def test_build_from_files_round_trip(tmp_path: Path) -> None:
     out = tmp_path / "attack" / "enterprise.json"
     stats = build_from_files(FIXTURE, out)

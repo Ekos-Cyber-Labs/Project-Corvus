@@ -18,12 +18,15 @@ from typing import TYPE_CHECKING, Any
 import pyarrow as pa
 
 if TYPE_CHECKING:
-    from corvus.normalize.ocsf import OcsfEvent
+    from corvus.normalize.ocsf import DetectionFinding, OcsfEvent
 
 __all__ = [
     "EVENTS_SCHEMA",
+    "FINDINGS_SCHEMA",
     "PROVENANCE_SCHEMA",
     "event_to_row",
+    "finding_to_row",
+    "findings_dir",
     "provenance_to_row",
     "slug_for_rel",
 ]
@@ -55,6 +58,21 @@ PROVENANCE_SCHEMA = pa.schema(
         ("file", pa.string()),
         ("dataset", pa.string()),
         ("in_band_technique_id", pa.bool_()),
+    ]
+)
+
+#: Findings columns: one Detection Finding (2004) per row, queryable
+#: without parsing the JSON. Written by the replay detect run, one
+#: file per input slug, rewritten atomically like the event files.
+FINDINGS_SCHEMA = pa.schema(
+    [
+        ("uid", pa.string()),
+        ("time", pa.int64()),
+        ("class_uid", pa.int32()),
+        ("rule_id", pa.string()),
+        ("level", pa.string()),
+        ("host", pa.string()),
+        ("finding_json", pa.string()),
     ]
 )
 
@@ -110,3 +128,23 @@ def events_dir(replay_dir: str | Path) -> Path:
 def provenance_dir(replay_dir: str | Path) -> Path:
     """Return the ``provenance/`` output directory under ``replay_dir``."""
     return Path(replay_dir) / "provenance"
+
+
+def findings_dir(replay_dir: str | Path) -> Path:
+    """Return the ``findings/`` output directory under ``replay_dir``."""
+    return Path(replay_dir) / "findings"
+
+
+def finding_to_row(
+    finding: DetectionFinding, rule_id: str, level: str
+) -> dict[str, Any]:
+    """Flatten one Detection Finding to a findings-table row."""
+    return {
+        "uid": finding.metadata.uid,
+        "time": finding.time,
+        "class_uid": finding.class_uid,
+        "rule_id": rule_id,
+        "level": level,
+        "host": finding.entity_keys.host,
+        "finding_json": finding.model_dump_json(),
+    }

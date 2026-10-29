@@ -38,8 +38,12 @@ Shared rules for all eleven classes:
 
 ## Classes and activity IDs
 
-The Source column names the mapper that produces each class. Only
-Detection Finding has no mapper yet.
+The Source column names the mapper that produces each class.
+Detection Finding (2004) has no log mapper: `corvus/detect/findings.py`
+builds one finding per rule match, with the matched event's context in
+one top-level `evidences` entry (an attribute of the 2004 finding
+itself, not of `finding_info`; the finding carries no actor or
+endpoints).
 
 | OCSF class | class_uid | category_uid | Activity IDs we use | Source |
 |---|---|---|---|---|
@@ -179,6 +183,77 @@ nested layout (a `winlog` object holding `channel` / `event_id` /
   `WindowsReadStats`; `read_dataset_file` collects the same stream and is
   kept for tests. The replay loader uses the iterator so it never holds a
   whole dataset in memory.
+
+## Sigma logsource mapping (`corvus/detect/mapping.py`)
+
+Each Sigma `logsource` routes to one OCSF slice plus a Sigma field
+to OCSF value map (the executable form of this table). `rules/windows`
+only; `status` test and stable only; `rules-emerging-threats`,
+`rules-threat-hunting` and other products are out of scope. A Sigma
+field with no faithful source in its slice has no entry, and any rule
+using it is skipped and counted with the field name, never evaluated
+against null. `EventID`, `Channel` and `Provider_Name` are exposed
+where the slice determines them exactly (`Provider_Name` is a
+channel constant verified against stored `raw_data`).
+
+| Sigma logsource | OCSF slice (class/activity, log) | Sigma field to OCSF value |
+|---|---|---|
+| `process_creation` | 1007/1, Sysmon | `Image` process.file.path, `CommandLine` process.cmd_line, `ParentImage` parent file.path, `ParentCommandLine`/`ParentUser`/`LogonId`/`OriginalFileName`/`Description`/`Product`/`Company`/`Hashes`/`IntegrityLevel`/`CurrentDirectory`/`FileVersion` unmapped, `User` actor (`DOMAIN\user`), `EventID` 1, `Channel` log_name, `Provider_Name` const |
+| `process_access` | 1007/3, Sysmon | `SourceImage` actor process path, `TargetImage` process.file.path, `GrantedAccess` actual_permissions, `CallTrace`/`SourceUser` unmapped, `User` actor, `EventID` 10, `Channel`, `Provider_Name` const |
+| `image_load` | 1005/1, Sysmon | `ImageLoaded` module.file.path, `Image` actor process path, `Signed`/`Signature`/`SignatureStatus` unmapped (no typed slot), `OriginalFileName` internal_name, `Description` desc, `Company` company_name, `Product` product.name, `Hashes` rebuilt `ALG=value` pair string, `RuleName` unmapped, `EventID` 7, `Channel`, `Provider_Name` const. `CommandLine` has no source: rules using it are skipped |
+| `network_connection` | 4001/1, Sysmon | `Image` actor process path, `Initiated`/`DestinationHostname`/`Protocol`/`SourceHostname`/`SourceIsIpv6` unmapped, `DestinationIp`/`SourceIp` endpoints, `DestinationPort`/`SourcePort` endpoint ports, `User` actor, `EventID` 3, `Channel`, `Provider_Name` const. `CommandLine` and `ParentImage` have no source on Sysmon 3: skipped |
+| `file_event` | 1001/1, Sysmon | `TargetFilename` file.path, `Image` actor process path, `EventID` 11, `Channel`, `Provider_Name` const. `CommandLine`, `ParentImage`, `ParentCommandLine` have no source on Sysmon 11: skipped |
+| `registry_add` | 201001/1 + 201002/2, Sysmon | `TargetObject` key/value path, `EventType` unmapped, `Image` actor, `Details` value data, `Channel`, `Provider_Name` const (no `EventID`: a Set row cannot tell Sysmon 12 from 13) |
+| `registry_set` | 201002/2, Sysmon | `TargetObject` value path, `Details` value data, `Image` actor, `User` actor, `EventType` unmapped, `Channel`, `Provider_Name` const (no `EventID`) |
+| `registry_delete` | 201001/4 + 201002/4, Sysmon | same as `registry_add` on the delete activities |
+| `registry_event` | 201001/1,4,5 + 201002/2,4, Sysmon | same as `registry_add`/`registry_set` plus `NewName` = key path on renames only (null otherwise), and rename-aware `TargetObject` (pre-rename path on activity 5). No `EventID` |
+| `ps_script` | 1009/1, PowerShell-Operational, subtype 4104 | `ScriptBlockText` script content on 4104 rows only, `Path` unmapped, `EventID` 4103/4104 by subtype (markers, `raw_data` fallback), `Channel`, `Provider_Name` const |
+| `ps_module` | 1009/1, PowerShell-Operational, subtype 4103 | `Payload` script content on 4103 rows only, `ContextInfo` unmapped, `EventID`/`Channel`/`Provider_Name` as above |
+| `ps_classic_start`, `powershell-classic` | 1009/1, Windows PowerShell (EventID 800) | `Data` unmapped, `EventID` 800, `Channel`, `Provider_Name` const (`PowerShell`) |
+| service `security` | 3002/1,2 + 1006/1 + 201004/1, Security | `EventID` derived per row (4624/4625/4698/4697), `Channel`, `Provider_Name` const; 4624/4625: `TargetUserName` actor name, `IpAddress`/`IpPort` endpoints, `LogonType`/`WorkstationName`/subjects/status fields unmapped; 4698: `TaskName` job name, subjects actor/`TaskContent*` unmapped; 4697: `ServiceName`/`ServiceFileName`/`ServiceAccount` service fields, subjects actor. `SubjectUserName`/`SubjectDomainName` read the actor on 4697/4698 rows and `unmapped` elsewhere |
+| service `system` | 201004/1, System (EventID 7045) | `EventID` 7045, `ServiceName` name, `ImagePath` cmd_line, `ServiceType`/`StartType` unmapped raw, `AccountName` actor, `Channel`, `Provider_Name` const |
+| taskscheduler | 1006/1, TaskScheduler (EventID 106) | `EventID` 106, `TaskName` job name, `User` actor, `Channel`, `Provider_Name` const |
+
+Matching equals Sigma's: case-insensitive strings (`ILIKE` plus
+`COLLATE NOCASE`, because DuckDB `LIKE` is case-sensitive), wildcards,
+`contains`/`startswith`/`endswith`/`all`, `re` (validated per rule in
+DuckDB; RE2 rejects Python-only constructs and the rule is skipped),
+`cidr`, `windash`, `base64offset`, `|cased` (DuckDB `GLOB` with lone
+backslashes doubled, since DuckDB `GLOB` unlike SQLite's treats `\` as
+an escape), keyword search over the raw record, field references,
+existence tests. Nulls follow Sigma: a field absent from the raw
+record matches no value but satisfies `NOT` (the row is included).
+There is one deliberate fidelity rule on top: when the normalizer
+replaced a placeholder (`-`, empty, `n/a`, `unknown`) with null in a
+typed slot, the Sigma row still carries the value the source logged,
+re-read from the pre-mapper payload under the wire name (which is the
+Sigma field name) — a field truly absent from the payload stays null.
+The payload is rebuilt with the normalizer's own layout dispatch
+(`wire_fields` in `windows.py`: trimmed EVTX `System`/`EventData`,
+newer `winlog`, older winlogbeat `event_data`, flat JSON), so nested
+layouts work exactly like flat ones: `IpAddress: '-'` matches a 4624
+logon the source logged with `-` in any layout, and `NOT` over it
+follows the logged value. `unmapped` values are
+read verbatim (no normalization), so equality and wildcard tests
+compare exactly what the record carried.
+
+Built-in service rules route by their `EventID` selection: a rule
+whose selected EventIDs lie fully outside the mapped set for that
+service (for example `security` 4663 or `system` 104) is skipped and
+counted per EventID; a rule mixing mapped and unmapped ids evaluates
+on the mapped slice, where the unmapped ids simply never match.
+
+Rules the detector never evaluates:
+
+- other categories and services (DNS, pipes, drivers, WMI, WinDefend,
+  threat-hunting and emerging-threats products): counted per logsource;
+- `status` experimental, deprecated, unsupported: counted per status;
+- service rules for unmapped EventIDs: counted per EventID;
+- rules using an unmapped field (`CommandLine` on image-load,
+  `Provider_Name` on ETW-provider rules, `EventID` on registry,
+  `Data` where no record carries it): counted per field;
+- rules whose conversion fails (legacy pipe conditions, rejected
+  regex, correlation rules): counted per construct.
 
 ## Canonicalization
 

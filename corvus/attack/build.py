@@ -71,8 +71,15 @@ def build_compact(bundle: dict[str, object]) -> dict[str, object]:
         if kind == "x-mitre-tactic" and isinstance(stix_id, str):
             short = obj.get("x_mitre_shortname")
             name = obj.get("name")
+            tactic_id = _external_id(obj)
             if isinstance(short, str) and isinstance(name, str):
-                tactics[stix_id] = {"shortname": short, "name": name}
+                if tactic_id is None:
+                    raise ValueError(f"tactic {stix_id} lacks a mitre-attack id")
+                tactics[stix_id] = {
+                    "shortname": short,
+                    "name": name,
+                    "id": tactic_id,
+                }
         elif kind == "attack-pattern" and isinstance(stix_id, str):
             ext_id = _external_id(obj)
             if ext_id is None or normalize_id(ext_id) != ext_id:
@@ -110,13 +117,16 @@ def build_compact(bundle: dict[str, object]) -> dict[str, object]:
     if not isinstance(refs, list) or not refs:
         raise ValueError("x-mitre-matrix lacks tactic_refs")
     tactic_order: list[str] = []
-    tactic_names: dict[str, str] = {}
+    tactic_names: dict[str, dict[str, str]] = {}
     for ref in refs:
         entry = tactics.get(ref) if isinstance(ref, str) else None
         if entry is None:
             raise ValueError(f"matrix tactic_ref {ref!r} has no tactic object")
         tactic_order.append(entry["shortname"])
-        tactic_names[entry["shortname"]] = entry["name"]
+        tactic_names[entry["shortname"]] = {
+            "name": entry["name"],
+            "id": entry["id"],
+        }
     rank = {short: index for index, short in enumerate(tactic_order)}
 
     revoked_by: dict[str, str] = {}

@@ -48,11 +48,15 @@ __all__ = [
     "OCSF_SCHEMA_VERSION",
     "PLACEHOLDERS",
     "Actor",
+    "Analytic",
+    "AttackRef",
     "Authentication",
     "DetectionFinding",
+    "FindingInfo",
     "Device",
     "Endpoint",
     "EntityKeys",
+    "Evidence",
     "Extension",
     "File",
     "Fingerprint",
@@ -69,6 +73,9 @@ __all__ = [
     "ProcessActivity",
     "Product",
     "RegKey",
+    "RelatedEvent",
+    "TacticRef",
+    "TechniqueRef",
     "RegValue",
     "RegistryKeyActivity",
     "RegistryValueActivity",
@@ -802,17 +809,217 @@ class WindowsServiceActivity(OcsfEventBase):
     win_service: WinService | None = None
 
 
+class TacticRef(BaseModel):
+    """OCSF tactic object: one ATT&CK tactic naming a finding's attack.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/tactic.json`` in ``ocsf-schema`` tag ``1.9.0``): ``uid``
+    carries the ATT&CK tactic id (for example ``"TA0002"``) and
+    ``name`` its display name (for example ``"Execution"``).
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    uid: str | None = None
+    name: str | None = None
+
+
+class TechniqueRef(BaseModel):
+    """OCSF technique object: one ATT&CK technique or sub-technique.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/technique.json`` and ``objects/sub_technique.json`` in
+    ``ocsf-schema`` tag ``1.9.0``): ``uid`` is the technique id (for
+    example ``"T1059.001"``), ``name`` its display name.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    uid: str | None = None
+    name: str | None = None
+
+
+class AttackRef(BaseModel):
+    """OCSF attack object: tactic plus technique behind a finding.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/attack.json`` in ``ocsf-schema`` tag ``1.9.0``):
+    ``tactic`` and ``technique`` are recommended, and at least one of
+    the two is required there; ``version`` names the ATT&CK matrix
+    version the ids resolve against. A sub-technique finding carries
+    the parent technique in ``technique`` and the sub-technique in
+    ``sub_technique``.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    tactic: TacticRef | None = None
+    technique: TechniqueRef | None = None
+    sub_technique: TechniqueRef | None = None
+    version: str | None = None
+
+
+class Analytic(BaseModel):
+    """OCSF analytic object: the detection logic behind a finding.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/analytic.json`` in ``ocsf-schema`` tag ``1.9.0``):
+    ``name`` is the analytic name, ``uid`` its unique id, and
+    ``type_id`` 1 with ``type`` ``"Rule"`` names a Sigma-derived rule
+    (``type_id`` is required there: 0 Unknown, 1 Rule, 2 Behavioral,
+    3 Statistical, 4 Learning (ML/DL), 5 Fingerprinting, 6 Tagging,
+    7 Keyword Match, 8 Regular Expressions, 9 Exact Data Match,
+    10 Partial Data Match, 11 Indexed Data Match, 99 Other).
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    name: str | None = None
+    uid: str | None = None
+    desc: str | None = None
+    type: str | None = None
+    type_id: int | None = None
+
+    @field_validator("type_id")
+    @classmethod
+    def _check_type(cls, value: int | None) -> int | None:
+        if value is not None and value not in (
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            99,
+        ):
+            raise ValueError("type_id must be one of 0-11 or 99 (Other)")
+        return value
+
+
+class RelatedEvent(BaseModel):
+    """OCSF related-event object: one event behind a finding.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/related_event.json`` in ``ocsf-schema`` tag ``1.9.0``):
+    ``uid`` (required there) is the related event's OCSF uid and
+    ``type_uid`` its OCSF type id.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    uid: str | None = None
+    type_uid: int | None = None
+
+
+class Evidence(BaseModel):
+    """OCSF evidence object: context of one event behind a finding.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/evidences.json`` in ``ocsf-schema`` tag ``1.9.0``): the
+    matched event's actor, process, endpoints, device and file. Every
+    attribute is optional there; Corvus sets ``uid`` to the matched
+    event's OCSF uid and fills whichever context the event carries.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    uid: str | None = None
+    actor: Actor | None = None
+    process: Process | None = None
+    src_endpoint: Endpoint | None = None
+    dst_endpoint: Endpoint | None = None
+    device: Device | None = None
+    file: File | None = None
+
+
+class FindingInfo(BaseModel):
+    """OCSF finding-info object: supporting info about a finding.
+
+    Attribute names from the pinned OCSF 1.9.0 schema
+    (``objects/finding_info.json`` in ``ocsf-schema`` tag ``1.9.0``,
+    which has no ``evidences`` attribute): ``uid`` is required there
+    and carries the finding uid; ``title`` and ``analytic`` are
+    recommended. ``attacks`` holds the resolved ATT&CK tactic/technique
+    pairs; ``related_events`` holds the matched event uids; ``src_url``
+    points at the rule source.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    uid: str | None = None
+    title: str | None = None
+    desc: str | None = None
+    analytic: Analytic | None = None
+    attacks: list[AttackRef] | None = None
+    related_events: list[RelatedEvent] | None = None
+    src_url: str | None = None
+
+
 class DetectionFinding(OcsfEventBase):
     """OCSF 2004 Detection Finding (category 2, Findings).
 
     Class from the pinned OCSF 1.9.0 schema
     (``events/findings/detection_finding.json``: uid 4, ``extends``
-    finding, so category 2).
+    finding, so category 2). Activity ids from the base finding event
+    (``events/findings/finding.json``): 1 Create, 2 Update, 3 Close.
+    ``status_id`` 1 with ``status`` ``"New"`` marks a freshly created
+    finding (enum from the same file: 1 New, 2 In Progress,
+    3 Suppressed, 4 Resolved, 5 Archived, 6 Deleted). ``severity``
+    carries the caption of ``severity_id`` (1 Informational, 2 Low,
+    3 Medium, 4 High, 5 Critical, from ``dictionary.json`` in the
+    pinned tag). Rule metadata the typed slots cannot hold (the Sigma
+    author, needed for Detection Rule License attribution) stays in
+    ``unmapped`` under the ``sigma_`` prefix, never in typed fields.
+    ``evidences`` (from ``events/findings/detection_finding.json`` in
+    the pinned tag, not from ``finding_info``) holds one entry per
+    matched event with that event's context.
     """
 
     class_uid: Literal[2004] = 2004
     category_uid: Literal[2] = 2
     activity_id: int = 1
+    severity: str | None = None
+    status: str | None = None
+    status_id: int | None = None
+    start_time: int | None = None
+    end_time: int | None = None
+    finding_info: FindingInfo | None = None
+    evidences: list[Evidence] | None = None
+
+    @field_validator("status_id")
+    @classmethod
+    def _check_status(cls, value: int | None) -> int | None:
+        # Enum from the pinned OCSF 1.9.0 schema
+        # (``events/findings/finding.json``
+        # ``attributes.status_id.enum`` in ``ocsf-schema`` tag
+        # ``1.9.0``): 1 New, 2 In Progress, 3 Suppressed, 4 Resolved,
+        # 5 Archived, 6 Deleted.
+        if value is not None and value not in (1, 2, 3, 4, 5, 6):
+            raise ValueError("status_id must be one of 1-6")
+        return value
+
+    @field_validator("start_time", "end_time", mode="before")
+    @classmethod
+    def _coerce_finding_time(cls, value: datetime | int | None) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("time must be a timezone-aware UTC datetime")
+            moment = int(value.timestamp() * 1000)
+        elif isinstance(value, int):
+            moment = value
+        else:
+            raise ValueError("time must be epoch milliseconds or an aware datetime")
+        if moment < MIN_TIME_MS:
+            raise ValueError(f"time {moment} is below {MIN_TIME_MS} (2000-01-01 UTC)")
+        return moment
 
 
 class ModuleActivity(OcsfEventBase):

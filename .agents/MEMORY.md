@@ -262,3 +262,39 @@ rules back to Wazuh (shadow first, human approval).
   their `subtechnique-of` relationships (by design, the parent is
   never guessed). Verified with `make lint` and the full `make test`.
   Awaiting maintainer commit.
+- 2026-10-28: review fixes to the SigmaHQ detection layer. The 2004
+  finding's `evidences` is a top-level finding attribute (not
+  `finding_info`; verified against the pinned 1.9.0 schema), one entry
+  per matched event. The null-semantics raw fallback now reuses the
+  normalizer's own layout dispatch (`wire_fields` in `windows.py`:
+  trimmed EVTX `System`/`EventData`, `winlog`, old-beat `event_data`,
+  flat), so nested placeholders compare as logged: the six
+  previously-gained SMB-logon matches carry `EventData.IpAddress`
+  `"-"` and are excluded again as the rule intends. Report reissued
+  with a per-rule old-vs-new delta, every changed rule explained from
+  its records. Verified with `make lint` (green) and the full `make
+  test` (241 passed on the maintainer's machine with Postgres; from
+  this sandbox the 10 Postgres-gated tests fail connecting, listed
+  below, never treated as passed). Awaiting maintainer commit.
+- 2026-10-28: added the atomic SigmaHQ detection layer over OCSF
+  events (`corvus/detect/`, reusable by `ReplayAdapter` and future
+  rule backtesting): pinned SigmaHQ release, windows rules at status
+  stable and test, pySigma conversion to DuckDB (ILIKE for
+  case-insensitive `LIKE`, per-rule regex validation), one Detection
+  Finding 2004 per rule match with deterministic uids, atomic
+  per-slug finding writes plus `corvus replay detect`, and
+  `eval/reports/day2_replay_detect.md` from `eval/detect_census.py`.
+  Maintainer review then fixed five fidelity items: stock Sigma `NOT`
+  semantics with nulled placeholders re-read from the raw record
+  (report carries the per-rule old-vs-new delta; 5 of 1792 evaluated
+  rules change, all gains, each verified against the rule and the
+  rows); tactic `uid` as the `TA####` external id with the dictionary
+  rebuilt from the pinned bundle; finding context moved into one
+  `finding_info.evidences` entry per matched event (the 2004 finding
+  itself carries no actor or endpoints); tactic-only attacks dropped
+  when a technique entry covers their tactic; vendor
+  `Ekos Cyber Labs`. Verified with `make lint` (green) and the full
+  `make test` (231 passed; the 10 Postgres-gated migration/queue
+  tests cannot run from this sandbox — TCP to the Compose Postgres is
+  denied, so they fail connecting; env file and volume untouched).
+  Awaiting maintainer commit.

@@ -46,10 +46,12 @@ def normalize_id(raw: object) -> str | None:
 
 @dataclass(frozen=True)
 class Tactic:
-    """One ATT&CK tactic: shortname (``credential-access``) and display name."""
+    """One ATT&CK tactic: shortname (``credential-access``), display name,
+    and the ``TA####`` external id (the OCSF tactic ``uid``)."""
 
     shortname: str
     name: str
+    uid: str
 
 
 @dataclass(frozen=True)
@@ -73,14 +75,27 @@ class AttackDictionary:
         self,
         techniques: dict[str, Technique],
         tactic_order: tuple[str, ...],
+        tactic_names: dict[str, str] | None = None,
+        tactics: dict[str, Tactic] | None = None,
     ) -> None:
         self._techniques = techniques
         self._tactic_order = tactic_order
+        self._tactic_names: dict[str, str] = dict(tactic_names or {})
+        self._tactics: dict[str, Tactic] = dict(tactics or {})
 
     @property
     def tactic_order(self) -> tuple[str, ...]:
         """Kill-chain tactic shortnames in matrix order."""
         return self._tactic_order
+
+    @property
+    def tactic_names(self) -> dict[str, str]:
+        """Map tactic shortnames to display names (possibly empty)."""
+        return dict(self._tactic_names)
+
+    def tactic(self, shortname: str) -> Tactic | None:
+        """Return the tactic for a shortname, or None when unknown."""
+        return self._tactics.get(shortname)
 
     def __len__(self) -> int:
         return len(self._techniques)
@@ -125,10 +140,17 @@ class AttackDictionary:
         tactics_raw = mapping.get("tactics")
         if not isinstance(tactics_raw, dict):
             raise ValueError("compact attack dictionary lacks a tactics map")
-        tactics = {
-            str(short): Tactic(shortname=str(short), name=str(name))
-            for short, name in tactics_raw.items()
-        }
+        tactics: dict[str, Tactic] = {}
+        for short, entry in tactics_raw.items():
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"tactic {short!r} lacks a name/id object "
+                    "(rebuild the dictionary with corvus attack build)"
+                )
+            name, uid = entry.get("name"), entry.get("id")
+            if not isinstance(name, str) or not isinstance(uid, str):
+                raise ValueError(f"tactic {short!r} lacks a name or TA id")
+            tactics[str(short)] = Tactic(shortname=str(short), name=name, uid=uid)
         order_raw = mapping.get("tactic_order")
         if not isinstance(order_raw, list) or not all(
             isinstance(item, str) for item in order_raw
@@ -171,7 +193,12 @@ class AttackDictionary:
                 revoked=bool(value.get("revoked")),
                 revoked_by=revoked_by,
             )
-        return cls(techniques, order)
+        return cls(
+            techniques,
+            order,
+            {short: tactic.name for short, tactic in tactics.items()},
+            tactics,
+        )
 
 
 def load_dictionary(path: str | Path | None = None) -> AttackDictionary:

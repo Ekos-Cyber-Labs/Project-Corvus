@@ -146,14 +146,100 @@ def test_wanted_picks_only_apt29_day1_host_zip() -> None:
 
 
 def test_dataset_pins_are_well_formed() -> None:
-    assert len(fetch.DATASETS) == 3
+    assert len(fetch.DATASETS) == 4
     for dataset in fetch.DATASETS:
-        assert dataset["repo"] and dataset["dest"] and dataset["prefixes"]
-        assert re.fullmatch(r"[0-9a-f]{40}", str(dataset["rev"])), dataset
+        assert dataset["dest"] and dataset["rev"]
         # dest is joined onto the data dir; a "data/" prefix would nest data/.
         assert not str(dataset["dest"]).startswith("data/")
+        if dataset.get("kind") == "release_asset":
+            continue
+        assert dataset["repo"] and dataset["prefixes"]
+        assert re.fullmatch(r"[0-9a-f]{40}", str(dataset["rev"])), dataset
     by_name = {str(dataset["name"]): dataset for dataset in fetch.DATASETS}
-    assert set(by_name) == {"evtx-attack-samples", "security-datasets", "mitre-cti"}
+    assert set(by_name) == {
+        "evtx-attack-samples",
+        "security-datasets",
+        "mitre-cti",
+        "sigma",
+    }
+
+
+def test_sigma_release_asset_is_pinned() -> None:
+    sigma = [d for d in fetch.DATASETS if d["name"] == "sigma"][0]
+    assert sigma["kind"] == "release_asset"
+    assert sigma["rev"] == "r2026-07-01"
+    (asset,) = list(sigma["assets"])  # type: ignore[union-attr]
+    assert asset["url"].endswith("sigma_all_rules.zip")  # type: ignore[index]
+    assert re.fullmatch(r"[0-9a-f]{64}", str(asset["sha256"]))  # type: ignore[index]
+    assert str(asset["sha256"]) == fetch.SIGMA_RULES_SHA256  # type: ignore[index]
+    (raw,) = list(sigma["raw_files"])  # type: ignore[union-attr]
+    # LICENSE comes from the release tag: the brief's commit SHA does not
+    # resolve in SigmaHQ/sigma, so the tag (same release content) is pinned.
+    assert str(raw["rev"]) == "r2026-07-01"  # type: ignore[index]
+    assert str(raw["path"]) == "LICENSE"  # type: ignore[index]
+    (extract,) = list(sigma["extract"])  # type: ignore[union-attr]
+    assert str(extract["prefix"]) == "rules/windows/"  # type: ignore[index]
+
+
+def test_download_verified_refuses_a_wrong_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+
+    payload = b"sigma-rules-bytes"
+
+    class FakeResponse:
+        done = False
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def read(self, size: int = -1) -> bytes:
+            if self.done:
+                return b""
+            self.done = True
+            return payload
+
+    def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        return FakeResponse()
+
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", fake_urlopen)
+    dest = tmp_path / "sigma_all_rules.zip"
+    good = hashlib.sha256(payload).hexdigest()
+    assert fetch.download_verified("https://example.com/rules.zip", dest, good) == good
+    assert dest.read_bytes() == payload
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        fetch.download_verified("https://example.com/rules.zip", dest, "0" * 64)
+    # The failed download leaves no partial file behind.
+    assert [p.name for p in tmp_path.iterdir()] == ["sigma_all_rules.zip"]
+
+
+def test_safe_extract_prefix_keeps_windows_yml_only(tmp_path: Path) -> None:
+    import zipfile
+
+    archive = tmp_path / "rules.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("rules/windows/proc/rule_one.yml", "title: one\n")
+        bundle.writestr("rules/windows/nested/rule_two.yaml", "title: two\n")
+        bundle.writestr("rules/linux/other.yml", "title: skipped\n")
+        bundle.writestr("rules/windows/notes.txt", "not a rule\n")
+    out = tmp_path / "out"
+    extracted = fetch.safe_extract_prefix(archive, "rules/windows/", out)
+    assert [p.name for p in extracted] == ["rule_one.yml", "rule_two.yaml"]
+    assert (out / "proc" / "rule_one.yml").read_text() == "title: one\n"
+
+
+def test_safe_extract_prefix_refuses_out_of_root(tmp_path: Path) -> None:
+    import zipfile
+
+    archive = tmp_path / "evil.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("rules/windows/../../escape.yml", "title: evil\n")
+    with pytest.raises(RuntimeError, match="out-of-root"):
+        fetch.safe_extract_prefix(archive, "rules/windows/", tmp_path / "out")
 
 
 def test_mitre_cti_fetches_only_bundle_and_license() -> None:

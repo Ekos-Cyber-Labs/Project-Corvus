@@ -216,10 +216,37 @@ the environment, never stored.
   map to their `revoked-by` targets, more-specific choices stay recorded
   in `refinements`, and deprecated `T1043` stays dropped.
 
+## 5. SigmaHQ rules (detection rules, Windows only)
+
+- Source: <https://github.com/SigmaHQ/sigma>, release asset
+  `sigma_all_rules.zip` at tag `r2026-07-01`, plus the `LICENSE`
+  pointer file at the release tag. The brief named release commit
+  `5523f7ee420ef232a8e5790c4fae591847e32347` for the `LICENSE`, but
+  that SHA does not resolve in `SigmaHQ/sigma`, so the tag (same
+  release content) is pinned instead.
+- SHA-256: enforced on every download for the zip (pinned in
+  `scripts/fetch_datasets.py`; the brief printed a 66-hex string that
+  is not a valid SHA-256, the verified 64-hex digest of the asset at
+  the pinned URL is what is pinned). The zip has no license file.
+- License: the rules are under the Detection Rule License 1.1
+  (https://github.com/SigmaHQ/Detection-Rule-License, SPDX `DRL-1.1`);
+  the required author attribution is in the top-level `NOTICE` file
+  and in every finding (`unmapped.sigma_author`,
+  `finding_info.src_url`).
+- What we use it for: the replay detector evaluates the
+  `rules/windows` subset (`status` test and stable; 2,240 rule files
+  in the release) over the OCSF replay store and emits Detection
+  Findings (2004) into `data/replay/findings/`. The same engine will
+  backtest learned rules. Only the zip, the `LICENSE`, and the
+  extracted `rules/windows/**` files are fetched; everything lives
+  under git-ignored `data/sigma/` and is never committed.
+
 ## Checksums
 
 `checksums.txt` holds `SHA-256  data-relative-path` lines for every
-fetched file at the pinned revisions (551 lines). It is populated via
+fetched file at the pinned revisions. It is populated via
 `--update-checksums` and committed; the maintainer reviews the diff
 on re-pins. Later runs fail closed on any mismatch or any unlisted
-file.
+file. The Sigma zip digest is additionally pinned in
+`scripts/fetch_datasets.py` and enforced on every download, never
+re-recorded from the network.

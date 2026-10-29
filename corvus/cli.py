@@ -60,6 +60,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=5000,
         help="Rows buffered before one Parquet write (default: 5000).",
     )
+    detect = replay_sub.add_parser(
+        "detect",
+        help="Evaluate Sigma rules over the replay store into findings.",
+    )
+    detect.add_argument(
+        "--rules-dir",
+        default="data/sigma/rules",
+        help="Sigma rules directory (default: data/sigma/rules).",
+    )
+    detect.add_argument(
+        "--replay-dir",
+        default="data/replay",
+        help="Replay Parquet store directory (default: data/replay).",
+    )
+    detect.add_argument(
+        "--attack",
+        default="data/attack/enterprise.json",
+        help="Compact ATT&CK dictionary (default: data/attack/enterprise.json).",
+    )
     return parser
 
 
@@ -98,6 +117,40 @@ def main(argv: list[str] | None = None) -> int:
             batch_size=args.batch_size,
         )
         print(format_summary(summary, args.replay_dir))
+        return 0
+    if args.command == "replay" and args.replay_command == "detect":
+        import json
+
+        from corvus.adapters.replay import format_write_summary, write_findings
+        from corvus.attack import load_dictionary
+        from corvus.detect import load_rules
+        from corvus.detect.engine import evaluate
+
+        attack = load_dictionary(args.attack)
+        with open(args.attack, encoding="utf-8") as handle:
+            attack_version = str(
+                json.loads(handle.read()).get("attack_version", "v20.0")
+            ).removeprefix("v")
+        compiled, load_stats = load_rules(args.rules_dir)
+        print(
+            f"rules: {load_stats.parsed_rules} parsed from "
+            f"{load_stats.files} files, {len(compiled)} evaluate, "
+            f"{sum(load_stats.skipped.values())} skipped"
+        )
+        matches, infos, eval_stats = evaluate(args.replay_dir, compiled)
+        write_summary = write_findings(
+            args.replay_dir, compiled, matches, infos, attack, attack_version
+        )
+        print(format_write_summary(write_summary, args.replay_dir))
+        print(
+            f"detect: {eval_stats.rules_run} rules run, "
+            f"{eval_stats.matches} matches on {eval_stats.events_matched} events "
+            f"({eval_stats.events_scanned} scanned) in {eval_stats.seconds:.1f}s, "
+            f"peak {eval_stats.peak_rss_mb:.0f} MiB; "
+            f"{len(eval_stats.rules_errored)} runtime errors"
+        )
+        for rule_id in sorted(eval_stats.rules_errored):
+            print(f"  error {rule_id}: {eval_stats.rules_errored[rule_id]}")
         return 0
     parser.error("unknown command")
     return 2
