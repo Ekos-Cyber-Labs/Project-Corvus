@@ -1,0 +1,9 @@
+{
+  "source": "live triage run against the on-prem model (measured, counts only; no evidence text)",
+  "note": "exact tokens from the model server's /tokenize on the final rendered user messages; 2.48-2.54 chars/token on rendered prompt text (the old 3.2 figure was raw OCSF JSON, not our rendered prompt)",
+  "pairs": [
+    {"rendered_chars": 71987, "exact_tokens": 28979},
+    {"rendered_chars": 54491, "exact_tokens": 21862},
+    {"rendered_chars": 23966, "exact_tokens": 9425}
+  ]
+}

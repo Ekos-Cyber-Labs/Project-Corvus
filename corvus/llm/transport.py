@@ -92,6 +92,15 @@ class TransportError(RuntimeError):
     """The attempt itself failed (no HTTP answer or an unparsable one)."""
 
 
+class AttemptTimeoutError(TransportError, TimeoutError):
+    """A transport try that timed out waiting for the server.
+
+    Subclasses :class:`TransportError` so existing handlers keep
+    working; the extra :class:`TimeoutError` parent lets callers
+    classify timeouts by type alone, without storing message text.
+    """
+
+
 class LimiterTimeoutError(TimeoutError):
     """A limiter slot did not free up within the requested timeout."""
 
@@ -883,6 +892,12 @@ def run_attempt(
                         follow_redirects=False,
                     )
                 except httpx2.TransportError as exc:
+                    if isinstance(exc, httpx2.TimeoutException):
+                        raise AttemptTimeoutError(
+                            f"POST {_safe_host(chat_url)}/chat/completions "
+                            f"for model {backend.model!r} failed "
+                            f"({type(exc).__name__})"
+                        ) from None
                     raise TransportError(
                         f"POST {_safe_host(chat_url)}/chat/completions "
                         f"for model {backend.model!r} failed "

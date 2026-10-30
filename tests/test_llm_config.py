@@ -21,6 +21,10 @@ PURPOSE_VARS = [
     "TRIAGE_REQUESTS_PER_MINUTE",
     "TRIAGE_MAX_INPUT_TOKENS",
     "TRIAGE_MAX_OUTPUT_TOKENS",
+    "TRIAGE_CONTEXT_TOKENS",
+    "TRIAGE_SAFETY_MARGIN_TOKENS",
+    "TRIAGE_READ_TIMEOUT_SECONDS",
+    "TRIAGE_ASSUMED_TOKENS_PER_SECOND",
     "TRIAGE_ALLOW_PUBLIC_ONPREM",
     "ANALYSIS_MODEL",
     "ANALYSIS_BASE_URL",
@@ -30,6 +34,9 @@ PURPOSE_VARS = [
     "ANALYSIS_REQUESTS_PER_MINUTE",
     "ANALYSIS_MAX_INPUT_TOKENS",
     "ANALYSIS_MAX_OUTPUT_TOKENS",
+    "ANALYSIS_CONTEXT_TOKENS",
+    "ANALYSIS_SAFETY_MARGIN_TOKENS",
+    "ANALYSIS_READ_TIMEOUT_SECONDS",
     "ANALYSIS_ALLOW_PUBLIC_ONPREM",
     "PRICE_BOOK_PATH",
 ]
@@ -65,7 +72,11 @@ def test_defaults(base_env: None) -> None:
     assert triage.base_url == LOOPBACK_BASE_URL
     assert triage.trust == "onprem"
     assert triage.concurrency == 16
-    assert triage.max_output_tokens == 4200
+    assert triage.max_input_tokens == 12000
+    assert triage.max_output_tokens == 3000
+    assert triage.context_tokens == 32768
+    assert triage.safety_margin_tokens == 2000
+    assert triage.read_timeout_seconds == 900.0
     assert triage.api_key is None
 
     analysis = get_backend("analysis")
@@ -73,8 +84,84 @@ def test_defaults(base_env: None) -> None:
     assert analysis.base_url == "https://api.meta.ai/v1"
     assert analysis.trust == "cloud"
     assert analysis.concurrency == 4
+    assert analysis.max_input_tokens == 56000
     assert analysis.max_output_tokens == 6000
+    assert analysis.context_tokens == 65536
+    assert analysis.safety_margin_tokens == 2000
+    assert analysis.read_timeout_seconds == 180.0
     assert analysis.api_key == "test-meta-key"
+
+
+def test_read_timeout_override_and_validation(
+    base_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read timeouts default per purpose, override, and reject junk."""
+    assert get_backend("triage").read_timeout_seconds == 900.0
+    assert get_backend("analysis").read_timeout_seconds == 180.0
+    monkeypatch.setenv("TRIAGE_READ_TIMEOUT_SECONDS", "45.5")
+    assert get_backend("triage").read_timeout_seconds == 45.5
+    for bad in ("0", "-3", "soon", "nan", "inf"):
+        monkeypatch.setenv("TRIAGE_READ_TIMEOUT_SECONDS", bad)
+        with pytest.raises(LlmConfigError):
+            get_backend("triage")
+
+
+def test_context_window_invariant_rejects_overflow(
+    base_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Input + output + margin beyond the window fails naming all values."""
+    monkeypatch.setenv("TRIAGE_MAX_INPUT_TOKENS", "32000")
+    with pytest.raises(LlmConfigError) as caught:
+        get_backend("triage")
+    message = str(caught.value)
+    assert "max_input_tokens (32000)" in message
+    assert "max_output_tokens (3000)" in message
+    assert "safety_margin_tokens (2000)" in message
+    assert "context_tokens (32768)" in message
+
+
+def test_triage_timeout_derives_from_output_cap_and_rate(
+    base_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default timeout is output_cap / assumed_tps + 150 s prefill margin."""
+    assert get_backend("triage").read_timeout_seconds == 900.0
+    monkeypatch.setenv("TRIAGE_ASSUMED_TOKENS_PER_SECOND", "2.0")
+    assert get_backend("triage").read_timeout_seconds == 1650.0
+    monkeypatch.setenv("TRIAGE_MAX_OUTPUT_TOKENS", "1500")
+    assert get_backend("triage").read_timeout_seconds == 900.0
+
+
+def test_triage_explicit_timeout_wins_over_derivation(
+    base_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit timeout is used even when rate and cap are set."""
+    monkeypatch.setenv("TRIAGE_ASSUMED_TOKENS_PER_SECOND", "2.0")
+    monkeypatch.setenv("TRIAGE_MAX_OUTPUT_TOKENS", "1500")
+    monkeypatch.setenv("TRIAGE_READ_TIMEOUT_SECONDS", "45.5")
+    assert get_backend("triage").read_timeout_seconds == 45.5
+
+
+def test_triage_assumed_rate_rejects_non_positive(
+    base_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zero, negative, NaN or infinite assumed rate fails startup."""
+    for bad in ("0", "-1", "soon", "nan", "inf"):
+        monkeypatch.setenv("TRIAGE_ASSUMED_TOKENS_PER_SECOND", bad)
+        with pytest.raises(LlmConfigError):
+            get_backend("triage")
+
+
+def test_context_window_vars_rescale_together(
+    base_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raised window plus matching caps passes the invariant."""
+    monkeypatch.setenv("TRIAGE_CONTEXT_TOKENS", "100000")
+    monkeypatch.setenv("TRIAGE_MAX_INPUT_TOKENS", "90000")
+    monkeypatch.setenv("TRIAGE_SAFETY_MARGIN_TOKENS", "3000")
+    triage = get_backend("triage")
+    assert triage.context_tokens == 100000
+    assert triage.max_input_tokens == 90000
+    assert triage.safety_margin_tokens == 3000
 
 
 def test_purpose_vars_take_precedence_over_shared(
@@ -186,7 +273,7 @@ def test_all_cloud_serves_both_from_spark(
     assert config["triage"].api_key == "test-meta-key"
     # Operational limits stay per-purpose.
     assert config["triage"].concurrency == 16
-    assert config["triage"].max_output_tokens == 4200
+    assert config["triage"].max_output_tokens == 3000
 
 
 def test_all_cloud_triage_needs_cloud_key(

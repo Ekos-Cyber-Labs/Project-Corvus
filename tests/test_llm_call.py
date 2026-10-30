@@ -30,7 +30,7 @@ from corvus.llm.call import (
 from corvus.llm.config import BackendConfig
 from corvus.llm.price_book import ModelPrice
 from corvus.llm.stats import summarize_attempt_rows
-from corvus.llm.transport import Attempt, AttemptError
+from corvus.llm.transport import Attempt, AttemptError, AttemptTimeoutError
 from corvus.state.migrate import migrate
 from tests.conftest import _create_database, _drop_database, _test_database_urls
 
@@ -1395,3 +1395,181 @@ def test_call_model_rejects_bad_inputs(call_db: str) -> None:
             backend_override=_onprem(),
         )
     assert stub.calls == []
+
+
+def _timeout_error() -> AttemptTimeoutError:
+    """A read-timeout failure carrying no message text or URL."""
+    return AttemptTimeoutError("timed out")
+
+
+def test_raised_timeout_is_recorded_with_zero_tokens(call_db: str) -> None:
+    """Timeout x2 stops on the same-code rule: ai_failed, 2 rows, no secrets."""
+    stub = StubTransport([_timeout_error(), _timeout_error(), _timeout_error()])
+    outcome = call_model(
+        "triage",
+        _builder,
+        Verdict,
+        _context(call_db),
+        database_url=call_db,
+        prices=_prices("stub-a"),
+        run_attempt_fn=stub,
+        backend_override=_onprem(),
+        call_id="call-timeout-x3",
+    )
+    assert outcome.status == "ai_failed"
+    assert outcome.attempts == 2
+    assert list(outcome.error_codes) == ["timeout", "timeout"]
+    assert outcome.failed_validator == "transport"
+    assert [error["code"] for error in outcome.errors] == ["timeout"]
+    assert len(stub.calls) == 2
+    rows = _attempt_rows(call_db, "call-timeout-x3")
+    assert len(rows) == 2
+    for row in rows:
+        assert row[1] == "transport"
+        assert row[2] == "transport_error"
+        assert row[3] == 0 and row[4] == 0 and row[5] == 0
+        assert row[6] == "estimated"
+        assert row[8][0]["code"] == "timeout"
+        # Fixed literal only: no exception text or URL is ever stored.
+        assert row[8][0]["message"] == "transport raised"
+    # Every per-try hold was released; no live hold may survive the call.
+    with psycopg.connect(call_db, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM spend_reservations WHERE status = 'held'")
+            held = cur.fetchone()
+            assert held is not None
+            assert int(held[0]) == 0
+
+
+def test_context_overflow_then_timeout_keeps_both_rows(call_db: str) -> None:
+    """Overflow + timeout x2: last error is timeout, full trail kept."""
+    overflow = Attempt(
+        http_status=400,
+        content=None,
+        reasoning=None,
+        finish_reason=None,
+        tool_calls=(),
+        tool_call_errors=(),
+        prompt_tokens=0,
+        cached_tokens=0,
+        reasoning_tokens=0,
+        answer_tokens=0,
+        overhead_tokens=0,
+        token_source="usage",
+        latency_ms=1,
+        error=AttemptError(
+            http_status=400,
+            code="context_length_exceeded",
+            message="maximum context length is 32768 tokens",
+            error_type="invalid_request_error",
+        ),
+    )
+    stub = StubTransport([overflow, _timeout_error(), _timeout_error()])
+    outcome = call_model(
+        "triage",
+        _builder,
+        Verdict,
+        _context(call_db),
+        database_url=call_db,
+        prices=_prices("stub-a"),
+        run_attempt_fn=stub,
+        backend_override=_onprem(),
+        call_id="call-overflow-timeout",
+    )
+    assert outcome.status == "ai_failed"
+    assert list(outcome.error_codes) == [
+        "context_overflow",
+        "timeout",
+        "timeout",
+    ]
+    assert [error["code"] for error in outcome.errors] == ["timeout"]
+    rows = _attempt_rows(call_db, "call-overflow-timeout")
+    assert len(rows) == 3
+    assert rows[0][8][0]["code"] == "context_overflow"
+    assert rows[1][8][0]["code"] == "timeout"
+    assert rows[2][8][0]["code"] == "timeout"
+
+
+def test_transport_receives_configured_read_timeout(call_db: str) -> None:
+    """The per-purpose read timeout reaches the transport try."""
+    stub = StubTransport([_attempt(_good_body())])
+    backend = _onprem()
+    assert backend.read_timeout_seconds == 900.0
+    call_model(
+        "triage",
+        _builder,
+        Verdict,
+        _context(call_db),
+        database_url=call_db,
+        prices=_prices("stub-a"),
+        run_attempt_fn=stub,
+        backend_override=backend,
+        call_id="call-read-timeout-default",
+    )
+    assert stub.calls[0]["kwargs"]["read_timeout"] == 900.0
+
+
+def test_connection_error_then_timeout_continues(call_db: str) -> None:
+    """Different codes do not trip the same-code early stop."""
+    from corvus.llm.transport import TransportError
+
+    stub = StubTransport(
+        [TransportError("down"), _timeout_error(), _attempt(_simple_ok_body())]
+    )
+    outcome = call_model(
+        "triage",
+        _builder,
+        Verdict,
+        _context(call_db),
+        database_url=call_db,
+        prices=_prices("stub-a"),
+        run_attempt_fn=stub,
+        backend_override=_onprem(),
+        call_id="call-conn-timeout-continues",
+    )
+    assert outcome.status == "resolved"
+    assert list(outcome.error_codes) == []
+    assert len(stub.calls) == 3
+
+
+def test_hold_ttl_follows_backend_read_timeout(call_db: str) -> None:
+    """A billed hold expires read_timeout + margin after creation."""
+    from corvus.llm.spend import hold_ttl
+
+    stub = StubTransport([_attempt(_good_body())])
+    cloud = _cloud()
+    cloud = BackendConfig(
+        purpose=cloud.purpose,
+        model=cloud.model,
+        base_url=cloud.base_url,
+        trust=cloud.trust,
+        concurrency=cloud.concurrency,
+        requests_per_minute=cloud.requests_per_minute,
+        max_input_tokens=cloud.max_input_tokens,
+        max_output_tokens=cloud.max_output_tokens,
+        read_timeout_seconds=45.0,
+        api_key="TEST-ONLY-KEY",  # gitleaks:allow
+    )
+    outcome = call_model(
+        "analysis",
+        _builder,
+        Verdict,
+        _context(call_db),
+        database_url=call_db,
+        prices=_paid_prices(),
+        run_attempt_fn=stub,
+        backend_override=cloud,
+        egress_filter=EgressFilter(["127.0.0.1:9"]),
+        call_id="call-hold-ttl",
+    )
+    assert outcome.status == "resolved"
+    assert stub.calls[0]["kwargs"]["read_timeout"] == 45.0
+    with psycopg.connect(call_db, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXTRACT(EPOCH FROM (expires_at - created_at))"
+                " FROM spend_reservations"
+            )
+            ttls = [float(row[0]) for row in cur.fetchall()]
+    assert len(ttls) == 1
+    assert ttls[0] == pytest.approx(hold_ttl(45.0, 1), abs=5.0)

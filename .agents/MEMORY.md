@@ -690,3 +690,114 @@ rules back to Wazuh (shadow first, human approval).
   `make test` (606 passed with Postgres) and `pre-commit run
   gitleaks --all-files` (Passed). No eval delta. Compose Postgres
   left running. Awaiting maintainer commit.
+- 2026-10-29: built the Glimmer triage queue (llm-engineer, with a
+  security-reviewer pass). Failures first: the
+  `test_only_call_module_drives_transport` invariant tripped because
+  the worker named the `call_model` test seam, so the seam was
+  removed from the worker and tests fake at the HTTP boundary
+  instead; review also caught the incident header rendering
+  technique ids as masked placeholders, so it now carries a count
+  only. New: `CondensedIncident` in `corvus/llm/schemas.py`
+  (bounded fields, entity-must-appear-in-evidence hook),
+  `corvus/llm/prompts/triage.py` (stable cache prefix with the D23
+  nudge verbatim, data-absent fences, deterministic
+  findings-first evidence selection with stated omitted counts),
+  `corvus/llm/triage_worker.py` (queue jobs, lease/3 heartbeats,
+  idempotent `incident_analyses` upserts, indeterminate/unprocessed
+  escalated never benign, SIGTERM drains in-flight) plus `corvus
+  triage enqueue` / `run --limit N --purpose triage`; validator 5
+  wired via `scan_incident` and a new no-DB `scan_events` helper
+  (echoing outputs quarantine). Verified with `make lint` (green:
+  ruff check, format, mypy) and the full `make test` (630 passed
+  with Postgres, including 24 triage tests). Eval harness re-run to
+  throwaway reports: every metric delta +0 vs the committed
+  baseline, both gates pass, 244.8 s wall. Compose Postgres left
+  running. Awaiting maintainer commit.
+- 2026-10-29: fix round on the triage queue (review probes
+  reproduced first, then fixed). Failures first: the two lease
+  probes failed as reported (queued claims burned their leases);
+  grounding rejected honest Windows paths (JSON escaping); the
+  loader peaked near 2.5 GB on the real store. Fixed:
+  claim-on-demand worker threads with heartbeat-first/finally in
+  `process_job`, string-leaf grounding (keys never evidence),
+  resolved short-circuit plus a no-downgrade upsert `WHERE`,
+  row-group pushdown in the evidence loader, and fail-with-backoff
+  plus type-only heartbeat warnings so no job orphans. Measured on
+  the real store for the same 46-uid call: old logic 1.66 s wall /
+  2.36 GiB peak RSS vs new 0.28 s / 370 MiB (both labelled
+  measured, interpreter included). Verified with `make lint`
+  (green), the full `make test` (640 passed with Postgres,
+  including 34 triage tests) and `pre-commit run gitleaks
+  --all-files` (Passed; Go caches redirected outside the sandbox).
+  No eval delta (detect/correlate untouched). Compose Postgres left
+  running. Awaiting maintainer commit.
+- 2026-10-29: fix round 2 on triage (live APT29 run overflowed the
+  context: 28.5k-token prompt on a 32k window). Failures first: the
+  new probe tests failed as reported until the reselect path and
+  the findings loader landed; the event-only spy fixture needed
+  the level column as string to match the real store. Fixed:
+  per-purpose context window plus safety margin in config with the
+  input+output+margin invariant enforced at load (shipped triage
+  24000/4200/2000 within 32768, analysis 56000/6000/2000 within
+  65536), estimator recalibrated to 3 chars/token against the live
+  3.2 measurement, one 25% evidence shrink on a context 400 then
+  give-up as ai_failed with `context_overflow`, findings loaded
+  from the findings table with the same row-group pushdown, and
+  bounded projections (no raw_data, 300-char command cuts) with
+  separate findings/events counts while the scan still sees full
+  records. Measured on the real incidents 146 (273 findings + 273
+  events: all findings + 2 events, prompt estimate 23,493) and 192
+  (297 + 294: 274 findings + 0 events, estimate 23,469), both under
+  the 24000 cap; exact token counts not measured (model server
+  unreachable); loader contrast re-measured on the same 46-uid
+  call: old 1.66 s / 2.36 GiB vs new 0.28 s / 370 MiB. Verified
+  with `make lint` (green), the full `make test` (653 passed with
+  Postgres, including 45 triage tests) and `pre-commit run
+  gitleaks --all-files` (Passed). No eval delta. Compose Postgres
+  left running. Awaiting maintainer commit.
+- 2026-10-29: fix round 3 on triage (live run: 2.48-2.54 chars/token
+  broke the 3.0 estimator, timeouts left no rows, 86 identical
+  findings ate the budget). Failures first: the two new call tests
+  failed as reported (stored error message is the fixed literal
+  "transport raised", not ""; the billed hold_ttl probe missed the
+  cloud egress filter) and both were fixed in the tests, not by
+  weakening code. Fixed: estimator 2.4 chars/token with the three
+  measured (chars, exact tokens) pairs in the calibration fixture;
+  raised transport failures recorded as rows (timeout vs
+  connection_error by type only, zero tokens, fixed-literal message,
+  holds released; exception codes feed the trail but never trip the
+  early stop alone, so timeout x3 keeps 3 rows); per-purpose read
+  timeout (triage 300 s, analysis 180 s) driving transport, hold_ttl
+  and lease sizing via _resolve_lease (CLI --lease-seconds defaults
+  to it); shipped triage input cap 12000 (invariant holds;
+  untested at that size, no latency claimed); one group line per
+  (rule_id, host) with validator accepting every incident uid.
+  Measured on the real incidents 146 (546 uids: 273 findings in 1
+  group all shown, 146/273 events in, user estimate 11295 < 12000)
+  and 192 (591 uids: 297 findings in 13 groups all shown, 116/294
+  events in, estimate 11319); loader wall 0.2-0.4 s, whole-process
+  peak RSS ~200 MB (corroborated by /usr/bin/time -l: 210075648
+  bytes); exact token counts not measured (model server unreachable
+  from the sandbox). Verified with `make lint` (green), the full
+  `make test` (664 passed with Postgres) and `pre-commit run
+  gitleaks --all-files` (Passed). No eval delta. Compose Postgres
+  left running. Awaiting maintainer commit.
+- 2026-10-29: fix round 4 on triage timeouts (live run: 2 tries at
+  about 250 s each for one incident, 3 timeouts at the 300 s read
+  timeout for the other; output tokens dominate). Fixed: triage
+  output cap 3000 with the context-window invariant holding, triage
+  default read timeout 900 s derived as output cap over assumed
+  tokens/s plus 150 s prefill margin with an explicit timeout winning
+  and non-positive rates refused, lease and hold TTL following the
+  read timeout; timeout and connection-error codes take part in the
+  same-code early stop with one 25% evidence shrink after a first
+  timeout; every model-visible time renders as ISO-8601 UTC with
+  seconds precision while stored data keeps the raw epoch. Measured
+  on the real incidents 146 and 192: not measured (model server
+  unreachable from the sandbox; exact tokenize counts and estimates
+  unavailable). Verified with `make lint` (green), the full `make
+  test` (671 passed with Postgres) and `pre-commit run gitleaks
+  --all-files` (Passed). Security-reviewer pass: no new network, no
+  secrets logged, transport failures keep the fixed literal, fences
+  and truncation unchanged, hostile-evidence tests green. No eval
+  delta. Compose Postgres left running. Awaiting maintainer commit.

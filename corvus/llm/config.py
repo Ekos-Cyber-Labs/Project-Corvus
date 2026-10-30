@@ -21,8 +21,25 @@ shared default:
   (default 16 / 4), ``TRIAGE_REQUESTS_PER_MINUTE`` /
   ``ANALYSIS_REQUESTS_PER_MINUTE`` (default 120 / 30),
   ``TRIAGE_MAX_INPUT_TOKENS`` / ``ANALYSIS_MAX_INPUT_TOKENS`` (default
-  32768 / 65536), ``TRIAGE_MAX_OUTPUT_TOKENS`` /
-  ``ANALYSIS_MAX_OUTPUT_TOKENS`` (default 4200 / 6000).
+  12000 / 56000: the evidence-selection input cap, never the whole
+  window), ``TRIAGE_MAX_OUTPUT_TOKENS`` /
+  ``ANALYSIS_MAX_OUTPUT_TOKENS`` (default 3000 / 6000),
+  ``TRIAGE_CONTEXT_TOKENS`` / ``ANALYSIS_CONTEXT_TOKENS`` (default
+  32768 / 65536: the served context window),
+  ``TRIAGE_SAFETY_MARGIN_TOKENS`` / ``ANALYSIS_SAFETY_MARGIN_TOKENS``
+  (default 2000 / 2000: headroom beyond input cap plus output cap),
+  ``TRIAGE_READ_TIMEOUT_SECONDS`` / ``ANALYSIS_READ_TIMEOUT_SECONDS``
+  (default 900 / 180: per-try read timeout; large prompts on the
+  single on-prem GPU can take minutes, so a legitimate slow prefill
+  must not be cut).
+- ``TRIAGE_ASSUMED_TOKENS_PER_SECOND`` (default 4.0): decode rate
+  assumed when deriving the triage default read timeout. When
+  ``TRIAGE_READ_TIMEOUT_SECONDS`` is unset, the default is
+  ``max_output_tokens / assumed_tokens_per_second`` plus a 150 s
+  prefill margin (3000 / 4.0 + 150 = 900 s); an explicit timeout
+  wins. Analysis keeps its own 180 s default but follows the same
+  formula (output cap over the assumed rate plus prefill margin)
+  when its limits are retuned.
 
 ``MODEL_PROFILE`` decides which backend serves which purpose:
 
@@ -38,7 +55,11 @@ shared default:
 Every backend is resolved and validated by :func:`load_llm_config` at
 startup. An unknown purpose, a missing/invalid required value, a model
 with no price-book row, or an on-prem backend pointing at a public
-address raises :class:`LlmConfigError` there, never at first call. API
+address raises :class:`LlmConfigError` there, never at first call. The
+context window invariant ``max_input_tokens + max_output_tokens +
+safety_margin_tokens <= context_tokens`` is enforced per purpose the
+same way, with the error naming all three values and the window, so a
+call can never be configured that overflows before it starts. API
 key values never appear in ``repr``, ``str``, error messages or logs;
 only the variable names are mentioned.
 
@@ -61,6 +82,7 @@ Cloud trust on a private address is allowed.
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
 import socket
 import threading
@@ -93,6 +115,9 @@ class _PurposeDefaults(TypedDict):
     requests_per_minute: int
     max_input_tokens: int
     max_output_tokens: int
+    context_tokens: int
+    safety_margin_tokens: int
+    read_timeout_seconds: float
 
 
 _DEFAULTS: dict[str, _PurposeDefaults] = {
@@ -101,22 +126,36 @@ _DEFAULTS: dict[str, _PurposeDefaults] = {
         "trust": "onprem",
         "concurrency": 16,
         "requests_per_minute": 120,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 4200,
+        "max_input_tokens": 12000,
+        "max_output_tokens": 3000,
+        "context_tokens": 32768,
+        "safety_margin_tokens": 2000,
+        "read_timeout_seconds": 900.0,
     },
     "analysis": {
         "model": "muse-spark-1.3",
         "trust": "cloud",
         "concurrency": 4,
         "requests_per_minute": 30,
-        "max_input_tokens": 65536,
+        "max_input_tokens": 56000,
         "max_output_tokens": 6000,
+        "context_tokens": 65536,
+        "safety_margin_tokens": 2000,
+        "read_timeout_seconds": 180.0,
     },
 }
 
 
 PRICE_BOOK_PATH_VAR = "PRICE_BOOK_PATH"
 DNS_TIMEOUT_SECONDS = 2.0
+
+#: Env var selecting the decode rate assumed for the triage read-timeout
+#: derivation (tokens/s, positive float, default 4.0).
+TRIAGE_ASSUMED_TPS_VAR = "TRIAGE_ASSUMED_TOKENS_PER_SECOND"
+DEFAULT_TRIAGE_ASSUMED_TPS = 4.0
+#: Prefill margin (seconds) in the triage timeout derivation: covers a
+#: ~15k-token prefill plus headroom (3000 / 4.0 + 150 = 900 s).
+TRIAGE_PREFILL_MARGIN_SECONDS = 150.0
 
 _V4_RFC1918 = (
     ipaddress.ip_network("10.0.0.0/8"),
@@ -156,6 +195,9 @@ class BackendConfig:
     requests_per_minute: int
     max_input_tokens: int
     max_output_tokens: int
+    context_tokens: int = 32768
+    safety_margin_tokens: int = 2000
+    read_timeout_seconds: float = 900.0
     api_key: str | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
@@ -166,6 +208,9 @@ class BackendConfig:
             f"requests_per_minute={self.requests_per_minute!r}, "
             f"max_input_tokens={self.max_input_tokens!r}, "
             f"max_output_tokens={self.max_output_tokens!r}, "
+            f"context_tokens={self.context_tokens!r}, "
+            f"safety_margin_tokens={self.safety_margin_tokens!r}, "
+            f"read_timeout_seconds={self.read_timeout_seconds!r}, "
             f"api_key_set={self.api_key is not None!r})"
         )
 
@@ -192,6 +237,54 @@ def _positive_int(var_name: str, raw: str | None, default: int) -> int:
             f"{var_name} must be a positive integer, got {raw.strip()!r}"
         )
     return parsed
+
+
+def _positive_seconds(var_name: str, raw: str | None, default: float) -> float:
+    """Parse a positive finite seconds value for a timeout variable."""
+    if raw is None:
+        return default
+    try:
+        parsed = float(raw.strip())
+    except ValueError:
+        raise LlmConfigError(
+            f"{var_name} must be a positive number of seconds, got {raw.strip()!r}"
+        ) from None
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise LlmConfigError(
+            f"{var_name} must be a positive number of seconds, got {raw.strip()!r}"
+        )
+    return parsed
+
+
+def _positive_rate(var_name: str, raw: str | None, default: float) -> float:
+    """Parse a positive finite tokens/s rate for the timeout derivation."""
+    if raw is None:
+        candidate = os.environ.get(TRIAGE_ASSUMED_TPS_VAR)
+        if candidate is None or candidate.strip() == "":
+            return default
+        raw = candidate
+        var_name = TRIAGE_ASSUMED_TPS_VAR
+    try:
+        parsed = float(raw.strip())
+    except ValueError:
+        raise LlmConfigError(
+            f"{var_name} must be a positive number, got {raw.strip()!r}"
+        ) from None
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise LlmConfigError(
+            f"{var_name} must be a positive number, got {raw.strip()!r}"
+        )
+    return parsed
+
+
+def _triage_default_timeout(max_output_tokens: int, assumed_tps: float) -> float:
+    """Derive the triage default read timeout from the output cap.
+
+    ``max_output_tokens / assumed_tokens_per_second`` plus the
+    prefill margin, so the output cap and the timeout stay
+    consistent when either is retuned.
+    """
+    return float(max_output_tokens) / float(assumed_tps) + TRIAGE_PREFILL_MARGIN_SECONDS
 
 
 def _resolve_group(purpose: str) -> BackendConfig:
@@ -228,6 +321,18 @@ def _resolve_group(purpose: str) -> BackendConfig:
 
     # Key requirement is enforced by get_backend after profile routing:
     # a purpose served with cloud trust needs a key, on-prem needs none.
+    max_output_tokens = _positive_int(
+        f"{prefix}_MAX_OUTPUT_TOKENS",
+        os.environ.get(f"{prefix}_MAX_OUTPUT_TOKENS"),
+        int(defaults["max_output_tokens"]),
+    )
+    if purpose == "triage":
+        assumed_tps = _positive_rate(
+            TRIAGE_ASSUMED_TPS_VAR, None, DEFAULT_TRIAGE_ASSUMED_TPS
+        )
+        derived_timeout = _triage_default_timeout(max_output_tokens, assumed_tps)
+    else:
+        derived_timeout = float(defaults["read_timeout_seconds"])
     return BackendConfig(
         purpose=purpose,
         model=model,
@@ -248,10 +353,21 @@ def _resolve_group(purpose: str) -> BackendConfig:
             os.environ.get(f"{prefix}_MAX_INPUT_TOKENS"),
             int(defaults["max_input_tokens"]),
         ),
-        max_output_tokens=_positive_int(
-            f"{prefix}_MAX_OUTPUT_TOKENS",
-            os.environ.get(f"{prefix}_MAX_OUTPUT_TOKENS"),
-            int(defaults["max_output_tokens"]),
+        max_output_tokens=max_output_tokens,
+        context_tokens=_positive_int(
+            f"{prefix}_CONTEXT_TOKENS",
+            os.environ.get(f"{prefix}_CONTEXT_TOKENS"),
+            int(defaults["context_tokens"]),
+        ),
+        safety_margin_tokens=_positive_int(
+            f"{prefix}_SAFETY_MARGIN_TOKENS",
+            os.environ.get(f"{prefix}_SAFETY_MARGIN_TOKENS"),
+            int(defaults["safety_margin_tokens"]),
+        ),
+        read_timeout_seconds=_positive_seconds(
+            f"{prefix}_READ_TIMEOUT_SECONDS",
+            os.environ.get(f"{prefix}_READ_TIMEOUT_SECONDS"),
+            derived_timeout,
         ),
         api_key=api_key,
     )
@@ -377,6 +493,28 @@ def _check_onprem_endpoint(
     )
 
 
+def _check_context_window(config: BackendConfig, purpose: str) -> None:
+    """Enforce the context window invariant on the final merged config.
+
+    ``max_input_tokens + max_output_tokens + safety_margin_tokens``
+    must fit the served context window; the error names all three
+    values and the window so the operator sees which knob to turn.
+    """
+    planned = (
+        config.max_input_tokens + config.max_output_tokens + config.safety_margin_tokens
+    )
+    if planned > config.context_tokens:
+        raise LlmConfigError(
+            f"purpose {purpose!r} overflows its context window: "
+            f"max_input_tokens ({config.max_input_tokens}) + "
+            f"max_output_tokens ({config.max_output_tokens}) + "
+            f"safety_margin_tokens ({config.safety_margin_tokens}) = "
+            f"{planned} exceeds context_tokens ({config.context_tokens}); "
+            "lower the input cap, the output cap or the margin, or raise "
+            "the context window"
+        )
+
+
 def get_backend(
     purpose: str,
     price_book_path: str | Path | None = None,
@@ -385,8 +523,9 @@ def get_backend(
     """Return the validated backend serving ``purpose``.
 
     Raises :class:`LlmConfigError` for an unknown purpose, a missing /
-    invalid required value, a model with no price-book row, or an
-    on-prem backend pointing at a public address.
+    invalid required value, a model with no price-book row, an
+    on-prem backend pointing at a public address, or a context
+    window invariant violation.
     """
     if purpose not in PURPOSES:
         raise LlmConfigError(
@@ -411,7 +550,11 @@ def get_backend(
             requests_per_minute=limits.requests_per_minute,
             max_input_tokens=limits.max_input_tokens,
             max_output_tokens=limits.max_output_tokens,
+            context_tokens=limits.context_tokens,
+            safety_margin_tokens=limits.safety_margin_tokens,
+            read_timeout_seconds=limits.read_timeout_seconds,
         )
+    _check_context_window(config, purpose)
     if config.trust == "cloud" and not config.api_key:
         if backend_source == "analysis":
             key_vars = "ANALYSIS_API_KEY or META_API_KEY"

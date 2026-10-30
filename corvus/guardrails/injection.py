@@ -58,6 +58,7 @@ __all__ = [
     "detect",
     "echoes_injection",
     "normalize_text",
+    "scan_events",
     "scan_incident",
     "signals_for_incident",
 ]
@@ -691,6 +692,44 @@ def _has_evidence(model_output: Mapping[str, Any]) -> bool:
         ):
             return True
     return False
+
+
+def scan_events(
+    events_by_uid: Any,
+) -> tuple[list[InjectionSignal], dict[tuple[str, str], str]]:
+    """Detect injection signals and field texts for in-memory events.
+
+    The same walk :func:`scan_incident` persists, but with no
+    database write: returns the :func:`detect` signals (with the
+    coerced uid filled in when the event carries none) plus the
+    normalized ``(event_uid, field)`` texts validator 5 needs for
+    its verbatim-echo check. A worker that already holds the
+    incident events calls this for the model context after
+    :func:`scan_incident` persists the same signals.
+    """
+    pairs = _coerce_scan_events(events_by_uid)
+    signals: list[InjectionSignal] = []
+    texts: dict[tuple[str, str], str] = {}
+    for coerced_uid, event in pairs:
+        for signal in detect(event):
+            uid = signal.event_uid or coerced_uid
+            signals.append(
+                InjectionSignal(
+                    event_uid=uid,
+                    field=signal.field,
+                    pattern_id=signal.pattern_id,
+                    span=signal.span,
+                    requested_effect=signal.requested_effect,
+                )
+            )
+        _, data = _event_uid_and_mapping(event)
+        for field, text in _iter_fields(data):
+            try:
+                spaced = normalize_text(text).spaced
+            except Exception:
+                continue
+            texts[(coerced_uid, field)] = spaced
+    return signals, texts
 
 
 def echoes_injection(

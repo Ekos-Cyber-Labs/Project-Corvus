@@ -108,6 +108,7 @@ from corvus.llm.spend import (
 )
 from corvus.llm.transport import (
     Attempt,
+    AttemptError,
     LimiterTimeoutError,
     TransportError,
 )
@@ -146,9 +147,11 @@ REASONING_ORDER = ("low", "medium", "high")
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_REASONING_STRENGTH = "medium"
 
-#: Model-output keys that may cite supporting evidence event uids.
+#: Model-output keys that may cite supporting evidence event uids:
 #: :data:`corvus.guardrails.injection.EVIDENCE_FIELDS` plus the
-#: triage field name.
+#: analysis-loop names. Nested triage citations
+#: (``key_events[].event_uid``, ``timeline[].event_uid``) are found
+#: by :func:`_walk_event_uids`, not by this tuple.
 EVIDENCE_KEYS = (
     "evidence_event_uids",
     "supporting_event_uids",
@@ -273,9 +276,11 @@ class CallOutcome:
     attempt was empty or invalid; ``value`` is None, never benign),
     or ``pending_ai`` (budget refused; ``value`` is None, nothing
     was sent). ``errors`` carries the last structured errors and
-    never contains secrets. ``attempts`` counts transport tries
-    that produced an answer object (plus unrecorded pre-answer
-    failures, which still consume the attempt budget).
+    never contains secrets. ``attempts`` counts recorded tries
+    (every transport try is recorded, including raised failures).
+    ``error_codes`` lists the per-try error codes in order, so a
+    caller can store the whole failure trail (for example
+    ``["context_overflow", "timeout", "timeout"]``).
     """
 
     status: str
@@ -285,6 +290,7 @@ class CallOutcome:
     needs_human_review: bool
     model: str | None
     failed_validator: str | None = None
+    error_codes: tuple[str, ...] = ()
 
 
 @dataclass
@@ -441,6 +447,29 @@ def validate_schema(
     return value, []
 
 
+def _walk_event_uids(value: Any) -> list[str]:
+    """Collect nested ``event_uid`` string values (triage citations).
+
+    Triage schemas cite events inside objects (``key_events[].event_uid``,
+    ``timeline[].event_uid``), not in the top-level uid lists above, so
+    the membership check must walk the whole output. Every found value
+    counts as cited: quoting an event still requires it to belong to
+    the incident.
+    """
+    found: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if key == "event_uid" and isinstance(item, str) and item.strip():
+                found.append(item.strip())
+            else:
+                found.extend(_walk_event_uids(item))
+        return found
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            found.extend(_walk_event_uids(item))
+    return found
+
+
 def _cited_uids(parsed: Mapping[str, Any]) -> dict[str, str]:
     """Map each cited evidence uid to the output key that cited it."""
     cited: dict[str, str] = {}
@@ -453,6 +482,8 @@ def _cited_uids(parsed: Mapping[str, Any]) -> dict[str, str]:
             for item in value:
                 if isinstance(item, str) and item.strip():
                     cited.setdefault(item.strip(), key)
+    for uid in _walk_event_uids(parsed):
+        cited.setdefault(uid, "event_uid")
     return cited
 
 
@@ -534,17 +565,61 @@ def _normalize_language(raw: Any) -> str | None:
     return None
 
 
+def _model_semantic_errors(
+    response_model: type[BaseModel] | None,
+    parsed: Mapping[str, Any],
+    context: CallContext,
+) -> list[StructuredError]:
+    """Run a response model's own semantic hook, if it offers one.
+
+    A model class may define ``semantic_errors(parsed, context)``
+    returning a list of ``{"code", "path", "message"}`` mappings
+    (for example the triage entity-grounding check). A malformed
+    hook result propagates: it is our configuration error, never
+    the model's fault.
+    """
+    if response_model is None:
+        return []
+    hook = getattr(response_model, "semantic_errors", None)
+    if hook is None:
+        return []
+    items = hook(parsed, context)
+    if items is None:
+        return []
+    errors: list[StructuredError] = []
+    for item in items:
+        if (
+            isinstance(item, Mapping)
+            and isinstance(item.get("code"), str)
+            and isinstance(item.get("path"), str)
+            and isinstance(item.get("message"), str)
+        ):
+            errors.append(
+                _err(str(item["code"]), str(item["path"]), str(item["message"]))
+            )
+        else:
+            raise TypeError(
+                f"{response_model.__name__}.semantic_errors must return "
+                f"a list of code/path/message mappings, got {item!r}"
+            )
+    return errors
+
+
 def validate_semantics(
     parsed: Mapping[str, Any],
     context: CallContext,
     database_url: str | None = None,
+    *,
+    response_model: type[BaseModel] | None = None,
 ) -> list[StructuredError]:
-    """Validator 3: uids, techniques, pseudonyms, language.
+    """Validator 3: uids, techniques, pseudonyms, language, model hook.
 
     Every cited event uid must belong to the incident; every
     ATT&CK technique token must resolve in the dictionary;
     pseudonym tokens must be known; the ``language`` field must
-    equal the request and a cheap stopword check must agree.
+    equal the request and a cheap stopword check must agree. When
+    ``response_model`` offers a ``semantic_errors`` hook, its
+    findings are appended (schema-specific grounding).
     """
     errors: list[StructuredError] = []
     valid_uids = set(context.event_uids)
@@ -619,6 +694,7 @@ def validate_semantics(
                         "in the output text",
                     )
                 )
+    errors.extend(_model_semantic_errors(response_model, parsed, context))
     return errors
 
 
@@ -959,6 +1035,33 @@ def _record_one(
         raise
 
 
+#: Fraction of the evidence budget kept when a context-overflow 400
+#: forces one reselection before the next try.
+_OVERFLOW_SHRINK_FACTOR = 0.75
+
+#: Case-insensitive markers identifying a context-length refusal in a
+#: provider error message. Kept tight: only phrasings about context
+#: or token capacity, so ordinary 400s stay generic transport errors.
+_OVERFLOW_MARKERS = (
+    "maximum context length",
+    "context length",
+    "context window",
+    "too many tokens",
+    "token limit",
+    "input tokens exceed",
+    "prompt is too long",
+    "maximum tokens",
+)
+
+
+def _is_context_overflow(error: AttemptError | None) -> bool:
+    """True for an HTTP 400 whose message reports context exhaustion."""
+    if error is None or error.http_status != 400:
+        return False
+    text = (error.message or "").lower()
+    return any(marker in text for marker in _OVERFLOW_MARKERS)
+
+
 def _run_backend_loop(
     *,
     purpose: str,
@@ -975,6 +1078,7 @@ def _run_backend_loop(
     temperature: float,
     reasoning_strength: str,
     cap_usd: float | None,
+    reselect_payload: Callable[[float], Any] | None = None,
 ) -> _LoopResult:
     """Run the 3-try self-correction loop against one backend.
 
@@ -984,11 +1088,18 @@ def _run_backend_loop(
     instead of recording; a recorded try converts its hold (billed)
     or releases it (unbilled) through the id it reserved. The
     ``finally`` clause frees any leftover hold on every exit, so no
-    path escapes with a live hold.
+    path escapes with a live hold. A context-overflow 400 (see
+    :func:`_is_context_overflow`) or a first read timeout shrinks the
+    evidence budget once via ``reselect_payload`` (25% off) and
+    rebuilds the base messages for the next try; the shrunk attempt
+    is recorded with its own error code, and a second identical code
+    stops the loop through the same-code early-stop rule. Timeout and
+    connection-error codes take part in that early stop like every
+    other error: two consecutive identical codes end the backend loop.
     """
     result = _LoopResult()
     worst_single = _worst_case_usd(backend, prices)
-    ttl = hold_ttl(transport_module.DEFAULT_READ_TIMEOUT, 1)
+    ttl = hold_ttl(backend.read_timeout_seconds, 1)
     billed = backend.trust == "cloud"
 
     def _try_reserve() -> int | None:
@@ -1047,6 +1158,7 @@ def _run_backend_loop(
             raise
         corrections: list[dict[str, str]] = []
         attempt_number = start_attempt_number
+        overflow_shrunk = False
         for index in range(MAX_ATTEMPTS):
             if index > 0:
                 hold = _try_reserve()
@@ -1075,6 +1187,7 @@ def _run_backend_loop(
                         reasoning_strength=attempt_strength,
                         glimmer=(backend.model == "glimmer"),
                         egress_filter=egress,
+                        read_timeout=backend.read_timeout_seconds,
                         **schema_kwargs,
                     )
                 else:
@@ -1086,6 +1199,7 @@ def _run_backend_loop(
                         reasoning_strength=attempt_strength,
                         glimmer=(backend.model == "glimmer"),
                         egress_filter=egress,
+                        read_timeout=backend.read_timeout_seconds,
                         **schema_kwargs,
                     )
             except EgressBlocked as exc:
@@ -1093,15 +1207,102 @@ def _run_backend_loop(
                 result.fatal_code = "egress_blocked"
                 result.fatal_errors = [_err("egress_blocked", "", f"{exc}")]
                 return result
-            except TransportError, LimiterTimeoutError:
-                _release()
+            except (TransportError, LimiterTimeoutError) as exc:
+                # A raised transport failure (read timeout, connection
+                # error) is recorded like any other try — one row,
+                # zero tokens, token_source estimated — so timeouts
+                # are visible instead of vanishing. The code comes
+                # from the exception type only; no message text and
+                # no URLs are stored. Timeout and connection-error
+                # codes take part in the same-code early stop like
+                # every other error, and a first timeout shrinks the
+                # evidence budget once, like the overflow path.
+                if isinstance(exc, TimeoutError):
+                    exception_code = "timeout"
+                else:
+                    exception_code = "connection_error"
+                raised_errors = [_err(exception_code, "", "transport raised")]
+                synthetic = Attempt(
+                    http_status=0,
+                    content=None,
+                    reasoning=None,
+                    finish_reason=None,
+                    tool_calls=(),
+                    tool_call_errors=(),
+                    prompt_tokens=0,
+                    cached_tokens=0,
+                    reasoning_tokens=0,
+                    answer_tokens=0,
+                    overhead_tokens=0,
+                    token_source="estimated",
+                    latency_ms=0,
+                    error=AttemptError(
+                        http_status=0,
+                        code=exception_code,
+                        message="",
+                        error_type=None,
+                    ),
+                )
+                _record_one(
+                    call_id=call_id,
+                    attempt_number=attempt_number,
+                    backend=backend,
+                    purpose=purpose,
+                    context=context,
+                    attempt=synthetic,
+                    failed_validator="transport",
+                    errors=raised_errors,
+                    outcome="transport_error",
+                    reservation_id=hold if billed else None,
+                    database_url=database_url,
+                    prices=prices,
+                )
+                if not billed:
+                    _logged_release(hold, call_id, database_url)
+                hold = None
+                attempt_number += 1
                 result.tries += 1
+                result.recorded += 1
+                result.last_errors = raised_errors
+                result.last_validator = "transport"
+                result.error_codes.append(exception_code)
+                result.validators.append("transport")
+                if len(result.error_codes) >= 2 and (
+                    result.error_codes[-1] == result.error_codes[-2]
+                ):
+                    break
+                if (
+                    exception_code == "timeout"
+                    and not overflow_shrunk
+                    and reselect_payload is not None
+                ):
+                    shrunk_payload = reselect_payload(_OVERFLOW_SHRINK_FACTOR)
+                    if shrunk_payload is not None:
+                        context.payload = shrunk_payload
+                        try:
+                            shrunk_prepared = prepare_payload(
+                                shrunk_payload,
+                                backend,
+                                database_url=database_url,
+                                entities=context.entities,
+                            )
+                            base_messages = _coerce_messages(
+                                messages_builder(shrunk_prepared.payload)
+                            )
+                        except Exception as exc:
+                            result.fatal_code = "payload_error"
+                            result.fatal_errors = [_err("payload_error", "", f"{exc}")]
+                            return result
+                        corrections = []
+                        overflow_shrunk = True
                 continue
             result.tries += 1
             if attempt.error is not None:
+                overflow = _is_context_overflow(attempt.error)
+                error_code = "context_overflow" if overflow else "transport_error"
                 transport_errors = [
                     _err(
-                        "transport_error",
+                        error_code,
                         "",
                         f"backend answered HTTP {attempt.error.http_status}: "
                         f"{attempt.error.message}",
@@ -1128,8 +1329,29 @@ def _run_backend_loop(
                 result.recorded += 1
                 result.last_errors = transport_errors
                 result.last_validator = "transport"
-                result.error_codes.append("transport_error")
+                result.error_codes.append(error_code)
                 result.validators.append("transport")
+                if overflow and not overflow_shrunk and reselect_payload is not None:
+                    shrunk_payload = reselect_payload(_OVERFLOW_SHRINK_FACTOR)
+                    if shrunk_payload is not None:
+                        context.payload = shrunk_payload
+                        try:
+                            shrunk_prepared = prepare_payload(
+                                shrunk_payload,
+                                backend,
+                                database_url=database_url,
+                                entities=context.entities,
+                            )
+                            base_messages = _coerce_messages(
+                                messages_builder(shrunk_prepared.payload)
+                            )
+                        except Exception as exc:
+                            result.fatal_code = "payload_error"
+                            result.fatal_errors = [_err("payload_error", "", f"{exc}")]
+                            return result
+                        corrections = []
+                        overflow_shrunk = True
+                        continue
                 corrections = [
                     {"role": "assistant", "content": attempt.content or ""},
                     {
@@ -1155,7 +1377,10 @@ def _run_backend_loop(
                         errors = schema_errors
                     else:
                         semantics_errors = validate_semantics(
-                            parsed, context, database_url
+                            parsed,
+                            context,
+                            database_url,
+                            response_model=active_model,
                         )
                         if semantics_errors:
                             failed_validator = "semantics"
@@ -1314,6 +1539,7 @@ def call_model(
     reasoning_strength: str = DEFAULT_REASONING_STRENGTH,
     cap_usd: float | None = None,
     call_id: str | None = None,
+    reselect_payload: Callable[[float], Any] | None = None,
 ) -> CallOutcome:
     """Run one validated model call for ``purpose`` and return its outcome.
 
@@ -1321,10 +1547,13 @@ def call_model(
     messages; ``response_model`` is the pydantic schema every
     answer must validate against; ``context`` carries the incident
     evidence keys, floor, language, dictionary, signals and the
-    deterministic fallback value. Test seams (``run_attempt_fn``,
-    ``backend_override``, ``prices``, ``cap_usd``,
-    ``egress_filter``) are keyword-only and default to production
-    wiring; the stub-transport tests drive them with no network.
+    deterministic fallback value. ``reselect_payload``, when given,
+    rebuilds a smaller raw payload from a shrink factor after a
+    context-overflow 400, once per backend loop. Test seams
+    (``run_attempt_fn``, ``backend_override``, ``prices``,
+    ``cap_usd``, ``egress_filter``) are keyword-only and default to
+    production wiring; the stub-transport tests drive them with no
+    network.
     """
     if purpose not in ("triage", "analysis"):
         raise ValueError(
@@ -1372,6 +1601,7 @@ def call_model(
         temperature=float(temperature),
         reasoning_strength=reasoning_strength,
         cap_usd=cap_usd,
+        reselect_payload=reselect_payload,
     )
     if first.resolved_value is not None:
         return CallOutcome(
@@ -1413,6 +1643,7 @@ def call_model(
             temperature=float(temperature),
             reasoning_strength=reasoning_strength,
             cap_usd=cap_usd,
+            reselect_payload=reselect_payload,
         )
         if second.resolved_value is not None:
             return CallOutcome(
@@ -1440,6 +1671,7 @@ def call_model(
         failed_validators = list(first.validators) + list(second.validators)
         last_errors = second.last_errors or first.last_errors
         last_validator = second.last_validator or first.last_validator
+        error_codes = tuple(first.error_codes) + tuple(second.error_codes)
         if last_validator is None:
             last_validator = second.fatal_code or first.fatal_code
     else:
@@ -1448,6 +1680,7 @@ def call_model(
         failed_validators = list(first.validators)
         last_errors = first.last_errors or first.fatal_errors
         last_validator = first.last_validator
+        error_codes = tuple(first.error_codes)
         if last_validator is None and first.fatal_code is not None:
             last_validator = first.fatal_code
     both_refused_budget = first.fatal_code == "budget_exceeded" and (
@@ -1482,6 +1715,7 @@ def call_model(
             needs_human_review=True,
             model=None,
             failed_validator=last_validator,
+            error_codes=error_codes,
         )
     _escalate_review(db_url, context.incident_id)
     return CallOutcome(
@@ -1492,6 +1726,7 @@ def call_model(
         needs_human_review=True,
         model=None,
         failed_validator=last_validator,
+        error_codes=error_codes,
     )
 
 

@@ -104,6 +104,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="Postgres URL (default: $DATABASE_URL).",
     )
 
+    triage = sub.add_parser("triage", help="Glimmer triage queue commands.")
+    triage_sub = triage.add_subparsers(dest="triage_command", required=True)
+    triage_enqueue = triage_sub.add_parser(
+        "enqueue",
+        help="Enqueue one triage job per incident lacking a triage analysis.",
+    )
+    triage_enqueue.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    triage_enqueue.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Enqueue at most this many incidents (default: all).",
+    )
+    triage_run = triage_sub.add_parser(
+        "run",
+        help="Claim and run triage jobs (Glimmer condenses raw evidence).",
+    )
+    triage_run.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process at most this many jobs (default: until empty).",
+    )
+    triage_run.add_argument(
+        "--purpose",
+        default="triage",
+        choices=["triage"],
+        help="Model-call purpose and analysis stage (default: %(default)s).",
+    )
+    triage_run.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    triage_run.add_argument(
+        "--replay-dir",
+        default="data/replay",
+        help="Replay Parquet store for incident evidence (default: data/replay).",
+    )
+    triage_run.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help="Max in-flight jobs (default: the backend TRIAGE_CONCURRENCY).",
+    )
+    triage_run.add_argument(
+        "--lease-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Queue lease per claim in seconds"
+            " (default: the purpose read timeout"
+            " TRIAGE_READ_TIMEOUT_SECONDS)."
+        ),
+    )
+
     evaluation = sub.add_parser("eval", help="Evaluation harness commands.")
     eval_sub = evaluation.add_subparsers(dest="eval_command", required=True)
     eval_run = eval_sub.add_parser(
@@ -277,6 +337,30 @@ def main(argv: list[str] | None = None) -> int:
             "(stale keys from earlier settings are kept; use a fresh "
             "database when settings change)"
         )
+        return 0
+    if args.command == "triage" and args.triage_command == "enqueue":
+        from corvus.llm.triage_worker import enqueue_triage_jobs
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        job_ids = enqueue_triage_jobs(args.database_url, limit=args.limit)
+        print(f"enqueued {len(job_ids)} triage jobs")
+        return 0
+    if args.command == "triage" and args.triage_command == "run":
+        from corvus.llm.triage_worker import run_loop
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        counts = run_loop(
+            args.database_url,
+            purpose=args.purpose,
+            limit=args.limit,
+            concurrency=args.concurrency,
+            lease_seconds=args.lease_seconds,
+            replay_dir=args.replay_dir,
+        )
+        done = counts.get("resolved", 0)
+        print(f"triage run: {done} resolved, counts {counts}")
         return 0
     if args.command == "eval" and args.eval_command == "run":
         from eval.harness import main as harness_main
