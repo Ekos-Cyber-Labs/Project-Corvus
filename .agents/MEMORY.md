@@ -869,3 +869,34 @@ rules back to Wazuh (shadow first, human approval).
   guard with no Postgres reachable, or sandbox PermissionError on raw
   sockets in egress/transport/TLS tests), none in the changed code
   paths. Awaiting maintainer commit.
+- 2026-10-29: built the Spark read-only tools (`corvus/llm/tools.py`,
+  `tests/test_spark_tools.py`, 21 tests): `get_events` (pseudonym-only
+  filters resolved server-side, ISO-8601 windows, inventory-gated
+  classes with visibility-gap observations, count+size caps with a
+  showing-N-of-M note, triage-fenced projections through cloud
+  `prepare_payload` with the whole incident's entities registered
+  first) and `get_attack_technique` (exact-key lookup; unknown/revoked
+  are errors), plus `collect_incident_entities` reusing the triage
+  loader rows and projections, and per-call `execute_tool_calls` that
+  never drops siblings. `make lint` green (ruff, format, mypy over 60
+  files); new suite 21 passed with Postgres; full `make test`: 704
+  passed, 1 failed in `tests/test_triage.py` on the calibration
+  fixture deleted from the worktree before this prompt (tracked in
+  HEAD, unrelated to this change). Gitleaks hook passed. Compose
+  Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: scoped Spark `get_events` to a per-run pseudonym
+  allowlist (`corvus/llm/tools.py`, `tests/test_spark_tools.py`, 27
+  tests): out-of-scope pseudonyms get the byte-identical unknown-
+  pseudonym error, the allowlist grows from shown HOST-/USER-/IP-
+  pseudonyms after each turn (strict same-turn rule, persist/restore
+  documented for the loop), gap wording now names the source window
+  and count lines say limit-reached or N-of-N. `make lint` green;
+  new suite 27 passed; full `make test` 712 passed; gitleaks passed.
+  Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: closed the allowlist echo bypass (`corvus/llm/tools.py`,
+  `tests/test_spark_tools.py`, 32 tests): allowlist grows only from
+  typed fields of server-returned result structures, `ToolError` fixed
+  messages replace all model-text echoes, other errors map generic.
+  `make lint` green; new suite 32 passed; full `make test` 717
+  passed; gitleaks passed. Compose Postgres left running. Awaiting
+  maintainer commit.

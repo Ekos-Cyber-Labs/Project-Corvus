@@ -1,0 +1,76 @@
+{
+ "request": {
+  "model": "muse-spark-1.3",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a SOC analyst. Use tools to inspect events before answering."
+   },
+   {
+    "role": "user",
+    "content": "Look up event e3 from the incident and tell me what it did."
+   }
+  ],
+  "max_tokens": 3000,
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "lookup_event",
+     "description": "Fetch one event by uid",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "uid": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "uid"
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "status": 200,
+ "response": {
+  "id": "chatcmpl-01a189e4-77e8-7718-826a-5c2434abde53",
+  "choices": [
+   {
+    "finish_reason": "tool_calls",
+    "index": 0,
+    "message": {
+     "content": "Checking event e3 — pulling its details now.",
+     "refusal": null,
+     "tool_calls": [
+      {
+       "id": "call_b55bc463-bbd2-4534-ab39-0de480273868",
+       "type": "function",
+       "function": {
+        "name": "lookup_event",
+        "arguments": "{\"uid\":\"e3\"}"
+       }
+      }
+     ],
+     "role": "assistant"
+    },
+    "logprobs": null
+   }
+  ],
+  "created": 1793314813,
+  "model": "muse-spark-1.3",
+  "object": "chat.completion",
+  "usage": {
+   "completion_tokens": 85,
+   "prompt_tokens": 553,
+   "total_tokens": 638,
+   "completion_tokens_details": {
+    "reasoning_tokens": 16
+   },
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   }
+  }
+ }
+}

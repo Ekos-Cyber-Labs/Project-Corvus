@@ -1,0 +1,110 @@
+{
+ "request": {
+  "model": "muse-spark-1.3",
+  "max_tokens": 3000,
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a SOC analyst. Use tools to inspect events before answering. When several lookups are independent, request them in the same turn."
+   },
+   {
+    "role": "user",
+    "content": "Look up events e3 and e7 from the incident, and also the technique T1059, then tell me what happened."
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "lookup_event",
+     "description": "Fetch one event by uid",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "uid": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "uid"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "get_attack_technique",
+     "description": "Look up an ATT&CK technique by id",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "id"
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "status": 200,
+ "response": {
+  "id": "chatcmpl-01a18b74-fe8f-7724-9984-57dc0640516b",
+  "choices": [
+   {
+    "finish_reason": "tool_calls",
+    "index": 0,
+    "message": {
+     "content": "I'll pull events e3 and e7 plus technique T1059 to reconstruct what happened.",
+     "refusal": null,
+     "tool_calls": [
+      {
+       "id": "call_8fa5a9f6-75ac-4cc1-bfb2-2cfc071a72be",
+       "type": "function",
+       "function": {
+        "name": "lookup_event",
+        "arguments": "{\"uid\":\"e3\"}"
+       }
+      },
+      {
+       "id": "call_e3678e3f-6123-40e4-ab9d-0d7a7ac14a2b",
+       "type": "function",
+       "function": {
+        "name": "lookup_event",
+        "arguments": "{\"uid\":\"e7\"}"
+       }
+      },
+      {
+       "id": "call_476e6202-b22f-4c1c-bea8-e038917df8e9",
+       "type": "function",
+       "function": {
+        "name": "get_attack_technique",
+        "arguments": "{\"id\":\"T1059\"}"
+       }
+      }
+     ],
+     "role": "assistant"
+    },
+    "logprobs": null
+   }
+  ],
+  "created": 1793341062,
+  "model": "muse-spark-1.3",
+  "object": "chat.completion",
+  "usage": {
+   "completion_tokens": 470,
+   "prompt_tokens": 636,
+   "total_tokens": 1106,
+   "completion_tokens_details": {
+    "reasoning_tokens": 292
+   },
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   }
+  }
+ }
+}

