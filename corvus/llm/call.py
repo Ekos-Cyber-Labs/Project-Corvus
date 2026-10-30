@@ -605,6 +605,25 @@ def _model_semantic_errors(
     return errors
 
 
+def _schema_language_default(
+    response_model: type[BaseModel] | None,
+) -> tuple[Any, bool]:
+    """Return the schema's ``language`` default and whether one exists.
+
+    Generic across response models (triage today, analysis tomorrow):
+    an omitted ``language`` counts as this default, so a default of
+    ``"en"`` satisfies an English request without a retry.
+    """
+    fields = getattr(response_model, "model_fields", None)
+    if not isinstance(fields, dict) or "language" not in fields:
+        return None, False
+    field = fields["language"]
+    required_check = getattr(field, "is_required", None)
+    if callable(required_check) and required_check():
+        return None, False
+    return field.default, True
+
+
 def validate_semantics(
     parsed: Mapping[str, Any],
     context: CallContext,
@@ -617,9 +636,12 @@ def validate_semantics(
     Every cited event uid must belong to the incident; every
     ATT&CK technique token must resolve in the dictionary;
     pseudonym tokens must be known; the ``language`` field must
-    equal the request and a cheap stopword check must agree. When
-    ``response_model`` offers a ``semantic_errors`` hook, its
-    findings are appended (schema-specific grounding).
+    equal the request and a cheap stopword check must agree. An
+    omitted ``language`` counts as the schema default (see
+    :func:`_schema_language_default`), so it passes only when that
+    default matches the request. When ``response_model`` offers a
+    ``semantic_errors`` hook, its findings are appended
+    (schema-specific grounding).
     """
     errors: list[StructuredError] = []
     valid_uids = set(context.event_uids)
@@ -663,7 +685,6 @@ def validate_semantics(
                 )
             )
     requested = _normalize_language(context.language)
-    claimed = _normalize_language(parsed.get("language"))
     if requested is None:
         errors.append(
             _err(
@@ -672,28 +693,53 @@ def validate_semantics(
                 f"request language {context.language!r} is not en or es",
             )
         )
-    elif claimed != requested:
-        errors.append(
-            _err(
-                "language_mismatch",
-                "language",
-                f"output language {parsed.get('language')!r} does not match "
-                f"the requested language {context.language!r}",
-            )
-        )
     else:
-        words = _WORD.findall(" ".join(_walk_strings(parsed, True)).lower())
-        if len(words) >= 3:
-            stopwords = _EN_STOPWORDS if requested == "en" else _ES_STOPWORDS
-            if not any(word in stopwords for word in words):
+        agreed: str | None = None
+        if "language" in parsed:
+            claimed = _normalize_language(parsed.get("language"))
+            if claimed != requested:
                 errors.append(
                     _err(
                         "language_mismatch",
                         "language",
-                        "no stopwords of the requested language found "
-                        "in the output text",
+                        f"output language {parsed.get('language')!r} does not match "
+                        f"the requested language {context.language!r}",
                     )
                 )
+            else:
+                agreed = claimed
+        else:
+            default_raw, has_default = _schema_language_default(response_model)
+            effective = _normalize_language(default_raw) if has_default else None
+            if effective is not None and effective == requested:
+                agreed = effective
+            else:
+                if has_default:
+                    detail = (
+                        f"output omits `language` (schema default "
+                        f"{default_raw!r} does not match the requested "
+                        f"language {context.language!r}); set `language` "
+                        "explicitly to the requested language"
+                    )
+                else:
+                    detail = (
+                        "output omits `language`; set `language` explicitly "
+                        f"to the requested language {context.language!r}"
+                    )
+                errors.append(_err("language_mismatch", "language", detail))
+        if agreed is not None:
+            words = _WORD.findall(" ".join(_walk_strings(parsed, True)).lower())
+            if len(words) >= 3:
+                stopwords = _EN_STOPWORDS if requested == "en" else _ES_STOPWORDS
+                if not any(word in stopwords for word in words):
+                    errors.append(
+                        _err(
+                            "language_mismatch",
+                            "language",
+                            "no stopwords of the requested language found "
+                            "in the output text",
+                        )
+                    )
     errors.extend(_model_semantic_errors(response_model, parsed, context))
     return errors
 

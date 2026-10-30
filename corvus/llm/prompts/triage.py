@@ -207,7 +207,7 @@ def build_system_message(reasoning_strength: str = "medium") -> str:
         "missing for this incident.\n"
         "- uncertainties (up to 20 strings): what the evidence does not "
         "settle.\n"
-        '- language: "en".\n'
+        '- language: "en". Always include the `language` field in the JSON.\n'
         "\nGrounding rules: every entity value must appear verbatim in "
         "the evidence below; every event_uid must be one of the "
         "incident's events. Never invent hosts, users, addresses, "

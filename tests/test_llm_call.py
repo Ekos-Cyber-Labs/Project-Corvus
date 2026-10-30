@@ -72,6 +72,19 @@ class PermissiveVerdict(BaseModel):
     severity_id: int
 
 
+class DefaultLanguageVerdict(BaseModel):
+    """Verdict shape carrying a language default, like the real schemas."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    verdict: str
+    severity_id: int
+    evidence_event_uids: list[str]
+    techniques: list[str] = []
+    language: str = "en"
+
+
 def _good_body(**overrides: Any) -> str:
     """Valid JSON content: English, floor 3, cited uids, known technique."""
     body: dict[str, Any] = {
@@ -841,6 +854,73 @@ def test_semantics_validator_cases() -> None:
     assert [error.code for error in errors] == ["language_mismatch"]
 
 
+def _body_without_language(**overrides: Any) -> dict[str, Any]:
+    """Parsed body with the optional language field omitted."""
+    body = json.loads(_good_body(**overrides))
+    del body["language"]
+    return body
+
+
+def test_semantics_omitted_language_counts_as_schema_default() -> None:
+    """An omitted language is the schema default, not None."""
+    omitted = _body_without_language()
+    assert (
+        validate_semantics(omitted, _context(), response_model=DefaultLanguageVerdict)
+        == []
+    )
+    errors = validate_semantics(
+        omitted,
+        _context(language="es"),
+        response_model=DefaultLanguageVerdict,
+    )
+    assert [error.code for error in errors] == ["language_mismatch"]
+    assert "set `language` explicitly" in errors[0].message
+
+
+def test_semantics_explicit_language_still_checked() -> None:
+    """Explicit wrong values fail; explicit right values pass."""
+    assert (
+        validate_semantics(
+            json.loads(_good_body(language="en")),
+            _context(),
+            response_model=DefaultLanguageVerdict,
+        )
+        == []
+    )
+    errors = validate_semantics(
+        json.loads(_good_body(language="es")),
+        _context(),
+        response_model=DefaultLanguageVerdict,
+    )
+    assert [error.code for error in errors] == ["language_mismatch"]
+    assert "set `language` explicitly" not in errors[0].message
+
+
+def test_omitted_language_resolves_first_try(call_db: str) -> None:
+    """A first answer without language resolves with one attempt row."""
+    stub = StubTransport([_attempt(json.dumps(_body_without_language()))])
+    outcome = call_model(
+        "triage",
+        _builder,
+        DefaultLanguageVerdict,
+        _context(call_db),
+        database_url=call_db,
+        prices=_prices("stub-a"),
+        run_attempt_fn=stub,
+        backend_override=_onprem(),
+        call_id="call-omitted-language",
+    )
+    assert outcome.status == "resolved"
+    assert isinstance(outcome.value, DefaultLanguageVerdict)
+    assert outcome.value.language == "en"
+    assert outcome.attempts == 1
+    assert len(stub.calls) == 1
+    rows = _attempt_rows(call_db, "call-omitted-language")
+    assert len(rows) == 1
+    assert rows[0][1] is None
+    assert rows[0][2] == "ok"
+
+
 def test_policy_validator_cases() -> None:
     """Validator 4: floor, cap, cited escalation, missing floor."""
     base = _context()
@@ -1494,7 +1574,7 @@ def test_transport_receives_configured_read_timeout(call_db: str) -> None:
     """The per-purpose read timeout reaches the transport try."""
     stub = StubTransport([_attempt(_good_body())])
     backend = _onprem()
-    assert backend.read_timeout_seconds == 900.0
+    assert backend.read_timeout_seconds == 1275.0
     call_model(
         "triage",
         _builder,
@@ -1506,7 +1586,7 @@ def test_transport_receives_configured_read_timeout(call_db: str) -> None:
         backend_override=backend,
         call_id="call-read-timeout-default",
     )
-    assert stub.calls[0]["kwargs"]["read_timeout"] == 900.0
+    assert stub.calls[0]["kwargs"]["read_timeout"] == 1275.0
 
 
 def test_connection_error_then_timeout_continues(call_db: str) -> None:

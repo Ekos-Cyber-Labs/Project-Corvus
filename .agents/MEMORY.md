@@ -835,3 +835,37 @@ rules back to Wazuh (shadow first, human approval).
   config change). DB-backed tests still not run here (Postgres
   unreachable from the sandbox); reviewer reruns the full suite.
   Awaiting maintainer commit.
+- 2026-10-29: triage output cap 3000 -> 4500 tokens and omitted-`language`
+  fix. `corvus/llm/config.py`: triage `max_output_tokens` 4500, derived
+  default read timeout 4500/4.0+150 = 1275 s (lease and hold TTLs follow
+  the derivation); docstring and timeout comments updated. Invariant
+  12000 + 4500 + 2000 <= 32768 still holds and keeps its test.
+  `corvus/llm/call.py`: validator 3 now applies the response schema's
+  `language` default when the field is omitted (new generic
+  `_schema_language_default`, works for triage and the future analysis
+  schema), so an omitted field counts as the schema default; a missing
+  field against a different requested language still fails with
+  `language_mismatch` and a message telling the model to set `language`
+  explicitly; explicit wrong values still fail, other validators
+  untouched. Triage system message gains one sentence: always include
+  the `language` field in the JSON. New tests: omitted+English passes,
+  omitted+Spanish fails with an instructive message, explicit
+  wrong/right checked, and end-to-end first-answer-without-`language`
+  resolves on try 1 with one `ok` attempt row (in both
+  `tests/test_llm_call.py` with a default-carrying verdict shape and
+  `tests/test_triage.py` with the real `CondensedIncident`); helper
+  names grepped for duplicates before adding; pinned 3000/900 test
+  values updated to 4500/1275.0 (the 1500-cap/2.0-rate derivation case
+  stays 900.0). Verified with `make lint` (green: ruff, format, mypy)
+  and 66 DB-free tests across the three touched files (green); the
+  Postgres-backed tests (including the 2 new end-to-end tests) error on
+  the `DATABASE_URL` guard here (no database reachable from the
+  sandbox, container runtime blocked), reviewer reruns the full
+  `make test`. Gitleaks v8.30.1 (the pre-commit-pinned rev, run from a
+  /tmp binary as pre-commit is not installed here): no leaks found over
+  41 commits plus the worktree. Full `UV_CACHE_DIR=/tmp/uv-cache make
+  test`: 19 failed, 517 passed, 149 errors -- zero failures in the
+  touched files; every failure/error is environmental (DATABASE_URL
+  guard with no Postgres reachable, or sandbox PermissionError on raw
+  sockets in egress/transport/TLS tests), none in the changed code
+  paths. Awaiting maintainer commit.

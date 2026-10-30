@@ -23,7 +23,7 @@ shared default:
   ``TRIAGE_MAX_INPUT_TOKENS`` / ``ANALYSIS_MAX_INPUT_TOKENS`` (default
   12000 / 56000: the evidence-selection input cap, never the whole
   window), ``TRIAGE_MAX_OUTPUT_TOKENS`` /
-  ``ANALYSIS_MAX_OUTPUT_TOKENS`` (default 3000 / 6000),
+  ``ANALYSIS_MAX_OUTPUT_TOKENS`` (default 4500 / 6000),
   ``TRIAGE_CONTEXT_TOKENS`` / ``ANALYSIS_CONTEXT_TOKENS`` (default
   32768 / 65536: the served context window),
   ``TRIAGE_SAFETY_MARGIN_TOKENS`` / ``ANALYSIS_SAFETY_MARGIN_TOKENS``
@@ -36,7 +36,7 @@ shared default:
   assumed when deriving the triage default read timeout. When
   ``TRIAGE_READ_TIMEOUT_SECONDS`` is unset, the default is
   ``max_output_tokens / assumed_tokens_per_second`` plus a 150 s
-  prefill margin (3000 / 4.0 + 150 = 900 s); an explicit timeout
+  prefill margin (4500 / 4.0 + 150 = 1275 s); an explicit timeout
   wins. Analysis keeps its own 180 s default but follows the same
   formula (output cap over the assumed rate plus prefill margin)
   when its limits are retuned.
@@ -127,10 +127,10 @@ _DEFAULTS: dict[str, _PurposeDefaults] = {
         "concurrency": 16,
         "requests_per_minute": 120,
         "max_input_tokens": 12000,
-        "max_output_tokens": 3000,
+        "max_output_tokens": 4500,
         "context_tokens": 32768,
         "safety_margin_tokens": 2000,
-        "read_timeout_seconds": 900.0,
+        "read_timeout_seconds": 1275.0,
     },
     "analysis": {
         "model": "muse-spark-1.3",
@@ -154,7 +154,7 @@ DNS_TIMEOUT_SECONDS = 2.0
 TRIAGE_ASSUMED_TPS_VAR = "TRIAGE_ASSUMED_TOKENS_PER_SECOND"
 DEFAULT_TRIAGE_ASSUMED_TPS = 4.0
 #: Prefill margin (seconds) in the triage timeout derivation: covers a
-#: ~15k-token prefill plus headroom (3000 / 4.0 + 150 = 900 s).
+#: ~15k-token prefill plus headroom (4500 / 4.0 + 150 = 1275 s).
 TRIAGE_PREFILL_MARGIN_SECONDS = 150.0
 
 _V4_RFC1918 = (
@@ -197,7 +197,7 @@ class BackendConfig:
     max_output_tokens: int
     context_tokens: int = 32768
     safety_margin_tokens: int = 2000
-    read_timeout_seconds: float = 900.0
+    read_timeout_seconds: float = 1275.0
     api_key: str | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:

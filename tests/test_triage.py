@@ -147,7 +147,7 @@ def _onprem(
         concurrency=16,
         requests_per_minute=120,
         max_input_tokens=max_input_tokens,
-        max_output_tokens=3000,
+        max_output_tokens=4500,
         api_key=None,
     )
 
@@ -327,6 +327,58 @@ def test_semantic_hook_rejects_unknown_nested_uid() -> None:
     assert [error.code for error in errors] == ["unknown_event_uid"]
 
 
+def _body_without_language(**overrides: Any) -> str:
+    """Good triage JSON with the optional language field omitted."""
+    body = json.loads(_good_body(**overrides))
+    del body["language"]
+    return json.dumps(body)
+
+
+def _language_context(language: str = "en") -> CallContext:
+    """Semantics context over the default evidence in one language."""
+    return CallContext(
+        event_uids=["e1", "e2"],
+        deterministic_floor=3,
+        language=language,
+        valid_techniques=set(),
+        payload={"included_events": _evidence()},
+    )
+
+
+def test_semantics_omitted_language_counts_as_schema_default() -> None:
+    """An omitted language is the CondensedIncident default ("en")."""
+    omitted = json.loads(_body_without_language())
+    assert (
+        validate_semantics(
+            omitted, _language_context("en"), response_model=CondensedIncident
+        )
+        == []
+    )
+    errors = validate_semantics(
+        omitted, _language_context("es"), response_model=CondensedIncident
+    )
+    assert [error.code for error in errors] == ["language_mismatch"]
+    assert "set `language` explicitly" in errors[0].message
+
+
+def test_semantics_explicit_language_still_checked() -> None:
+    """An explicit wrong language fails; an explicit right one passes."""
+    assert (
+        validate_semantics(
+            json.loads(_good_body(language="en")),
+            _language_context("en"),
+            response_model=CondensedIncident,
+        )
+        == []
+    )
+    errors = validate_semantics(
+        json.loads(_good_body(language="es")),
+        _language_context("en"),
+        response_model=CondensedIncident,
+    )
+    assert [error.code for error in errors] == ["language_mismatch"]
+
+
 def _windows_payload() -> dict[str, Any]:
     return {
         "included_events": [
@@ -410,6 +462,7 @@ def test_system_prefix_is_stable_and_carries_nudge() -> None:
     """Cache-friendly: identical system prefix, incident last."""
     first = build_system_message("medium")
     assert "Reasoning strength: medium" in first
+    assert "Always include the `language` field in the JSON." in first
     assert TRIAGE_D23_NUDGE in first
     assert "Think briefly, then you MUST end by emitting" in first
     assert build_system_message("high") != first
@@ -789,6 +842,25 @@ def test_happy_path_stores_resolved(triage_db: str, monkeypatch: Any) -> None:
     assert rows[0][3]["condensed"]["summary"].startswith("The operator")
     assert rows[0][4] == "stub-glimmer"
     assert _incident_state(triage_db, incident_id) == ("open", "done", False)
+
+
+def test_omitted_language_resolves_first_try(triage_db: str, monkeypatch: Any) -> None:
+    """A first answer without language resolves with one attempt row."""
+    _insert_incident(triage_db, "ck-omitted-language")
+    enqueue_triage_jobs(triage_db)
+    stub = StubTransport([_attempt(_body_without_language())])
+    assert _process(triage_db, _claim(triage_db), stub, monkeypatch) == "resolved"
+    assert len(stub.calls) == 1
+    with psycopg.connect(triage_db, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT failed_validator, outcome FROM llm_attempts"
+                " ORDER BY attempt_number"
+            )
+            rows = list(cur.fetchall())
+    assert len(rows) == 1
+    assert rows[0][0] is None
+    assert rows[0][1] == "ok"
 
 
 def test_empty_then_valid_resolves(triage_db: str, monkeypatch: Any) -> None:
@@ -2106,7 +2178,7 @@ def test_lease_defaults_to_purpose_read_timeout() -> None:
     """No explicit lease: the purpose read timeout sizes claim + heartbeat."""
     from corvus.llm.triage_worker import _resolve_lease
 
-    assert _resolve_lease(None, _onprem()) == 900.0
+    assert _resolve_lease(None, _onprem()) == 1275.0
     assert _resolve_lease(7.0, _onprem()) == 7.0
 
 

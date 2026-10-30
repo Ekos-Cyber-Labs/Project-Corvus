@@ -73,10 +73,10 @@ def test_defaults(base_env: None) -> None:
     assert triage.trust == "onprem"
     assert triage.concurrency == 16
     assert triage.max_input_tokens == 12000
-    assert triage.max_output_tokens == 3000
+    assert triage.max_output_tokens == 4500
     assert triage.context_tokens == 32768
     assert triage.safety_margin_tokens == 2000
-    assert triage.read_timeout_seconds == 900.0
+    assert triage.read_timeout_seconds == 1275.0
     assert triage.api_key is None
 
     analysis = get_backend("analysis")
@@ -96,7 +96,7 @@ def test_read_timeout_override_and_validation(
     base_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Read timeouts default per purpose, override, and reject junk."""
-    assert get_backend("triage").read_timeout_seconds == 900.0
+    assert get_backend("triage").read_timeout_seconds == 1275.0
     assert get_backend("analysis").read_timeout_seconds == 180.0
     monkeypatch.setenv("TRIAGE_READ_TIMEOUT_SECONDS", "45.5")
     assert get_backend("triage").read_timeout_seconds == 45.5
@@ -115,7 +115,7 @@ def test_context_window_invariant_rejects_overflow(
         get_backend("triage")
     message = str(caught.value)
     assert "max_input_tokens (32000)" in message
-    assert "max_output_tokens (3000)" in message
+    assert "max_output_tokens (4500)" in message
     assert "safety_margin_tokens (2000)" in message
     assert "context_tokens (32768)" in message
 
@@ -124,9 +124,9 @@ def test_triage_timeout_derives_from_output_cap_and_rate(
     base_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Default timeout is output_cap / assumed_tps + 150 s prefill margin."""
-    assert get_backend("triage").read_timeout_seconds == 900.0
+    assert get_backend("triage").read_timeout_seconds == 1275.0
     monkeypatch.setenv("TRIAGE_ASSUMED_TOKENS_PER_SECOND", "2.0")
-    assert get_backend("triage").read_timeout_seconds == 1650.0
+    assert get_backend("triage").read_timeout_seconds == 2400.0
     monkeypatch.setenv("TRIAGE_MAX_OUTPUT_TOKENS", "1500")
     assert get_backend("triage").read_timeout_seconds == 900.0
 
@@ -273,7 +273,7 @@ def test_all_cloud_serves_both_from_spark(
     assert config["triage"].api_key == "test-meta-key"
     # Operational limits stay per-purpose.
     assert config["triage"].concurrency == 16
-    assert config["triage"].max_output_tokens == 3000
+    assert config["triage"].max_output_tokens == 4500
 
 
 def test_all_cloud_triage_needs_cloud_key(
