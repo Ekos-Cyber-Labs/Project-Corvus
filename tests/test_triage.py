@@ -2158,3 +2158,193 @@ def test_read_timeout_env_override_reaches_transport(
     )
     assert counts.get("resolved", 0) == 1
     assert stub.calls[0]["kwargs"]["read_timeout"] == 45.5
+
+
+# --- Bare-IP entities ------------------------------------------------------
+
+
+def _ip_payload() -> dict[str, Any]:
+    """Evidence leaves holding every ip-entity test string verbatim."""
+    return {
+        "included_events": [
+            {
+                "event_uid": "e1",
+                "note": (
+                    "conn 172.18.39.7:5985 from [fe80::1]:5985 host web-01 "
+                    "net 10.0.0.0/24 addr 192.0.2.10 v6 fe80::1 loop ::1 "
+                    "mapped ::ffff:10.0.0.1 srv web-01:5985 "
+                    "run schtasks:1 file C:\\x\\a.dll:stream"
+                ),
+            }
+        ]
+    }
+
+
+def _ip_context(payload: dict[str, Any] | None = None) -> CallContext:
+    return CallContext(
+        event_uids=["e1"],
+        deterministic_floor=3,
+        language="en",
+        valid_techniques=set(),
+        payload=_ip_payload() if payload is None else payload,
+    )
+
+
+def test_system_message_states_bare_ip_rule() -> None:
+    """The system prefix tells the model ip entities never carry a port."""
+    system = build_system_message("medium")
+    assert "never a port" in system
+    assert "172.18.39.7" in system
+    assert "IPv6 stays without brackets" in system
+
+
+def test_ip_entity_with_port_is_malformed() -> None:
+    """An IPv4 address with a port fails semantics, even when grounded."""
+    body = json.loads(
+        _good_body(entities=[{"type": "ip", "value": "172.18.39.7:5985"}])
+    )
+    errors = validate_semantics(body, _ip_context(), response_model=CondensedIncident)
+    assert [error.code for error in errors] == ["malformed_entity"]
+    assert errors[0].path == "entities.0.value"
+    assert "172.18.39.7:5985" in errors[0].message
+    assert "without port" in errors[0].message
+
+
+def test_ip_entity_rejects_bracketed_ipv6_hostname_cidr() -> None:
+    """Bracketed IPv6, hostnames and CIDRs typed as ip all fail."""
+    body = json.loads(
+        _good_body(
+            entities=[
+                {"type": "ip", "value": "[fe80::1]:5985"},
+                {"type": "ip", "value": "web-01"},
+                {"type": "ip", "value": "10.0.0.0/24"},
+            ]
+        )
+    )
+    errors = validate_semantics(body, _ip_context(), response_model=CondensedIncident)
+    assert [error.code for error in errors] == ["malformed_entity"] * 3
+    assert [error.path for error in errors] == [
+        "entities.0.value",
+        "entities.1.value",
+        "entities.2.value",
+    ]
+
+
+def test_ip_entity_accepts_bare_addresses() -> None:
+    """Bare IPv4, plain IPv6 and IPv4-mapped IPv6 pass."""
+    body = json.loads(
+        _good_body(
+            entities=[
+                {"type": "ip", "value": "192.0.2.10"},
+                {"type": "ip", "value": "fe80::1"},
+                {"type": "ip", "value": "::1"},
+                {"type": "ip", "value": "::ffff:10.0.0.1"},
+            ]
+        )
+    )
+    assert (
+        validate_semantics(body, _ip_context(), response_model=CondensedIncident) == []
+    )
+
+
+def test_port_on_non_ip_entity_is_untouched() -> None:
+    """Port-bearing host, process and file values are not malformed."""
+    body = json.loads(
+        _good_body(
+            entities=[
+                {"type": "host", "value": "web-01:5985"},
+                {"type": "process", "value": "schtasks:1"},
+                {"type": "file", "value": "C:\\x\\a.dll:stream"},
+            ]
+        )
+    )
+    assert (
+        validate_semantics(body, _ip_context(), response_model=CondensedIncident) == []
+    )
+
+
+def test_malformed_and_invented_cooccur_only_when_both_true() -> None:
+    """Grounding still runs on a malformed value; a bare miss is invented only."""
+    both = json.loads(_good_body(entities=[{"type": "ip", "value": "192.0.2.99:1234"}]))
+    both_errors = validate_semantics(
+        both, _ip_context(), response_model=CondensedIncident
+    )
+    assert [error.code for error in both_errors] == [
+        "malformed_entity",
+        "invented_entity",
+    ]
+    bare_miss = json.loads(_good_body(entities=[{"type": "ip", "value": "192.0.2.99"}]))
+    bare_errors = validate_semantics(
+        bare_miss, _ip_context(), response_model=CondensedIncident
+    )
+    assert [error.code for error in bare_errors] == ["invented_entity"]
+
+
+def _port_events() -> list[dict[str, Any]]:
+    """Loader rows whose projection carries a literal ip:port endpoint."""
+    return [
+        {
+            "event_uid": "e1",
+            "time": 1730100000000,
+            "class_uid": 4001,
+            "data": {
+                "device": {"hostname": "web-01"},
+                "src_endpoint": {"ip": "172.18.39.7", "port": 5985},
+            },
+        },
+        {
+            "event_uid": "e2",
+            "time": 1730100060000,
+            "class_uid": 3002,
+            "data": {"host": "web-01", "user": "operator"},
+        },
+    ]
+
+
+def _validator_rows(db: str) -> list[tuple]:
+    with psycopg.connect(db, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT failed_validator, errors FROM llm_attempts"
+                " ORDER BY attempt_number"
+            )
+            return list(cur.fetchall())
+
+
+def test_ip_port_retry_resolves(triage_db: str, monkeypatch: Any) -> None:
+    """A port-bearing ip fails once, then the bare address resolves."""
+    incident_id = _insert_incident(triage_db, "ck-ip-port")
+    enqueue_triage_jobs(triage_db)
+    first = _good_body(entities=[{"type": "ip", "value": "172.18.39.7:5985"}])
+    second = _good_body(entities=[{"type": "ip", "value": "172.18.39.7"}])
+    stub = StubTransport([_attempt(first), _attempt(second)])
+    status = _process(triage_db, _claim(triage_db), stub, monkeypatch, _port_events())
+    assert status == "resolved"
+    rows = _validator_rows(triage_db)
+    assert len(rows) == 2
+    assert str(rows[0][0]) == "semantics"
+    first_errors = rows[0][1]
+    if isinstance(first_errors, str):
+        first_errors = json.loads(first_errors)
+    assert [str(item.get("code")) for item in first_errors] == ["malformed_entity"]
+    assert _incident_state(triage_db, incident_id) == ("open", "done", False)
+    correction = stub.calls[1]["messages"][-1]["content"]
+    assert "172.18.39.7:5985" in correction
+    assert "without port" in correction
+    assert first not in correction
+    assert "The operator account logged in" not in correction
+
+
+def test_ip_port_always_fails_gives_ai_failed(triage_db: str, monkeypatch: Any) -> None:
+    """Three port-bearing tries end ai_failed with review required."""
+    incident_id = _insert_incident(triage_db, "ck-ip-port-stuck")
+    enqueue_triage_jobs(triage_db)
+    bad = _good_body(entities=[{"type": "ip", "value": "172.18.39.7:5985"}])
+    stub = StubTransport([_attempt(bad), _attempt(bad), _attempt(bad)])
+    status = _process(triage_db, _claim(triage_db), stub, monkeypatch, _port_events())
+    assert status == "ai_failed"
+    # The same-code early stop ends the loop after the second identical code.
+    assert len(stub.calls) == 2
+    rows = _analysis_rows(triage_db)
+    assert len(rows) == 1 and rows[0][2] == "ai_failed"
+    assert _incident_state(triage_db, incident_id) == ("open", "failed", True)

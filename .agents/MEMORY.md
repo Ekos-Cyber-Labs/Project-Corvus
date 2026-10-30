@@ -801,3 +801,37 @@ rules back to Wazuh (shadow first, human approval).
   secrets logged, transport failures keep the fixed literal, fences
   and truncation unchanged, hostile-evidence tests green. No eval
   delta. Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-29: triage bare-IP fix (prompt 18 follow-up; live Glimmer
+  triage returned `ip` entities carrying a port, which passed grounding
+  because the string appears literally in the evidence). Fixed: one
+  sentence in the triage system message (`ip` entities carry only the
+  address, never a port; IPv6 without brackets), plus a `malformed_entity`
+  semantics check (`ipaddress.ip_address`, no silent port stripping) that
+  flows into the correction retry exactly like `invented_entity`; grounding
+  still runs on the same value so both codes can co-occur. New tests in
+  `tests/test_triage.py` cover port/bracket/hostname/CIDR rejection, bare
+  IPv4/IPv6/IPv4-mapped acceptance, non-`ip` types untouched, retry-resolves
+  and always-fails end-to-end cases, and correction-message contents.
+  Verified with `make lint` (green: ruff, format, mypy) and the 27 DB-free
+  triage tests (green); full `make test` not green in this sandbox (no
+  Postgres: container runtime broken, DB guard fails; sandbox also blocks
+  the networked egress/transport tests), so the 2 DB-backed end-to-end
+  tests are written but not run here. Measured port-bearing `ip` count:
+  not run (corvus database unreachable from the sandbox; no model called).
+  Security-reviewer pass: prompt text is static, correction echoes only the
+  offending value back on the on-prem path, stdlib parse only, no new
+  deps; accepted residual: a scoped IPv6 form passes the parse but stays
+  evidence-grounded. No eval delta (live Glimmer check left to reviewer).
+  Awaiting maintainer commit.
+- 2026-10-29 (correction): the bare-IP change above shipped a duplicate
+  top-level helper in `tests/test_triage.py` (a second `_attempt_rows`
+  with a different column shape silently replaced the original, breaking
+  6 pre-existing DB-backed tests; invisible without Postgres). Fixed by
+  renaming the new helper to `_validator_rows`, used only by the two new
+  end-to-end tests; an AST duplicate-name scan of `tests/` is clean and
+  the 27 DB-free triage tests still pass. Added one AGENTS.md test rule
+  (grep a test module before adding a helper; ruff F811 is enabled via
+  `F` but verified not to flag duplicate function definitions, so no
+  config change). DB-backed tests still not run here (Postgres
+  unreachable from the sandbox); reviewer reruns the full suite.
+  Awaiting maintainer commit.

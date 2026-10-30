@@ -97,6 +97,7 @@ Every prompt names the role it works under. Changes under `corvus/llm`, `corvus/
 - Use OCSF classes 3002 Authentication, 1007 Process Activity, 4001 Network Activity, 1001 File System Activity, 1006 Scheduled Job Activity, 1009 Script Activity, 1005 Module Activity, 201001 Registry Key Activity, 201002 Registry Value Activity, 201004 Windows Service Activity, and 2004 Detection Finding. Keep the raw event attached to every OCSF record.
 - OCSF classes, activity ids and attributes are verified against the pinned v1.9.0 schema files (including extensions such as win) before use, never written from memory.
 - Ship every normalizer with a fixture-based test.
+- A top-level name defined twice in a test module silently replaces the first; before adding a helper, grep the module for the name (ruff F811 is enabled via `F` but does not flag duplicate function definitions, verified 2026-10-29).
 - Every version pin (schema, runtime, image, dependency, dataset commit, rule release) is the latest stable release when it is pinned, checked against the upstream release list and recorded with the date. An older pin needs a written reason. Release candidates are not pinned.
 
 ## Working agreements

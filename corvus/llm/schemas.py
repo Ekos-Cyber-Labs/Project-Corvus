@@ -17,6 +17,7 @@ attempt), and every cited ``event_uid`` must belong to the incident
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
@@ -102,16 +103,21 @@ class CondensedIncident(BaseModel):
     ) -> list[dict[str, str]]:
         """Ground every entity value in the evidence payload.
 
-        Returns one ``invented_entity`` item per entity value that
-        does not literally occur in a string leaf of
-        ``context.payload`` (the raw incident payload handed to the
-        model, before masking). Comparison is case-sensitive against
-        the original unescaped text — a JSON serialization would
-        escape backslashes and quotes and reject honest Windows
-        paths. Mapping keys are not evidence. A missing payload
-        yields no items: the generic validators still apply, and
-        inventing the evidence text here would be worse than
-        skipping the check. Event-uid membership is checked
+        Returns one ``malformed_entity`` item per ``ip`` entity
+        value that is not a bare IP address (checked with
+        :func:`ipaddress.ip_address`, so a port, brackets, a
+        hostname or a CIDR all fail), plus one ``invented_entity``
+        item per entity value that does not literally occur in a
+        string leaf of ``context.payload`` (the raw incident
+        payload handed to the model, before masking). The port is
+        never stripped here: the retry feedback teaches the model
+        to emit the bare address. Comparison is case-sensitive
+        against the original unescaped text — a JSON serialization
+        would escape backslashes and quotes and reject honest
+        Windows paths. Mapping keys are not evidence. A missing
+        payload yields no items: the generic validators still
+        apply, and inventing the evidence text here would be worse
+        than skipping the check. Event-uid membership is checked
         generically by
         :func:`corvus.llm.call.validate_semantics`.
         """
@@ -131,6 +137,21 @@ class CondensedIncident(BaseModel):
             value = entity.get("value")
             if not isinstance(value, str) or not value.strip():
                 continue
+            if entity.get("type") == "ip":
+                try:
+                    ipaddress.ip_address(value)
+                except ValueError:
+                    errors.append(
+                        {
+                            "code": "malformed_entity",
+                            "path": f"entities.{index}.value",
+                            "message": (
+                                f"ip entity {value!r} is not a bare IP "
+                                "address; give the address without port "
+                                "or brackets"
+                            ),
+                        }
+                    )
             if not any(value in leaf for leaf in leaves):
                 errors.append(
                     {
