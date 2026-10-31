@@ -143,6 +143,62 @@ def _client(api_db: str, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
+def _seed_filter_row(
+    api_db: str,
+    key: str,
+    *,
+    floor: int,
+    verdict: str | None,
+    analysis_verdict: str | None,
+) -> int:
+    """Seed one list-filter incident; an analysis row only when asked."""
+    with psycopg.connect(api_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, title,"
+                " severity_floor, severity_id,"
+                " ai_status, verdict, techniques, event_uids, severity_factors,"
+                " first_seen, last_seen) VALUES"
+                " (%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                " '2026-10-30T00:00:00Z','2026-10-30T01:00:00Z') RETURNING id",
+                (
+                    key,
+                    f"Incident {key}",
+                    floor,
+                    floor,
+                    "done" if analysis_verdict is not None else "pending",
+                    verdict,
+                    Jsonb(["T1059"]),
+                    Jsonb(["evt-1"]),
+                    Jsonb({"factor_1_attack_stage": {"contribution": "sets the base"}}),
+                ),
+            )
+            incident_id = int(cur.fetchone()[0])  # type: ignore[index]
+            if analysis_verdict is not None:
+                cur.execute(
+                    "INSERT INTO incident_analyses (incident_id, stage, status,"
+                    " payload, language, model, deterministic_floor)"
+                    " VALUES (%s,'analysis','resolved',%s,'en','muse-spark-1.3',%s)",
+                    (
+                        incident_id,
+                        Jsonb(
+                            {
+                                "verdict": analysis_verdict,
+                                "severity_id": floor,
+                                "timeline": [],
+                                "response_plan": [],
+                                "visibility_gaps": [],
+                                "uncertainties": [],
+                                "language": "en",
+                            }
+                        ),
+                        floor,
+                    ),
+                )
+        conn.commit()
+    return incident_id
+
+
 def test_list_pagination_cap_and_adv_excluded(
     api_db: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -231,6 +287,98 @@ def test_headers_and_no_secrets_in_errors(
     assert "postgresql" not in missing.text.lower()
     assert "password" not in missing.text.lower()
     assert "Traceback" not in missing.text
+
+
+def test_list_filters_verdict_analyzed_min_floor(
+    api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tp = _seed_filter_row(
+        api_db,
+        "f-tp",
+        floor=4,
+        verdict="true_positive",
+        analysis_verdict="true_positive",
+    )
+    nh = _seed_filter_row(
+        api_db, "f-nh", floor=5, verdict="needs_human", analysis_verdict="needs_human"
+    )
+    triage_only = _seed_filter_row(
+        api_db, "f-triage", floor=5, verdict=None, analysis_verdict=None
+    )
+    client = _client(api_db, monkeypatch)
+    by_verdict = client.get("/api/incidents?verdict=true_positive").json()
+    assert [item["id"] for item in by_verdict["items"]] == [tp]
+    analyzed = client.get("/api/incidents?analyzed=true").json()
+    assert {item["id"] for item in analyzed["items"]} == {tp, nh}
+    assert all(item["analyzed"] is True for item in analyzed["items"])
+    not_analyzed = client.get("/api/incidents?analyzed=false").json()
+    assert [item["id"] for item in not_analyzed["items"]] == [triage_only]
+    assert all(item["analyzed"] is False for item in not_analyzed["items"])
+    floors = client.get("/api/incidents?min_floor=5").json()
+    assert {item["id"] for item in floors["items"]} == {nh, triage_only}
+    combo = client.get("/api/incidents?analyzed=true&min_floor=5").json()
+    assert [item["id"] for item in combo["items"]] == [nh]
+
+
+def test_list_default_sort_analyzed_floor_id(
+    api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    analyzed_low = _seed_filter_row(
+        api_db,
+        "s-a3",
+        floor=3,
+        verdict="true_positive",
+        analysis_verdict="true_positive",
+    )
+    analyzed_high = _seed_filter_row(
+        api_db, "s-a5", floor=5, verdict="needs_human", analysis_verdict="needs_human"
+    )
+    plain_high = _seed_filter_row(
+        api_db, "s-u5", floor=5, verdict=None, analysis_verdict=None
+    )
+    plain_low = _seed_filter_row(
+        api_db, "s-u3", floor=3, verdict=None, analysis_verdict=None
+    )
+    client = _client(api_db, monkeypatch)
+    body = client.get("/api/incidents").json()
+    assert [item["id"] for item in body["items"]] == [
+        analyzed_high,
+        analyzed_low,
+        plain_high,
+        plain_low,
+    ]
+    first_page = client.get("/api/incidents?limit=2&offset=0").json()
+    second_page = client.get("/api/incidents?limit=2&offset=2").json()
+    assert [item["id"] for item in first_page["items"]] == [analyzed_high, analyzed_low]
+    assert [item["id"] for item in second_page["items"]] == [plain_high, plain_low]
+
+
+def test_list_invalid_query_params_422(
+    api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_filter_row(
+        api_db,
+        "f-ok",
+        floor=4,
+        verdict="true_positive",
+        analysis_verdict="true_positive",
+    )
+    client = _client(api_db, monkeypatch)
+    for url in (
+        "/api/incidents?verdict=bogus",
+        "/api/incidents?verdict=",
+        "/api/incidents?verdict=TRUE_POSITIVE",
+        "/api/incidents?min_floor=0",
+        "/api/incidents?min_floor=7",
+        "/api/incidents?min_floor=high",
+        "/api/incidents?analyzed=maybe",
+        "/api/incidents?limit=0",
+        "/api/incidents?offset=-1",
+        "/api/incidents?limit=abc",
+    ):
+        response = client.get(url)
+        assert response.status_code == 422, url
+        assert response.json() == {"detail": "invalid query parameters"}, url
 
 
 def test_static_traversal_blocked(api_db: str, monkeypatch: pytest.MonkeyPatch) -> None:

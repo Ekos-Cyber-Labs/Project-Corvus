@@ -18,6 +18,7 @@ from typing import Any
 import httpx2
 import psycopg
 from fastapi import FastAPI, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
@@ -57,6 +58,24 @@ async def _security_headers(request: Request, call_next: Any) -> Any:
 @app.exception_handler(Exception)
 async def _generic_error(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=500, content={"detail": "internal error"})
+
+
+#: Static body for every 422: never echoes untrusted query input.
+INVALID_QUERY = {"detail": "invalid query parameters"}
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    return JSONResponse(status_code=422, content=dict(INVALID_QUERY))
+
+
+#: Verdicts the analysis loop may store; the only accepted values for
+#: the ``verdict`` list filter. Anything else is a 422.
+ALLOWED_VERDICTS = frozenset(
+    {"true_positive", "benign_authorized", "false_positive", "needs_human"}
+)
 
 
 def check_database(database_url: str | None) -> dict[str, Any]:
@@ -350,8 +369,12 @@ def list_incidents(
     limit: int = Query(default=20, ge=1),
     offset: int = Query(default=0, ge=0),
     min_floor: int | None = Query(default=None, ge=1, le=6),
+    verdict: str | None = Query(default=None),
+    analyzed: bool | None = Query(default=None),
 ) -> Any:
     capped = min(limit, MAX_LIMIT)
+    if verdict is not None and verdict not in ALLOWED_VERDICTS:
+        return JSONResponse(status_code=422, content=dict(INVALID_QUERY))
     url = _database_url()
     if not url:
         return JSONResponse(status_code=503, content={"detail": "database unavailable"})
@@ -363,7 +386,24 @@ def list_incidents(
                 if min_floor is not None:
                     where += " AND severity_floor >= %s"
                     params.append(min_floor)
-                cur.execute(f"SELECT COUNT(*) FROM incidents {where}", params)
+                if verdict is not None:
+                    where += (
+                        " AND EXISTS(SELECT 1 FROM incident_analyses a"
+                        " WHERE a.incident_id=i.id AND a.stage='analysis'"
+                        " AND a.payload->>'verdict' = %s)"
+                    )
+                    params.append(verdict)
+                if analyzed is True:
+                    where += (
+                        " AND EXISTS(SELECT 1 FROM incident_analyses a"
+                        " WHERE a.incident_id=i.id AND a.stage='analysis')"
+                    )
+                elif analyzed is False:
+                    where += (
+                        " AND NOT EXISTS(SELECT 1 FROM incident_analyses a"
+                        " WHERE a.incident_id=i.id AND a.stage='analysis')"
+                    )
+                cur.execute(f"SELECT COUNT(*) FROM incidents i {where}", params)
                 count_row = cur.fetchone()
                 total = int(count_row[0]) if count_row else 0
                 cur.execute(
@@ -372,9 +412,11 @@ def list_incidents(
                     " i.verdict, i.first_seen, i.last_seen,"
                     " COALESCE(jsonb_array_length(i.event_uids),0),"
                     " EXISTS(SELECT 1 FROM incident_signals s WHERE"
-                    " s.incident_id=i.id AND s.kind='injection')"
-                    f" FROM incidents i {where} ORDER BY i.created_at DESC, i.id"
-                    " DESC LIMIT %s OFFSET %s",
+                    " s.incident_id=i.id AND s.kind='injection'),"
+                    " EXISTS(SELECT 1 FROM incident_analyses a"
+                    " WHERE a.incident_id=i.id AND a.stage='analysis')"
+                    f" FROM incidents i {where} ORDER BY 11 DESC,"
+                    " i.severity_floor DESC, i.id DESC LIMIT %s OFFSET %s",
                     [*params, capped, offset],
                 )
                 items = [
@@ -391,6 +433,7 @@ def list_incidents(
                         "last_seen": _iso(r[7]),
                         "event_count": int(r[8] or 0),
                         "has_injection": bool(r[9]),
+                        "analyzed": bool(r[10]),
                     }
                     for r in cur.fetchall()
                 ]
@@ -505,7 +548,7 @@ def get_incident(incident_id: int) -> Any:
                     )
                     adict["usd"] = _attempt_usd(adict | {"model": adict["model"]})
                     attempts.append(adict)
-                    if a[11]:
+                    if isinstance(a[11], str) and a[11].strip():
                         reasoning_unverified = {
                             "text": str(a[11]),
                             "unverified": True,

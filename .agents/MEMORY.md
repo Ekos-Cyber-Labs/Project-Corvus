@@ -1006,3 +1006,29 @@ rules back to Wazuh (shadow first, human approval).
   `pre-commit run gitleaks --all-files` (Passed). No normalizer or
   correlation change, so no eval delta. Compose Postgres left
   running. Awaiting maintainer commit.
+- 2026-10-30: fixed the UI findings (frontend-engineer, then
+  security-reviewer pass). Hash routing with no router library
+  (`#/` list with page and filters, `#/incidents/<id>` detail,
+  Back/Forward via hashchange; non-numeric or unknown ids render a
+  static error, never a blank page or an echoed id). API filters
+  (`verdict`, `analyzed`, existing `min_floor`) with static-body
+  422s for unknown values; default sort analyzed first, then floor
+  descending, then id (stable, paginated). Verdict column shows
+  `triaged` / `pending` distinctly with badges for the four stored
+  verdicts; rows fully clickable and keyboard reachable with
+  link-styled titles. Incident view shows per-step tool, key/value
+  arguments, one-line summary plus full result in a collapsed
+  monospace block capped at 4000 chars, readable severity-factor
+  list with raw JSON collapsed, per-attempt cost table plus total,
+  and the unverified-reasoning heading only when stored text
+  exists. Narrow layout hides the Final/Events/Injection columns;
+  focus-visible covers rows and selects. Counts: `make lint`
+  green; full `make test` 803 passed with Postgres (10 in the API
+  UI suite, 3 new); `make ui-test` 18 passed (15 new);
+  `make ui-build` built; gitleaks passed. Security-reviewer pass:
+  text-only rendering, no new network destinations, all filters
+  parameterized, adversarial hash and injection tests green. No
+  normalizer, correlation, prompt or model change, so no eval
+  delta. Layout widths reasoned from CSS, not measured in a
+  browser. Compose Postgres left running. Awaiting maintainer
+  commit.
