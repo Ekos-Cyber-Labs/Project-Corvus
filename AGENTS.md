@@ -65,6 +65,7 @@ A reduced web UI and an eval harness with an honest results table (every number 
 7. Agents never commit, amend, or push. The maintainer commits.
 8. Do not implement anything under Roadmap in docs/architecture.md unless the maintainer explicitly asks.
 9. .agents/MEMORY.md is committed to a public repository. Write in it only what could appear in the README: no IP addresses or hostnames of real infrastructure, no personal names, no secrets or key names with values, no paths outside this repository, no lab credentials, no content from datasets beyond file counts. Before writing to .agents/MEMORY.md, re-read this rule. The legends in AGENTS.md, .agents/MEMORY.md and .agents/README.md must be kept verbatim.
+10. Anything sent to Spark is verified against the real API before the prompt is closed (the reviewer does it); stub transports cannot reveal schema or punctuation behaviour.
 
 ## Models
 

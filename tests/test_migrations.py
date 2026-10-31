@@ -84,6 +84,7 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "started_at",
         "finished_at",
         "created_at",
+        "shown_pseudonyms",
     },
     "rules": {
         "id",
@@ -178,6 +179,7 @@ def test_migrate_applies_twice_idempotently() -> None:
         assert "0003_severity_factors.sql" in first
         assert "0004_llm_audit.sql" in first
         assert "0005_injection_signals.sql" in first
+        assert "0006_agent_step_scope.sql" in first
         assert migrate(test_url) == []
         with psycopg.connect(test_url) as conn:
             with conn.cursor() as cur:
@@ -188,6 +190,7 @@ def test_migrate_applies_twice_idempotently() -> None:
                     "0003_severity_factors.sql",
                     "0004_llm_audit.sql",
                     "0005_injection_signals.sql",
+                    "0006_agent_step_scope.sql",
                 ]
 
         # File-level idempotency: executing 0002 and 0004 directly, twice, is safe.
@@ -214,6 +217,14 @@ def test_migrate_applies_twice_idempotently() -> None:
             with conn.cursor() as cur:
                 cur.execute(signals_text)
                 cur.execute(signals_text)
+            conn.commit()
+        scope_text = (Path(MIGRATIONS_DIR) / "0006_agent_step_scope.sql").read_text(
+            encoding="utf-8"
+        )
+        with psycopg.connect(test_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(scope_text)
+                cur.execute(scope_text)
             conn.commit()
 
         with psycopg.connect(test_url) as conn:

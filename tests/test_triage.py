@@ -35,6 +35,7 @@ from corvus.llm.transport import Attempt, AttemptError, AttemptTimeoutError
 from corvus.llm.triage_worker import (
     _install_sigterm_handler,
     enqueue_triage_jobs,
+    process_incident_triage,
     process_job,
     run_loop,
 )
@@ -2420,3 +2421,58 @@ def test_ip_port_always_fails_gives_ai_failed(triage_db: str, monkeypatch: Any) 
     rows = _analysis_rows(triage_db)
     assert len(rows) == 1 and rows[0][2] == "ai_failed"
     assert _incident_state(triage_db, incident_id) == ("open", "failed", True)
+
+
+def test_enqueue_scoped_to_incident_ids(triage_db: str) -> None:
+    """incident_ids scopes enqueueing; empty and bad inputs are safe."""
+    first = _insert_incident(triage_db, "ck-scope-1")
+    second = _insert_incident(triage_db, "ck-scope-2")
+    job_ids = enqueue_triage_jobs(triage_db, incident_ids=[second])
+    assert len(job_ids) == 1
+    with psycopg.connect(triage_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT payload FROM work_queue ORDER BY id ASC")
+            payloads = [row[0] for row in cur.fetchall()]
+    assert [item.get("incident_id") for item in payloads] == [second]
+    assert enqueue_triage_jobs(triage_db, incident_ids=[]) == []
+    with pytest.raises(ValueError):
+        enqueue_triage_jobs(triage_db, incident_ids=[first, "x"])  # type: ignore[list-item]
+    # Unscoped enqueue still covers every incident lacking triage.
+    all_ids = enqueue_triage_jobs(triage_db)
+    assert len(all_ids) == 2
+
+
+def test_process_incident_triage_resolved_short_circuits(
+    triage_db: str, monkeypatch: Any
+) -> None:
+    """An already-resolved triage returns with no new job or model call."""
+    incident_id = _insert_incident(triage_db, "ck-scope-done")
+    counts: dict[str, int] = {}
+    _loop_env(monkeypatch)
+
+    def _counting_call(backend: Any, messages: Any, **kwargs: Any) -> Attempt:
+        counts["calls"] = counts.get("calls", 0) + 1
+        return _attempt(_good_body())
+
+    _use_stub(monkeypatch, _counting_call)
+    monkeypatch.setattr(
+        "corvus.llm.triage_worker.load_replay_events_by_uid",
+        lambda replay_dir, uids: _evidence(),
+    )
+    assert process_incident_triage(triage_db, incident_id) == "resolved"
+    assert counts.get("calls") == 1
+    with psycopg.connect(triage_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM work_queue")
+            row = cur.fetchone()
+    assert row is not None
+    jobs_after_first = int(row[0])
+    assert jobs_after_first == 1
+    # Second run short-circuits on the resolved row.
+    assert process_incident_triage(triage_db, incident_id) == "resolved"
+    assert counts.get("calls") == 1
+    with psycopg.connect(triage_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM work_queue")
+            row = cur.fetchone()
+    assert row is not None and int(row[0]) == jobs_after_first

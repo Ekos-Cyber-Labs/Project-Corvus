@@ -384,3 +384,49 @@ def test_entities_ignored_onprem(pg_url: str) -> None:
         entities=[("host", "jump01")],
     )
     assert "jump01" in json.dumps(prepared.payload)
+
+
+def test_cloud_sentence_punctuation_sweep(pg_url: str) -> None:
+    """End-to-end: sentence punctuation leaks nothing on the cloud path.
+
+    Same sweep as the pseudonymizer unit (ten templates over every
+    kind), asserted on the prepared cloud payload instead of the
+    unit, so the result covers registration plus replacement.
+    """
+    names: dict[str, list[str]] = {
+        "host": ["workstation5", "workstation6"],
+        "user": ["svc-backup", "operator2"],
+        "ip": ["10.0.0.5", "10.0.0.6"],
+        "domain": ["theshire.local", "shire.example.com"],
+        "email": ["operator@theshire.local", "admin@shire.example.com"],
+    }
+    templates = [
+        "tool on {name}.",
+        "tool on {name}?",
+        "tool on {name}!",
+        "tool on {name}, then more",
+        "tool on {name}; then more",
+        "tool on {name}: done",
+        "({name}) did it",
+        "[{name}] did it",
+        "on {name}. {other}.",
+        "{name}...\nnext line",
+    ]
+    entities = [(kind, raw) for kind, raws in names.items() for raw in raws]
+    raws = [raw for _, raw in entities]
+    for kind_names in names.values():
+        for raw in kind_names:
+            others = [item for item in kind_names if item != raw]
+            other = others[0] if others else raw
+            for template in templates:
+                text = template.format(name=raw, other=other)
+                prepared = prepare_payload(
+                    {"note": text},
+                    _destination("cloud"),
+                    "visible",
+                    database_url=pg_url,
+                    entities=entities,
+                )
+                dumped = json.dumps(prepared.payload)
+                for leaked in raws:
+                    assert leaked not in dumped, (template, leaked)

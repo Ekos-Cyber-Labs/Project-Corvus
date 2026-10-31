@@ -1,0 +1,147 @@
+{
+ "request": {
+  "model": "muse-spark-1.3",
+  "max_tokens": 4000,
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a SOC analyst. Reply with the JSON verdict only."
+   },
+   {
+    "role": "user",
+    "content": "Incident: three failed logons then a success on HOST-0001 from IP-0002 (event uid ev-1). Severity floor 3. Language en."
+   }
+  ],
+  "response_format": {
+   "type": "json_schema",
+   "json_schema": {
+    "name": "AnalysisVerdict",
+    "strict": true,
+    "schema": {
+     "$defs": {
+      "TimelineEntry": {
+       "additionalProperties": false,
+       "description": "One ordered timeline row anchored to an incident event.",
+       "properties": {
+        "time": {
+         "maxLength": 64,
+         "minLength": 1,
+         "title": "Time",
+         "type": "string"
+        },
+        "event_uid": {
+         "maxLength": 128,
+         "minLength": 1,
+         "title": "Event Uid",
+         "type": "string"
+        },
+        "description": {
+         "maxLength": 280,
+         "minLength": 1,
+         "title": "Description",
+         "type": "string"
+        }
+       },
+       "required": [
+        "time",
+        "event_uid",
+        "description"
+       ],
+       "title": "TimelineEntry",
+       "type": "object"
+      }
+     },
+     "additionalProperties": false,
+     "description": "The final verdict Muse Spark returns for one incident.\n\nEvery field is bounded in length and count so a runaway\ncompletion fails schema validation instead of filling the\ndatabase. ``severity_id`` follows the floor policy enforced by\n:func:`corvus.llm.call.validate_policy`: at most one level above\nthe deterministic floor, only citing event uids validated as\nbelonging to the incident, never below the floor. Every\n``timeline`` entry cites its ``event_uid`` (checked by the\ngeneric ``event_uid`` walk in :mod:`corvus.llm.call`). Entities\nnamed in free text are pseudonyms (``HOST-``/``USER-``/``IP-``);\nthe agent loop maps them back to real values on-prem only when\nstoring the verdict for the UI \u2014 real values never go to the\ncloud. ``language`` is always emitted explicitly to match the\nrequest (``en`` or ``es``).",
+     "properties": {
+      "verdict": {
+       "enum": [
+        "true_positive",
+        "benign_authorized",
+        "false_positive",
+        "needs_human"
+       ],
+       "title": "Verdict",
+       "type": "string"
+      },
+      "severity_id": {
+       "maximum": 6,
+       "minimum": 1,
+       "title": "Severity Id",
+       "type": "integer"
+      },
+      "confidence": {
+       "maximum": 1.0,
+       "minimum": 0.0,
+       "title": "Confidence",
+       "type": "number"
+      },
+      "timeline": {
+       "items": {
+        "$ref": "#/$defs/TimelineEntry"
+       },
+       "maxItems": 60,
+       "title": "Timeline",
+       "type": "array"
+      },
+      "response_plan": {
+       "items": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+       },
+       "maxItems": 20,
+       "title": "Response Plan",
+       "type": "array"
+      },
+      "visibility_gaps": {
+       "items": {
+        "maxLength": 280,
+        "minLength": 1,
+        "type": "string"
+       },
+       "maxItems": 20,
+       "title": "Visibility Gaps",
+       "type": "array"
+      },
+      "uncertainties": {
+       "items": {
+        "maxLength": 280,
+        "minLength": 1,
+        "type": "string"
+       },
+       "maxItems": 20,
+       "title": "Uncertainties",
+       "type": "array"
+      },
+      "language": {
+       "default": "en",
+       "enum": [
+        "en",
+        "es"
+       ],
+       "title": "Language",
+       "type": "string"
+      }
+     },
+     "required": [
+      "verdict",
+      "severity_id",
+      "confidence"
+     ],
+     "title": "AnalysisVerdict",
+     "type": "object"
+    }
+   }
+  }
+ },
+ "status": 400,
+ "response": {
+  "error": {
+   "code": null,
+   "message": "'required' is required to be supplied and to be an array including every key in properties. Missing 'language'.",
+   "param": "schema",
+   "type": "invalid_request_error"
+  }
+ }
+}

@@ -145,6 +145,12 @@ def test_default_allowlist_empty_when_unconfigured(
 
 
 def test_default_allowlist_fallback_bases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset META_BASE_URL still allowlists the settings default host.
+
+    Regression: the backend resolves api.meta.ai from the settings
+    default while the env-only allowlist refused it. DATABASE_URL is
+    set so the resolved settings (not the ambient environment) decide.
+    """
     for var in (
         "TRIAGE_BASE_URL",
         "ANALYSIS_BASE_URL",
@@ -153,8 +159,28 @@ def test_default_allowlist_fallback_bases(monkeypatch: pytest.MonkeyPatch) -> No
         "WAZUH_INDEXER_URL",
     ):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
     monkeypatch.setenv("GLIMMER_BASE_URL", "http://glimmer-lan.example.com:8080/v1")
-    assert default_allowed_hosts() == ["glimmer-lan.example.com:8080"]
+    assert default_allowed_hosts() == [
+        "glimmer-lan.example.com:8080",
+        "api.meta.ai",
+    ]
+
+
+def test_default_allowlist_override_shadows_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A purpose override shadows the settings default (never both)."""
+    for var in (
+        "TRIAGE_BASE_URL",
+        "ANALYSIS_BASE_URL",
+        "GLIMMER_BASE_URL",
+        "META_BASE_URL",
+        "WAZUH_INDEXER_URL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANALYSIS_BASE_URL", "https://spark.example.com/v1")
+    assert default_allowed_hosts() == ["spark.example.com"]
 
 
 SAFE_STRINGS = [

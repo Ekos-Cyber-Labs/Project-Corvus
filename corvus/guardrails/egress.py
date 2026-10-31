@@ -37,6 +37,7 @@ import ipaddress
 import os
 import re
 from collections.abc import Iterable
+from typing import Any
 from urllib.parse import urlsplit
 
 __all__ = [
@@ -140,33 +141,59 @@ def _checked_port(entry: str, raw: str | None) -> int | None:
     return int(raw)
 
 
+def _resolved_settings() -> Any | None:
+    """Return the resolved settings, or None when nothing resolves.
+
+    ``None`` (missing required variables such as ``DATABASE_URL`` or
+    ``GLIMMER_BASE_URL``) means the backends cannot resolve either,
+    so the allowlist stays empty for the resolved side (fail closed).
+    """
+    try:
+        from corvus.settings import get_settings
+
+        return get_settings()
+    except Exception:
+        return None
+
+
 def default_allowed_hosts() -> list[str]:
     """Build the allowlist from the configured endpoints, nothing else.
 
-    Reads the model base URLs (``TRIAGE_BASE_URL``,
-    ``ANALYSIS_BASE_URL``, falling back to ``GLIMMER_BASE_URL`` /
-    ``META_BASE_URL``) plus ``WAZUH_INDEXER_URL`` and returns one entry
-    per URL host (``host`` or ``host:port`` when the URL names a
-    non-default port). Entries for unset variables are skipped; when
-    nothing is configured the list is empty and every cloud URL is
-    refused (fail closed).
+    Purpose overrides (``TRIAGE_BASE_URL`` / ``ANALYSIS_BASE_URL``)
+    come first, exactly as the backends prefer them; the fallbacks
+    come from the same resolved settings the backends use
+    (``Settings``, so the ``META_BASE_URL`` default counts when the
+    variable is unset), then ``WAZUH_INDEXER_URL``. An override
+    shadows its fallback default. Returns one entry per URL host
+    (``host`` or ``host:port`` when the URL names a non-default
+    port). When nothing resolves the list is empty and every cloud
+    URL is refused (fail closed).
     """
     urls: list[str] = []
     for var in ("TRIAGE_BASE_URL", "ANALYSIS_BASE_URL"):
         value = os.environ.get(var, "").strip()
         if value:
             urls.append(value)
-    if not any(os.environ.get(v, "").strip() for v in ("TRIAGE_BASE_URL",)):
-        fallback = os.environ.get("GLIMMER_BASE_URL", "").strip()
-        if fallback:
-            urls.append(fallback)
-    if not any(os.environ.get(v, "").strip() for v in ("ANALYSIS_BASE_URL",)):
-        fallback = os.environ.get("META_BASE_URL", "").strip()
-        if fallback:
-            urls.append(fallback)
-    wazuh = os.environ.get("WAZUH_INDEXER_URL", "").strip()
-    if wazuh:
-        urls.append(wazuh)
+    settings = _resolved_settings()
+    if settings is not None:
+        if not any(os.environ.get(v, "").strip() for v in ("TRIAGE_BASE_URL",)):
+            urls.append(settings.glimmer_base_url)
+        if not any(os.environ.get(v, "").strip() for v in ("ANALYSIS_BASE_URL",)):
+            urls.append(settings.meta_base_url)
+        if settings.wazuh_indexer_url:
+            urls.append(settings.wazuh_indexer_url)
+    else:
+        if not any(os.environ.get(v, "").strip() for v in ("TRIAGE_BASE_URL",)):
+            fallback = os.environ.get("GLIMMER_BASE_URL", "").strip()
+            if fallback:
+                urls.append(fallback)
+        if not any(os.environ.get(v, "").strip() for v in ("ANALYSIS_BASE_URL",)):
+            fallback = os.environ.get("META_BASE_URL", "").strip()
+            if fallback:
+                urls.append(fallback)
+        wazuh = os.environ.get("WAZUH_INDEXER_URL", "").strip()
+        if wazuh:
+            urls.append(wazuh)
     entries: list[str] = []
     for url in urls:
         try:

@@ -900,3 +900,49 @@ rules back to Wazuh (shadow first, human approval).
   `make lint` green; new suite 32 passed; full `make test` 717
   passed; gitleaks passed. Compose Postgres left running. Awaiting
   maintainer commit.
+- 2026-10-30: built the bounded Spark agent loop (`corvus/llm/agent.py`,
+  `corvus/llm/call.py` ToolLoop, `AnalysisVerdict` in
+  `corvus/llm/schemas.py`, migration `0006_agent_step_scope.sql` for
+  `agent_steps.shown_pseudonyms`, `corvus analyze` CLI,
+  `tests/test_analysis_agent.py` with 22 tests): max 6 tool calls then
+  a tool-free final turn, token budget and wall-clock deadline from
+  configuration, refusal/truncated recorded tries, steps persisted as
+  they happen with resume from persisted steps plus a written summary
+  (allowlist rebuilt as incident entities UNION shown sets),
+  queue claim/heartbeat/lease so two workers never both spend, verdict
+  pseudonyms mapped back on-prem at store time. Security pass: shared
+  the signal list so tool-result injection reaches validator 5 (new
+  quarantine test); residual bare-word pseudonymizer limits documented
+  in code. `make lint` green; full `make test` 739 passed with
+  Postgres; gitleaks passed. Test env note: the in-network database
+  password in the env file is stale against the reused volume; test
+  runs build the host-mapped URL with that file's compose password
+  (read-only, file untouched). Compose Postgres left running. Awaiting
+  maintainer commit.
+- 2026-10-30: fix round from the first real Spark runs (prompt 19b, no
+  paid calls made here; the two named fixtures were missing from the
+  worktree and were reconstructed from the report, marked as such):
+  strict schema copies for cloud backends (`corvus/llm/call.py`,
+  full `required` plus `additionalProperties: false` at every object
+  level, Glimmer byte-identical), sentence-punctuation pseudonym
+  replacement (`corvus/guardrails/pseudonymizer.py`, trailing `.?!`
+  runs kept after the pseudonym; dotted names still one unit, longer
+  tokens still untouched), incident-scoped triage (`WorkQueue.claim_job`,
+  `enqueue_triage_jobs(incident_ids=)`, `process_incident_triage`, CLI
+  uses it), egress allowlist from resolved settings (META default
+  counts when unset, fail closed), AGENTS.md rule 10 (verify against
+  the real API). New tests: 2 call, 7 pseudonymizer, 1 payload sweep,
+  2 CLI scoping, 1 queue, 2 triage, 2 egress (1 updated, 1 new).
+  `make lint` green; full `make test` 755 passed with Postgres;
+  gitleaks passed. Compose Postgres left running. Awaiting maintainer
+  commit.
+- 2026-10-30: lease fix round (paid verdict lost past 60 s): one
+  resolved lease per run (explicit, else backend read timeout) for
+  the claim and the heartbeat (`corvus/llm/agent.py`), heartbeat
+  interval from `min(lease, granted remaining) / 3`
+  (`corvus/state/queue.py` `heartbeat_interval_for`, also used by the
+  triage worker whose own paths were already consistent). Failing
+  first: scaled 0.6/1.8 reproduction ended busy pre-fix. New tests: 3
+  lease cases plus 1 interval unit. `make lint` green; full `make
+  test` 759 passed with Postgres; gitleaks passed. Compose Postgres
+  left running. Awaiting maintainer commit.

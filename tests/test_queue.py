@@ -1,5 +1,6 @@
 """Work queue integration tests (always run; never skip)."""
 
+import dataclasses
 import threading
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -10,7 +11,7 @@ import pytest
 from psycopg.rows import dict_row
 
 from corvus.state.migrate import migrate
-from corvus.state.queue import JobStatus, WorkQueue
+from corvus.state.queue import JobStatus, WorkQueue, heartbeat_interval_for
 from tests.conftest import _create_database, _drop_database, _test_database_urls
 
 T0 = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
@@ -113,6 +114,59 @@ def test_claim_orders_by_available_at_then_id_and_skips_future(
     rules = queue.claim("worker-2", kinds=["rules"], now=T0)
     assert rules is not None
     assert rules.id == other_kind
+
+
+@pytest.mark.integration
+def test_claim_job_scopes_to_one_row(
+    queue_db: tuple[WorkQueue, str],
+) -> None:
+    """claim_job locks exactly the requested due job, nothing else."""
+    queue, test_url = queue_db
+    first = queue.enqueue("triage", {"n": "one"}, now=T0)
+    second = queue.enqueue("triage", {"n": "two"}, now=T0)
+    claimed = queue.claim_job(second, "worker-1", now=T0, lease_seconds=60)
+    assert claimed is not None
+    assert claimed.id == second
+    assert claimed.status == JobStatus.LOCKED
+    assert claimed.locked_by == "worker-1"
+    assert claimed.payload == {"n": "two"}
+    # The other job is untouched and still claimable in queue order.
+    assert _row(test_url, first)["status"] == "pending"
+    assert _row(test_url, second)["status"] == "locked"
+    # Done, future, unknown and foreign-locked rows are not claimable.
+    assert queue.complete(second, "worker-1", now=T0) is True
+    assert queue.claim_job(second, "worker-2", now=T0) is None
+    assert queue.claim_job(999999, "worker-2", now=T0) is None
+    with pytest.raises(ValueError):
+        queue.claim_job(True, "worker-2", now=T0)  # type: ignore[arg-type]
+
+
+@pytest.mark.integration
+def test_heartbeat_interval_honors_granted_lease(
+    queue_db: tuple[WorkQueue, str],
+) -> None:
+    """The interval is min(lease, remaining grant) / 3, never just lease/3."""
+    queue, _ = queue_db
+    now = datetime.now(UTC)
+    job_id = queue.enqueue("triage", {"n": "one"}, now=now)
+    fresh = queue.claim_job(job_id, "worker-1", now=now, lease_seconds=60)
+    assert fresh is not None
+    assert heartbeat_interval_for(fresh, 60.0) == pytest.approx(20.0, abs=1.0)
+    # A shorter grant caps a longer heartbeat lease.
+    short_id = queue.enqueue("triage", {"n": "two"}, now=now)
+    short = queue.claim_job(short_id, "worker-1", now=now, lease_seconds=0.6)
+    assert short is not None
+    assert heartbeat_interval_for(short, 180.0) == pytest.approx(0.2, abs=0.05)
+    # An already-lapsed grant fires ~immediately so the run ends busy fast.
+    stale_id = queue.enqueue("triage", {"n": "three"}, now=T0)
+    stale = queue.claim_job(stale_id, "worker-1", now=T0, lease_seconds=60)
+    assert stale is not None
+    assert heartbeat_interval_for(stale, 60.0) == 0.05
+    # No expiry exposed: plain lease / 3.
+    assert (
+        heartbeat_interval_for(dataclasses.replace(fresh, lease_expires_at=None), 60.0)
+        == 20.0
+    )
 
 
 @pytest.mark.integration

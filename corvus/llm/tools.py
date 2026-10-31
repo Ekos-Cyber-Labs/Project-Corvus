@@ -738,7 +738,10 @@ def _coerce_call(
 
 
 def execute_tool_calls(
-    message_tool_calls: Sequence[Any], context: ToolContext
+    message_tool_calls: Sequence[Any],
+    context: ToolContext,
+    *,
+    shown_out: list[set[str]] | None = None,
 ) -> list[dict[str, str]]:
     """Run every tool call of one turn, in order, never raising per call.
 
@@ -761,6 +764,12 @@ def execute_tool_calls(
     observations never echo model-supplied strings: only fixed
     :class:`ToolError` messages travel to the cloud; any other error
     maps to a fixed generic string.
+
+    ``shown_out``, when given, collects one set per call with the
+    pivot-granting pseudonyms that call's structured result showed
+    (empty for technique results, unknown tools and every failure),
+    so the agent loop can persist each step's shown scope alongside
+    the step itself and rebuild the allowlist on a resumed run.
     """
     trust = getattr(context.destination, "trust", None)
     if trust != "cloud":
@@ -777,12 +786,14 @@ def execute_tool_calls(
     }
     answers: list[dict[str, str]] = []
     grown: set[str] = set()
+    per_call_shown: list[set[str]] = []
     for entry in message_tool_calls:
         call_id, name, arguments = _coerce_call(entry)
         if isinstance(arguments, str):
             answers.append(
                 {"role": "tool", "tool_call_id": call_id, "content": arguments}
             )
+            per_call_shown.append(set())
             continue
         handler = handlers.get(name)
         if handler is None:
@@ -796,6 +807,7 @@ def execute_tool_calls(
                     ),
                 }
             )
+            per_call_shown.append(set())
             continue
         try:
             content, shown = handler(arguments)
@@ -809,6 +821,9 @@ def execute_tool_calls(
             content, shown = f"error: tool {name} returned no observation", set()
         answers.append({"role": "tool", "tool_call_id": call_id, "content": content})
         grown.update(shown)
+        per_call_shown.append(set(shown))
     allowed.update(grown)
     context.allowed_pseudonyms = set(context.allowed_pseudonyms or set()) | allowed
+    if shown_out is not None:
+        shown_out.extend(per_call_shown)
     return answers

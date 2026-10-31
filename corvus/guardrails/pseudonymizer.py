@@ -42,6 +42,13 @@ matches with a trailing multi-label domain suffix (``web01`` matches
 ``WEB01.example.com``), so a later payload cannot leak the internal
 domain through the FQDN form. Single-label suffixes (``web01.corp``,
 ``web01.exe``) do not match and stay a documented limitation.
+A second extension: a trailing run of sentence punctuation (``.``,
+``?``, ``!``, including an ellipsis) followed by the end of the
+text, whitespace, or a closing quote/bracket is not part of the
+name — ``on workstation5.`` becomes ``on HOST-0001.`` with the dot
+kept. Dotted names still match as one unit, and a name inside a
+longer token (``workstation55``, ``myworkstation5``) still never
+matches.
 
 Before that replacement, :func:`scan_entities` finds entities that
 appear only in free text: IPv4 and IPv6 literals, e-mail addresses,
@@ -602,6 +609,15 @@ def _suffix_number(pseudonym: str) -> int | None:
 #: text (``.example.com`` but not ``.exe``).
 _HOST_SUFFIX = r"(?:\.[A-Za-z0-9-]+){2,}"
 
+#: Sentence punctuation that may follow a name without belonging to
+#: it: a run of ``.``, ``?`` or ``!`` (an ellipsis counts) followed
+#: by the end of the text, whitespace, or a closing quote/bracket.
+#: The run stays in the output after the pseudonym.
+_SENTENCE_PUNCT = r"[.?!]+"
+
+#: Closing characters that may end a sentence after the punctuation.
+_CLOSING_CHARS = r")\]}'\""
+
 
 def _replace_free_text(text: str, table: dict[str, tuple[str, str]]) -> str:
     """Replace known raw values inside one free-text string."""
@@ -618,8 +634,22 @@ def _replace_free_text(text: str, table: dict[str, tuple[str, str]]) -> str:
             # spelling; the alternation tries the suffixed form first.
             body = f"(?:{re.escape(raw)}{_HOST_SUFFIX}|{re.escape(raw)})"
         pattern = re.compile(
-            r"(?<![" + _TOKEN_CHARS + r"])" + body + r"(?![" + _TOKEN_CHARS + r"])",
+            r"(?<!["
+            + _TOKEN_CHARS
+            + r"])"
+            + body
+            + r"(?:(?P<punct>"
+            + _SENTENCE_PUNCT
+            + r")(?=$|\s|["
+            + _CLOSING_CHARS
+            + r"])|(?!["
+            + _TOKEN_CHARS
+            + r"]))",
             flags,
         )
-        text = pattern.sub(pseudonym, text)
+
+        def _emit(match: re.Match[str], pseudo: str = pseudonym) -> str:
+            return pseudo + (match.group("punct") or "")
+
+        text = pattern.sub(_emit, text)
     return text

@@ -252,6 +252,50 @@ class WorkQueue:
                 row = cur.fetchone()
                 return None if row is None else _job_from_row(row)
 
+    def claim_job(
+        self,
+        job_id: int,
+        worker_id: str,
+        *,
+        lease_seconds: float = DEFAULT_LEASE_SECONDS,
+        lease_duration: timedelta | None = None,
+        now: datetime | None = None,
+    ) -> Job | None:
+        """Claim one specific job row for ``worker_id``, or return None.
+
+        Same atomic lease as :meth:`claim`, but scoped to ``job_id``:
+        the row moves to ``locked`` only when it is ``pending`` or
+        ``failed`` and due (``available_at <= now``). Anything else
+        (done, dead, locked by another worker, not yet due, unknown
+        id) returns None without touching the row, so an
+        incident-scoped runner never picks up another incident's job.
+        """
+        if isinstance(job_id, bool) or not isinstance(job_id, int):
+            raise ValueError("job_id must be an int")
+        worker_id = _required_text(worker_id, "worker_id")
+        current = _now(now)
+        lease_expires = current + _lease_delta(lease_seconds, lease_duration)
+        query = (
+            "UPDATE work_queue SET status = 'locked', locked_by = %s, "
+            "locked_at = %s, lease_expires_at = %s, updated_at = %s "
+            f"WHERE id = %s AND status IN ('pending', 'failed') "
+            "AND available_at <= %s "
+            f"RETURNING {_COLUMNS}"
+        )
+        params: list[Any] = [
+            worker_id,
+            current,
+            lease_expires,
+            current,
+            job_id,
+            current,
+        ]
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                return None if row is None else _job_from_row(row)
+
     def heartbeat(
         self,
         job_id: int,
@@ -428,6 +472,31 @@ class WorkQueue:
                 return len(cur.fetchall())
 
 
+def heartbeat_interval_for(job: Job, lease_seconds: float) -> float:
+    """Heartbeat interval honoring the actually granted lease.
+
+    Never assume the claim granted ``lease_seconds``: the interval
+    derives from ``min(lease_seconds, remaining time on the claimed
+    row) / 3``, so the first fire always lands strictly inside the
+    grant (``heartbeat`` requires ``lease_expires_at > now`` and a
+    fire exactly at expiry already loses the lease). Falls back to
+    ``lease_seconds / 3`` when the row exposes no expiry, and fires
+    ~immediately when the grant already lapsed so the run ends busy
+    fast instead of working under a dead lease.
+    """
+    remaining: float | None = None
+    expires_at = getattr(job, "lease_expires_at", None)
+    if isinstance(expires_at, datetime):
+        try:
+            remaining = (expires_at - _now(None)).total_seconds()
+        except TypeError:
+            remaining = None
+    base = lease_seconds if remaining is None else min(lease_seconds, remaining)
+    if base <= 0:
+        return 0.05
+    return base / 3.0
+
+
 def enqueue(
     database_url: str,
     kind: str,
@@ -456,6 +525,25 @@ def claim(
     return WorkQueue(database_url).claim(
         worker_id,
         kinds=kinds,
+        lease_seconds=lease_seconds,
+        lease_duration=lease_duration,
+        now=now,
+    )
+
+
+def claim_job(
+    database_url: str,
+    job_id: int,
+    worker_id: str,
+    *,
+    lease_seconds: float = DEFAULT_LEASE_SECONDS,
+    lease_duration: timedelta | None = None,
+    now: datetime | None = None,
+) -> Job | None:
+    """Module-level wrapper for :meth:`WorkQueue.claim_job`."""
+    return WorkQueue(database_url).claim_job(
+        job_id,
+        worker_id,
         lease_seconds=lease_seconds,
         lease_duration=lease_duration,
         now=now,
@@ -527,9 +615,11 @@ __all__ = [
     "JobStatus",
     "WorkQueue",
     "claim",
+    "claim_job",
     "complete",
     "enqueue",
     "fail",
     "heartbeat",
+    "heartbeat_interval_for",
     "reclaim_expired_leases",
 ]

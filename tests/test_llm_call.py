@@ -29,6 +29,7 @@ from corvus.llm.call import (
 )
 from corvus.llm.config import BackendConfig
 from corvus.llm.price_book import ModelPrice
+from corvus.llm.schemas import AnalysisVerdict
 from corvus.llm.stats import summarize_attempt_rows
 from corvus.llm.transport import Attempt, AttemptError, AttemptTimeoutError
 from corvus.state.migrate import migrate
@@ -1653,3 +1654,93 @@ def test_hold_ttl_follows_backend_read_timeout(call_db: str) -> None:
             ttls = [float(row[0]) for row in cur.fetchall()]
     assert len(ttls) == 1
     assert ttls[0] == pytest.approx(hold_ttl(45.0, 1), abs=5.0)
+
+
+STRICT_OK_RECORD = Path("tests/fixtures_llm/spark_json_schema_strict_ok.json")
+
+
+def _assert_strict_schema(schema: Any) -> None:
+    """Every object node lists all its properties in required.
+
+    Mirrors the real Spark requirement (HTTP 400
+    ``spark_error_schema_required.json`` otherwise): at every object
+    level, ``required`` holds every key of ``properties`` and
+    ``additionalProperties`` is false (a dict value-schema is walked,
+    never overwritten).
+    """
+    if isinstance(schema, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            required = schema.get("required")
+            assert isinstance(required, list)
+            assert sorted(required) == sorted(properties.keys())
+            additional = schema.get("additionalProperties")
+            assert additional is False or isinstance(additional, dict)
+            if isinstance(additional, dict):
+                _assert_strict_schema(additional)
+        for key, value in schema.items():
+            if key in ("required", "additionalProperties"):
+                continue
+            _assert_strict_schema(value)
+    elif isinstance(schema, list):
+        for value in schema:
+            _assert_strict_schema(value)
+
+
+def _recorded_verdict_context(call_db: str) -> Any:
+    """Context matching the recorded accepted verdict (uid, pseudonyms)."""
+    return _context(
+        call_db,
+        event_uids=["ev-1", "e2"],
+        valid_pseudonyms={"HOST-0001", "IP-0002"},
+    )
+
+
+def test_cloud_request_carries_strict_schema(call_db: str) -> None:
+    """A cloud backend gets the strict schema copy (full required)."""
+    recorded = json.loads(STRICT_OK_RECORD.read_text(encoding="utf-8"))
+    content = recorded["response"]["choices"][0]["message"]["content"]
+    stub = StubTransport([_attempt(content)])
+    outcome = call_model(
+        "analysis",
+        _builder,
+        AnalysisVerdict,
+        _recorded_verdict_context(call_db),
+        database_url=call_db,
+        prices=_prices("stub-cloud"),
+        run_attempt_fn=stub,
+        backend_override=_cloud(),
+        egress_filter=EgressFilter(["127.0.0.1:9"]),
+        call_id="call-strict-cloud",
+    )
+    assert outcome.status == "resolved"
+    schema = stub.calls[0]["kwargs"]["response_schema"]
+    _assert_strict_schema(schema)
+    # Length and count constraints survive strictification.
+    assert schema["properties"]["timeline"]["maxItems"] == 60
+    assert schema["properties"]["timeline"]["items"]["$ref"] == "#/$defs/TimelineEntry"
+    # The recorded accepted response is a valid verdict.
+    AnalysisVerdict.model_validate(json.loads(content))
+
+
+def test_onprem_request_schema_byte_identical(call_db: str) -> None:
+    """Glimmer accepted the raw schema: its request must not change."""
+    recorded = json.loads(STRICT_OK_RECORD.read_text(encoding="utf-8"))
+    content = recorded["response"]["choices"][0]["message"]["content"]
+    stub = StubTransport([_attempt(content)])
+    outcome = call_model(
+        "analysis",
+        _builder,
+        AnalysisVerdict,
+        _recorded_verdict_context(call_db),
+        database_url=call_db,
+        prices=_prices("stub-a"),
+        run_attempt_fn=stub,
+        backend_override=_onprem(),
+        call_id="call-raw-onprem",
+    )
+    assert outcome.status == "resolved"
+    assert (
+        stub.calls[0]["kwargs"]["response_schema"]
+        == AnalysisVerdict.model_json_schema()
+    )

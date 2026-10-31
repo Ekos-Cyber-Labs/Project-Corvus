@@ -156,6 +156,7 @@ class Attempt:
     token_source: TokenSource
     latency_ms: int
     error: AttemptError | None
+    refusal: str | None = None
 
 
 class RateLimiter:
@@ -603,6 +604,7 @@ def _attempt_from_response(
         raise TransportError("invalid chat completion: message must be an object")
     content = _require_text(message.get("content"), "message.content")
     reasoning_text = _require_text(message.get("reasoning"), "message.reasoning")
+    refusal_text = _require_text(message.get("refusal"), "message.refusal")
     finish_reason = _require_text(choice.get("finish_reason"), "finish_reason")
     tool_calls, tool_call_errors = parse_tool_calls(message.get("tool_calls"))
     usage = body.get("usage")
@@ -637,6 +639,7 @@ def _attempt_from_response(
                 token_source="estimated",
                 latency_ms=latency_ms,
                 error=None,
+                refusal=refusal_text,
             )
         reasoning_count, answer_count, overhead_count, _ = split
         return Attempt(
@@ -654,6 +657,7 @@ def _attempt_from_response(
             token_source="exact_ids",
             latency_ms=latency_ms,
             error=None,
+            refusal=refusal_text,
         )
     completion_tokens = _require_count(
         usage_map.get("completion_tokens"), "completion_tokens"
@@ -684,6 +688,7 @@ def _attempt_from_response(
         token_source="usage",
         latency_ms=latency_ms,
         error=None,
+        refusal=refusal_text,
     )
 
 
@@ -714,6 +719,50 @@ def _error_attempt(http_status: int, body: Any, latency_ms: int) -> Attempt:
         latency_ms=latency_ms,
         error=error,
     )
+
+
+def _outgoing_tool_calls(raw: Any, position: int) -> list[dict[str, Any]]:
+    """Validate echoed assistant ``tool_calls`` for the wire; never sends raw.
+
+    Each entry must carry a string ``id`` and a ``function`` object
+    with a string ``name`` and a string ``arguments`` payload, matching
+    what :func:`parse_tool_calls` accepts on the way back. Anything
+    else raises :class:`ValueError` before anything is sent.
+    """
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"messages[{position}].tool_calls must be a non-empty list")
+    echoed: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"messages[{position}].tool_calls entries must be objects")
+        call_id = entry.get("id")
+        function = entry.get("function")
+        if not isinstance(call_id, str) or not call_id:
+            raise ValueError(
+                f"messages[{position}].tool_calls entries need a string id"
+            )
+        if not isinstance(function, Mapping):
+            raise ValueError(
+                f"messages[{position}].tool_calls entries need a function object"
+            )
+        name = function.get("name")
+        arguments = function.get("arguments")
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                f"messages[{position}].tool_calls entries need a function name"
+            )
+        if not isinstance(arguments, str):
+            raise ValueError(
+                f"messages[{position}].tool_calls entries need string arguments"
+            )
+        echoed.append(
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": arguments},
+            }
+        )
+    return echoed
 
 
 def run_attempt(
@@ -759,7 +808,7 @@ def run_attempt(
     """
     if not isinstance(messages, Sequence) or not messages:
         raise ValueError("messages must be a non-empty sequence")
-    outgoing: list[dict[str, str]] = []
+    outgoing: list[dict[str, Any]] = []
     for position, item in enumerate(messages):
         if not isinstance(item, Mapping):
             raise ValueError(f"messages[{position}] must be a mapping")
@@ -769,7 +818,18 @@ def run_attempt(
             raise ValueError(f"messages[{position}].role must be a known role")
         if not isinstance(item_content, str):
             raise ValueError(f"messages[{position}].content must be a string")
-        outgoing.append({"role": role, "content": item_content})
+        entry: dict[str, Any] = {"role": role, "content": item_content}
+        if role == "assistant" and "tool_calls" in item:
+            entry["tool_calls"] = _outgoing_tool_calls(item.get("tool_calls"), position)
+        if role == "tool":
+            call_id = item.get("tool_call_id")
+            if call_id is not None:
+                if not isinstance(call_id, str) or not call_id:
+                    raise ValueError(
+                        f"messages[{position}].tool_call_id must be a non-empty string"
+                    )
+                entry["tool_call_id"] = call_id
+        outgoing.append(entry)
     if (
         isinstance(temperature, bool)
         or not isinstance(temperature, (int, float))

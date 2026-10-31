@@ -164,6 +164,33 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    analyze = sub.add_parser(
+        "analyze",
+        help="Run Glimmer triage when missing, then the Spark agent loop.",
+    )
+    analyze.add_argument(
+        "--incident",
+        type=int,
+        required=True,
+        help="Incident id to analyze.",
+    )
+    analyze.add_argument(
+        "--lang",
+        default="en",
+        choices=["en", "es"],
+        help="Answer language for the verdict (default: %(default)s).",
+    )
+    analyze.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    analyze.add_argument(
+        "--replay-dir",
+        default="data/replay",
+        help="Replay Parquet store for incident evidence (default: data/replay).",
+    )
+
     evaluation = sub.add_parser("eval", help="Evaluation harness commands.")
     eval_sub = evaluation.add_subparsers(dest="eval_command", required=True)
     eval_run = eval_sub.add_parser(
@@ -361,6 +388,69 @@ def main(argv: list[str] | None = None) -> int:
         )
         done = counts.get("resolved", 0)
         print(f"triage run: {done} resolved, counts {counts}")
+        return 0
+    if args.command == "analyze":
+        from corvus.adapters.replay import ReplayAdapter
+        from corvus.llm.agent import TriageMissingError, read_analysis, run_analysis
+        from corvus.llm.config import LlmConfigError, get_backend
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        database_url = args.database_url
+        try:
+            analysis_backend = get_backend("analysis")
+        except LlmConfigError as exc:
+            # No cloud key (or other backend misconfiguration): say
+            # so and end pending_ai instead of crashing.
+            print(f"analysis backend unavailable ({exc}); ending pending_ai")
+            return 0
+        triage = read_analysis(database_url, args.incident, "triage")
+        if triage is None or triage["status"] != "resolved":
+            from corvus.llm.triage_worker import process_incident_triage
+
+            try:
+                # Scoped to the requested incident only: no other
+                # incident is enqueued, claimed, or spent on.
+                process_incident_triage(
+                    database_url, args.incident, replay_dir=args.replay_dir
+                )
+            except LlmConfigError as exc:
+                print(f"triage backend unavailable ({exc}); ending pending_ai")
+                return 0
+        try:
+            outcome = run_analysis(
+                args.incident,
+                lang=args.lang,
+                database_url=database_url,
+                adapter=ReplayAdapter(args.replay_dir),
+                replay_dir=args.replay_dir,
+                backend=analysis_backend,
+            )
+        except TriageMissingError as exc:
+            print(f"{exc}; ending pending_ai")
+            return 0
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"status: {outcome.status}")
+        if outcome.verdict is not None:
+            print(
+                f"verdict: {outcome.verdict.verdict}"
+                f" (severity {outcome.verdict.severity_id},"
+                f" confidence {outcome.verdict.confidence:.2f})"
+            )
+        elif outcome.payload is not None:
+            print(f"detail: {outcome.payload}")
+        for error in outcome.errors:
+            print(f"error: {error.get('code')}: {error.get('message')}")
+        print("trace:")
+        print(f"  {'step':>4}  {'tool':<22}  {'tokens':>6}")
+        for step in outcome.steps:
+            print(f"  {step.step_number:>4}  {step.tool:<22}  {step.tokens:>6}")
+        print(
+            f"tries: {outcome.attempts} (attempts),"
+            f" tool calls: {outcome.tool_calls_used},"
+            f" loop tokens: {outcome.loop_tokens}"
+        )
         return 0
     if args.command == "eval" and args.eval_command == "run":
         from eval.harness import main as harness_main

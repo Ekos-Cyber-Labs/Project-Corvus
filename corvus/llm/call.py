@@ -43,6 +43,16 @@ twice. Then the other backend of the routing profile is tried
 (again through egress, budget and guardrails), then the
 deterministic fallback marked "AI analysis failed" (``ai_failed``).
 
+With :class:`ToolLoop` the same entry point drives the bounded
+Spark agent loop instead: answers carrying ``tool_calls`` are
+recorded and executed turn by turn (at most ``max_tool_calls`` in
+total, then a token budget and a wall-clock deadline force the
+final answer), and only a turn with no ``tool_calls`` is validated
+as the verdict. A non-null ``refusal`` is a failed try with code
+``"refusal"``; ``content: null`` with ``finish_reason`` length is
+the recorded ``truncated`` try, never a crash. No reasoning text
+is stored for cloud backends.
+
 Validator-5 (security) failures are never retried and never fall
 back: the output is quarantined (``quarantined``, never stored as
 an answer), the deterministic result is kept, a ``security_events``
@@ -71,10 +81,12 @@ reasoning; any consumer that shows it must label it "unverified".
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
 import re
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -122,6 +134,7 @@ __all__ = [
     "CallContext",
     "CallOutcome",
     "StructuredError",
+    "ToolLoop",
     "call_model",
     "validate_policy",
     "validate_schema",
@@ -339,6 +352,154 @@ class CallContext:
 def _err(code: str, path: str, message: str) -> StructuredError:
     """Build one structured validator error."""
     return StructuredError(code=code, path=path, message=message)
+
+
+@dataclass(frozen=True)
+class ToolLoop:
+    """Multi-turn tool-loop parameters for :func:`call_model`.
+
+    When given, the backend loop drives a bounded agent loop instead
+    of the single-answer 3-try self-correction: every transport answer
+    carrying ``tool_calls`` is recorded (outcome ``"tool_calls"``),
+    executed through ``on_tool_calls`` (which runs the tools and
+    persists each step), and appended to the conversation as the
+    assistant turn plus the returned tool messages. Only a turn with
+    no ``tool_calls`` is validated as the final verdict; prose
+    accompanying ``tool_calls`` is never the answer.
+
+    - ``tools``: OpenAI function declarations sent with each turn.
+    - ``on_tool_calls``: maps one :class:`Attempt` to the tool-role
+      messages (``{"role": "tool", "tool_call_id", "content"}``) that
+      continue the conversation. Step failures inside are the
+      callback's observations; an exception propagates and fails the
+      call (the turn's hold is already settled).
+    - ``max_tool_calls``: at most this many tool calls in total (a
+      turn with three parallel calls spends three). At the limit the
+      next turn is sent without tools and must produce the final
+      answer.
+    - ``token_budget``: at most this many prompt plus completion
+      tokens across turns before tools are dropped the same way
+      (None disables the budget; the USD spend cap still applies per
+      try through the reservation path).
+    - ``deadline`` / ``clock``: wall-clock timeout in ``clock``
+      seconds (``time.monotonic`` by default); when it passes the
+      loop stops and the recorded attempts stand (``ai_failed``,
+      never a crash).
+    - ``max_turns``: total transport turns before the loop gives up.
+    """
+
+    tools: Sequence[Mapping[str, Any]]
+    on_tool_calls: Callable[[Attempt], list[dict[str, Any]]]
+    max_tool_calls: int = 6
+    token_budget: int | None = None
+    deadline: float | None = None
+    clock: Callable[[], float] | None = None
+    max_turns: int = 12
+
+
+def _check_tool_loop(tool_loop: ToolLoop) -> None:
+    """Validate tool-loop parameters; raise ValueError when malformed."""
+    if not isinstance(tool_loop.tools, Sequence) or isinstance(
+        tool_loop.tools, (str, bytes)
+    ):
+        raise ValueError("tool_loop.tools must be a non-empty sequence")
+    if len(tool_loop.tools) == 0:
+        raise ValueError("tool_loop.tools must be a non-empty sequence")
+    for position, tool in enumerate(tool_loop.tools):
+        if not isinstance(tool, Mapping):
+            raise ValueError(f"tool_loop.tools[{position}] must be a mapping")
+    if not callable(tool_loop.on_tool_calls):
+        raise ValueError("tool_loop.on_tool_calls must be callable")
+    for name, value, minimum in (
+        ("max_tool_calls", tool_loop.max_tool_calls, 1),
+        ("max_turns", tool_loop.max_turns, 1),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(
+                f"tool_loop.{name} must be an int >= {minimum}, got {value!r}"
+            )
+    budget = tool_loop.token_budget
+    if budget is not None and (
+        isinstance(budget, bool) or not isinstance(budget, int) or budget < 0
+    ):
+        raise ValueError(
+            f"tool_loop.token_budget must be None or an int >= 0, got {budget!r}"
+        )
+    if tool_loop.deadline is not None and not isinstance(
+        tool_loop.deadline, (int, float)
+    ):
+        raise ValueError(
+            f"tool_loop.deadline must be None or a number, got {tool_loop.deadline!r}"
+        )
+    clock = tool_loop.clock if tool_loop.clock is not None else time.monotonic
+    if not callable(clock):
+        raise ValueError("tool_loop.clock must be callable")
+
+
+def _loop_clock(tool_loop: ToolLoop) -> Callable[[], float]:
+    """Return the loop's clock (injected, else monotonic)."""
+    if tool_loop.clock is not None:
+        return tool_loop.clock
+    return time.monotonic
+
+
+def _tools_for_turn(tool_loop: ToolLoop, used: int, spent_tokens: int) -> bool:
+    """True while the next turn may still carry tools.
+
+    Tools are dropped once ``max_tool_calls`` is reached or the
+    ``token_budget`` is spent; the turn is then sent without tools
+    and must produce the final answer.
+    """
+    if used >= tool_loop.max_tool_calls:
+        return False
+    budget = tool_loop.token_budget
+    if budget is not None and spent_tokens >= budget:
+        return False
+    return True
+
+
+def _turn_tokens(attempt: Attempt) -> int:
+    """Prompt plus completion tokens of one turn (cached is a subset)."""
+    return (
+        attempt.prompt_tokens
+        + attempt.reasoning_tokens
+        + attempt.answer_tokens
+        + attempt.overhead_tokens
+    )
+
+
+def _assistant_tool_message(attempt: Attempt) -> dict[str, Any]:
+    """Rebuild the assistant turn echoing its tool calls for the wire."""
+    return {
+        "role": "assistant",
+        "content": attempt.content or "",
+        "tool_calls": [
+            {
+                "id": call.call_id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments_raw},
+            }
+            for call in attempt.tool_calls
+        ],
+    }
+
+
+def _check_tool_messages(messages: list[dict[str, Any]]) -> None:
+    """Fail fast when the tool callback breaks its message contract."""
+    if not isinstance(messages, list):
+        raise ValueError("on_tool_calls must return a list of tool messages")
+    for position, message in enumerate(messages):
+        if not isinstance(message, Mapping):
+            raise ValueError(f"tool message {position} must be a mapping")
+        if message.get("role") != "tool":
+            raise ValueError(f"tool message {position} must have role 'tool'")
+        if not isinstance(message.get("content"), str):
+            raise ValueError(f"tool message {position} must carry string content")
+        call_id = message.get("tool_call_id")
+        if not isinstance(call_id, str) or not call_id:
+            raise ValueError(
+                f"tool message {position} must carry a tool_call_id string"
+            )
 
 
 def _extract_json_object(content: str) -> dict[str, Any] | None:
@@ -947,16 +1108,63 @@ def _correction_message(errors: list[StructuredError]) -> str:
     )
 
 
+def _strict_schema_copy(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a strict-compatible deep copy of a response schema.
+
+    The real Spark API answers HTTP 400 unless, at every object
+    level, ``required`` is an array holding every key of
+    ``properties`` and ``additionalProperties`` is false (see
+    ``tests/fixtures_llm/spark_error_schema_required.json``): raw
+    Pydantic schemas omit defaulted keys such as ``language`` from
+    ``required``. Length and count constraints (``maxLength``,
+    ``maxItems``, ``enum`` and the like) are kept verbatim. A dict
+    ``additionalProperties`` (a map value-schema) is walked, never
+    overwritten. The input is never mutated.
+    """
+    strict = copy.deepcopy(dict(schema))
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                # Property-definition order, like the accepted request:
+                # the array must hold every key of properties.
+                node["required"] = list(properties.keys())
+                node["additionalProperties"] = False
+            for key, value in node.items():
+                if key in ("required", "additionalProperties"):
+                    continue
+                _walk(value)
+            additional = node.get("additionalProperties")
+            if isinstance(additional, dict):
+                _walk(additional)
+        elif isinstance(node, list):
+            for value in node:
+                _walk(value)
+
+    _walk(strict)
+    return strict
+
+
 def _response_schema_kwargs(
     active_model: type[BaseModel],
+    *,
+    strict: bool = False,
 ) -> dict[str, Any]:
-    """Build the response_format kwargs for one attempt, if possible."""
+    """Build the response_format kwargs for one attempt, if possible.
+
+    With ``strict`` (cloud backends only) the schema is the
+    strict-compatible copy from :func:`_strict_schema_copy`; on-prem
+    backends keep the raw Pydantic schema byte-identical.
+    """
     try:
         schema = active_model.model_json_schema()
     except Exception:
         return {"response_schema_name": active_model.__name__}
     if not isinstance(schema, dict):
         return {"response_schema_name": active_model.__name__}
+    if strict:
+        schema = _strict_schema_copy(schema)
     return {
         "response_schema_name": active_model.__name__,
         "response_schema": schema,
@@ -985,6 +1193,12 @@ class _LoopResult:
     error_codes: list[str] = field(default_factory=list)
     #: Failed validator per recorded attempt, in order.
     validators: list[str] = field(default_factory=list)
+    #: Tool-loop accounting: calls spent, prompt plus completion
+    #: tokens across turns, and whether the wall-clock deadline
+    #: stopped the loop.
+    tool_calls_used: int = 0
+    loop_tokens: int = 0
+    timed_out: bool = False
 
 
 def _budget_error() -> StructuredError:
@@ -1016,11 +1230,17 @@ def _logged_release(reservation_id: int, call_id: str, database_url: str) -> Non
 
 def _coerce_messages(
     raw: Sequence[Mapping[str, str]],
-) -> list[dict[str, str]]:
-    """Validate builder output shape; raise ValueError when malformed."""
+) -> list[dict[str, Any]]:
+    """Validate builder output shape; raise ValueError when malformed.
+
+    Assistant turns may echo their ``tool_calls`` and tool turns
+    carry their ``tool_call_id`` (the agent loop replays persisted
+    steps through the same builder); both pass through with wire
+    validation, everything else is reduced to role plus content.
+    """
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or not raw:
         raise ValueError("messages_builder must return a non-empty sequence")
-    coerced: list[dict[str, str]] = []
+    coerced: list[dict[str, Any]] = []
     for position, item in enumerate(raw):
         if not isinstance(item, Mapping):
             raise ValueError(f"messages[{position}] must be a mapping")
@@ -1030,7 +1250,19 @@ def _coerce_messages(
             raise ValueError(f"messages[{position}].role must be a known role")
         if not isinstance(content, str):
             raise ValueError(f"messages[{position}].content must be a string")
-        coerced.append({"role": str(role), "content": content})
+        entry: dict[str, Any] = {"role": str(role), "content": content}
+        if role == "assistant" and item.get("tool_calls") is not None:
+            entry["tool_calls"] = transport_module._outgoing_tool_calls(
+                item.get("tool_calls"), position
+            )
+        if role == "tool" and item.get("tool_call_id") is not None:
+            call_id = item.get("tool_call_id")
+            if not isinstance(call_id, str) or not call_id:
+                raise ValueError(
+                    f"messages[{position}].tool_call_id must be a non-empty string"
+                )
+            entry["tool_call_id"] = call_id
+        coerced.append(entry)
     return coerced
 
 
@@ -1125,6 +1357,7 @@ def _run_backend_loop(
     reasoning_strength: str,
     cap_usd: float | None,
     reselect_payload: Callable[[float], Any] | None = None,
+    tool_loop: ToolLoop | None = None,
 ) -> _LoopResult:
     """Run the 3-try self-correction loop against one backend.
 
@@ -1142,11 +1375,22 @@ def _run_backend_loop(
     stops the loop through the same-code early-stop rule. Timeout and
     connection-error codes take part in that early stop like every
     other error: two consecutive identical codes end the backend loop.
+
+    With ``tool_loop`` the same reserve/record/convert discipline
+    drives a multi-turn agent loop instead: answers carrying
+    ``tool_calls`` are recorded (outcome ``"tool_calls"``), executed
+    through the loop callback and appended to the conversation, and
+    only a turn with no ``tool_calls`` is validated as the final
+    verdict. A non-null ``refusal`` is a failed try (code
+    ``"refusal"``); ``content: null`` with ``finish_reason`` length
+    is the recorded ``truncated`` try, never a crash.
     """
     result = _LoopResult()
     worst_single = _worst_case_usd(backend, prices)
     ttl = hold_ttl(backend.read_timeout_seconds, 1)
     billed = backend.trust == "cloud"
+    turn_total = tool_loop.max_turns if tool_loop is not None else MAX_ATTEMPTS
+    clock = _loop_clock(tool_loop) if tool_loop is not None else None
 
     def _try_reserve() -> int | None:
         """Reserve one try's hold, or None when the cap refuses."""
@@ -1205,7 +1449,18 @@ def _run_backend_loop(
         corrections: list[dict[str, str]] = []
         attempt_number = start_attempt_number
         overflow_shrunk = False
-        for index in range(MAX_ATTEMPTS):
+        history: list[dict[str, Any]] = []
+        if tool_loop is not None:
+            history.extend(base_messages)
+        for index in range(turn_total):
+            if (
+                tool_loop is not None
+                and tool_loop.deadline is not None
+                and clock is not None
+                and clock() >= tool_loop.deadline
+            ):
+                result.timed_out = True
+                break
             if index > 0:
                 hold = _try_reserve()
                 if hold is None:
@@ -1215,14 +1470,24 @@ def _run_backend_loop(
                     result.last_validator = "budget_exceeded"
                     break
             assert hold is not None
-            escalated = index == MAX_ATTEMPTS - 1
+            escalated = index == turn_total - 1
             active_model = _active_model(response_model, escalated)
             attempt_temperature = 0.0 if escalated else temperature
             attempt_strength = (
                 _step_up(reasoning_strength) if escalated else reasoning_strength
             )
-            messages: list[dict[str, str]] = list(base_messages) + corrections
-            schema_kwargs = _response_schema_kwargs(active_model)
+            if tool_loop is not None:
+                messages: list[dict[str, Any]] = [*history, *corrections]
+            else:
+                messages = list(base_messages) + corrections
+            schema_kwargs = _response_schema_kwargs(
+                active_model, strict=(backend.trust == "cloud")
+            )
+            turn_kwargs: dict[str, Any] = dict(schema_kwargs)
+            if tool_loop is not None and _tools_for_turn(
+                tool_loop, result.tool_calls_used, result.loop_tokens
+            ):
+                turn_kwargs["tools"] = [dict(tool) for tool in tool_loop.tools]
             try:
                 if run_attempt_fn is not None:
                     attempt = run_attempt_fn(
@@ -1234,7 +1499,7 @@ def _run_backend_loop(
                         glimmer=(backend.model == "glimmer"),
                         egress_filter=egress,
                         read_timeout=backend.read_timeout_seconds,
-                        **schema_kwargs,
+                        **turn_kwargs,
                     )
                 else:
                     attempt = transport_module.run_attempt(
@@ -1246,7 +1511,7 @@ def _run_backend_loop(
                         glimmer=(backend.model == "glimmer"),
                         egress_filter=egress,
                         read_timeout=backend.read_timeout_seconds,
-                        **schema_kwargs,
+                        **turn_kwargs,
                     )
             except EgressBlocked as exc:
                 _release()
@@ -1343,6 +1608,8 @@ def _run_backend_loop(
                         overflow_shrunk = True
                 continue
             result.tries += 1
+            if tool_loop is not None:
+                result.loop_tokens += _turn_tokens(attempt)
             if attempt.error is not None:
                 overflow = _is_context_overflow(attempt.error)
                 error_code = "context_overflow" if overflow else "transport_error"
@@ -1406,6 +1673,93 @@ def _run_backend_loop(
                     },
                 ]
             else:
+                turn_failed_code: str | None = None
+                turn_failed_message = ""
+                if tool_loop is not None and attempt.refusal is not None:
+                    # A non-null refusal is a failed try, never a crash:
+                    # it is recorded with code "refusal" and retried
+                    # through the same-code early stop like any error.
+                    turn_failed_code = "refusal"
+                    turn_failed_message = "model refused the request"
+                elif (
+                    tool_loop is not None
+                    and not attempt.tool_calls
+                    and attempt.tool_call_errors
+                    and attempt.finish_reason == "tool_calls"
+                    and not (attempt.content or "").strip()
+                ):
+                    # The model tried to call tools but every call was
+                    # malformed: a recorded try, not the final answer.
+                    turn_failed_code = "tool_call_error"
+                    turn_failed_message = "model tool call was malformed"
+                if turn_failed_code is not None:
+                    turn_errors = [_err(turn_failed_code, "", turn_failed_message)]
+                    _record_one(
+                        call_id=call_id,
+                        attempt_number=attempt_number,
+                        backend=backend,
+                        purpose=purpose,
+                        context=context,
+                        attempt=attempt,
+                        failed_validator=turn_failed_code,
+                        errors=turn_errors,
+                        outcome="invalid",
+                        reservation_id=hold if billed else None,
+                        database_url=database_url,
+                        prices=prices,
+                    )
+                    if not billed:
+                        _logged_release(hold, call_id, database_url)
+                    hold = None
+                    attempt_number += 1
+                    result.recorded += 1
+                    result.last_errors = turn_errors
+                    result.last_validator = turn_failed_code
+                    result.error_codes.append(turn_failed_code)
+                    result.validators.append(turn_failed_code)
+                    corrections = [
+                        {"role": "assistant", "content": attempt.content or ""},
+                        {
+                            "role": "user",
+                            "content": _correction_message(turn_errors),
+                        },
+                    ]
+                    if len(result.error_codes) >= 2 and (
+                        result.error_codes[-1] == result.error_codes[-2]
+                    ):
+                        break
+                    continue
+                if tool_loop is not None and attempt.tool_calls:
+                    # Intermediate prose next to tool_calls is NOT the
+                    # final answer: record the turn, run the tools, and
+                    # keep looping. The hold is settled before the
+                    # callback runs, so a callback failure leaks nothing.
+                    _record_one(
+                        call_id=call_id,
+                        attempt_number=attempt_number,
+                        backend=backend,
+                        purpose=purpose,
+                        context=context,
+                        attempt=attempt,
+                        failed_validator=None,
+                        errors=[],
+                        outcome="tool_calls",
+                        reservation_id=hold if billed else None,
+                        database_url=database_url,
+                        prices=prices,
+                    )
+                    if not billed:
+                        _logged_release(hold, call_id, database_url)
+                    hold = None
+                    attempt_number += 1
+                    result.recorded += 1
+                    result.tool_calls_used += len(attempt.tool_calls)
+                    tool_messages = tool_loop.on_tool_calls(attempt)
+                    _check_tool_messages(tool_messages)
+                    history.append(_assistant_tool_message(attempt))
+                    history.extend(tool_messages)
+                    corrections = []
+                    continue
                 parsed, syntax_errors = validate_syntax(
                     attempt.content, attempt.finish_reason
                 )
@@ -1586,6 +1940,7 @@ def call_model(
     cap_usd: float | None = None,
     call_id: str | None = None,
     reselect_payload: Callable[[float], Any] | None = None,
+    tool_loop: ToolLoop | None = None,
 ) -> CallOutcome:
     """Run one validated model call for ``purpose`` and return its outcome.
 
@@ -1599,7 +1954,9 @@ def call_model(
     (``run_attempt_fn``, ``backend_override``, ``prices``,
     ``cap_usd``, ``egress_filter``) are keyword-only and default to
     production wiring; the stub-transport tests drive them with no
-    network.
+    network. ``tool_loop``, when given, drives the bounded multi-turn
+    agent loop on the primary backend (no fallback backend is tried:
+    the loop owns its tools, budgets and deadline).
     """
     if purpose not in ("triage", "analysis"):
         raise ValueError(
@@ -1618,6 +1975,8 @@ def call_model(
             f"reasoning_strength must be one of {REASONING_ORDER}, "
             f"got {reasoning_strength!r}"
         )
+    if tool_loop is not None:
+        _check_tool_loop(tool_loop)
     db_url = _resolve_database_url(database_url or context.database_url)
     if context.incident_id is not None:
         stored = signals_for_incident(db_url, context.incident_id)
@@ -1648,6 +2007,7 @@ def call_model(
         reasoning_strength=reasoning_strength,
         cap_usd=cap_usd,
         reselect_payload=reselect_payload,
+        tool_loop=tool_loop,
     )
     if first.resolved_value is not None:
         return CallOutcome(
@@ -1669,8 +2029,15 @@ def call_model(
             model=primary.model,
             failed_validator="security_injection_echo",
         )
-    fallback = _fallback_backend(
-        purpose, primary, fallback_backend_override, backend_override is not None
+    # The agent tool loop runs on the primary backend only: the
+    # fallback backend serves a different purpose (Glimmer takes no
+    # tools) and the loop owns its own budgets and deadline.
+    fallback = (
+        None
+        if tool_loop is not None
+        else _fallback_backend(
+            purpose, primary, fallback_backend_override, backend_override is not None
+        )
     )
     second: _LoopResult | None = None
     if fallback is not None:

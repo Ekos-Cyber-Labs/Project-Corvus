@@ -69,13 +69,14 @@ from corvus.llm.prompts.triage import (
     select_evidence,
 )
 from corvus.llm.schemas import CondensedIncident
-from corvus.state.queue import Job, WorkQueue
+from corvus.state.queue import Job, WorkQueue, heartbeat_interval_for
 
 __all__ = [
     "TRIAGE_JOB_KIND",
     "TriageIncident",
     "enqueue_triage_jobs",
     "load_replay_events_by_uid",
+    "process_incident_triage",
     "process_job",
     "run_loop",
 ]
@@ -144,9 +145,17 @@ def read_incident(database_url: str, incident_id: int) -> TriageIncident | None:
     )
 
 
-def enqueue_triage_jobs(database_url: str, *, limit: int | None = None) -> list[int]:
+def enqueue_triage_jobs(
+    database_url: str,
+    *,
+    limit: int | None = None,
+    incident_ids: Sequence[int] | None = None,
+) -> list[int]:
     """Enqueue one ``triage`` job per incident lacking a triage analysis.
 
+    With ``incident_ids`` only those incidents are considered (each
+    must be an int; an empty list enqueues nothing), so an
+    incident-scoped runner never creates jobs for other incidents.
     Returns the job ids (existing dedupe keys return their original
     job id, so re-running enqueue never duplicates work).
     """
@@ -156,15 +165,25 @@ def enqueue_triage_jobs(database_url: str, *, limit: int | None = None) -> list[
         " LEFT JOIN incident_analyses a ON a.incident_id = i.id"
         " AND a.stage = 'triage'"
         " WHERE a.incident_id IS NULL"
-        " ORDER BY i.id ASC"
     )
-    params: tuple[Any, ...] = ()
+    params: list[Any] = []
+    if incident_ids is not None:
+        wanted: list[int] = []
+        for incident_id in incident_ids:
+            if isinstance(incident_id, bool) or not isinstance(incident_id, int):
+                raise ValueError(f"incident_ids must hold ints, got {incident_id!r}")
+            wanted.append(incident_id)
+        if not wanted:
+            return []
+        query += " AND i.id = ANY(%s)"
+        params.append(wanted)
+    query += " ORDER BY i.id ASC"
     if limit is not None:
         query += " LIMIT %s"
-        params = (limit,)
+        params.append(limit)
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
-            cur.execute(query, params)
+            cur.execute(query, tuple(params))
             missing = [int(row[0]) for row in cur.fetchall()]
     job_ids: list[int] = []
     for incident_id in missing:
@@ -498,12 +517,17 @@ def process_job(
         )
         return "failed"
     lease = _resolve_lease(lease_seconds, backend)
+    if heartbeat_interval is None:
+        # Honor the actually granted lease, never just ``lease``: this
+        # job may have been claimed elsewhere with less (a fire exactly
+        # at expiry already loses the lease).
+        heartbeat_interval = heartbeat_interval_for(job, lease)
     heartbeat = _Heartbeat(
         database_url,
         job.id,
         worker_id,
         lease,
-        heartbeat_interval if heartbeat_interval is not None else lease / 3,
+        heartbeat_interval,
     )
     heartbeat.start()
     stage = "start"
@@ -766,6 +790,64 @@ def process_job(
         return "failed"
     finally:
         heartbeat.stop()
+
+
+def process_incident_triage(
+    database_url: str,
+    incident_id: int,
+    *,
+    lease_seconds: float | None = None,
+    replay_dir: str | Path = "data/replay",
+    reasoning_strength: str | None = None,
+    prices: Mapping[str, Any] | None = None,
+    evidence_loader: (Callable[[TriageIncident], list[dict[str, Any]]] | None) = None,
+    purpose: str = TRIAGE_JOB_KIND,
+    worker_id: str | None = None,
+    backend_override: Any = None,
+) -> str:
+    """Triage exactly one incident; return the outcome status.
+
+    Enqueues a triage job only for ``incident_id`` (nothing is
+    created for other incidents), claims exactly that job, and runs
+    it through :func:`process_job`. Returns ``resolved`` at once when
+    the incident already has a resolved triage, ``busy`` when its job
+    is not claimable (another worker holds it), and the
+    :func:`process_job` status otherwise. Raises :class:`ValueError`
+    for a non-int incident id; backend misconfiguration propagates
+    (no attempts are burned before the backend resolves).
+    """
+    if isinstance(incident_id, bool) or not isinstance(incident_id, int):
+        raise ValueError(f"incident_id must be an int, got {incident_id!r}")
+    if _has_resolved_analysis(database_url, incident_id, purpose):
+        return "resolved"
+    job_ids = enqueue_triage_jobs(database_url, incident_ids=[incident_id])
+    if not job_ids:
+        return "failed"
+    if backend_override is not None:
+        backend = backend_override
+    else:
+        from corvus.llm.config import get_backend
+
+        backend = get_backend(purpose)
+    lease = _resolve_lease(lease_seconds, backend)
+    queue = WorkQueue(database_url)
+    queue.reclaim_expired_leases()
+    active_worker = worker_id or f"triage-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    job = queue.claim_job(job_ids[0], active_worker, lease_seconds=lease)
+    if job is None:
+        return "busy"
+    return process_job(
+        job,
+        database_url=database_url,
+        worker_id=active_worker,
+        lease_seconds=lease_seconds,
+        backend_override=backend,
+        prices=prices,
+        evidence_loader=evidence_loader,
+        replay_dir=replay_dir,
+        reasoning_strength=reasoning_strength,
+        purpose=purpose,
+    )
 
 
 def _install_sigterm_handler(stop: threading.Event) -> dict[int, Any]:

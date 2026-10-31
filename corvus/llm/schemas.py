@@ -1,10 +1,12 @@
-"""Triage response schema: the condensed incident Glimmer produces.
+"""Response schemas: triage condensation (Glimmer) and analysis verdict (Spark).
 
-One structured call per incident, no tools. Every field is bounded
-in length and count so a runaway completion fails schema validation
-instead of filling the database. ``language`` exists because the
-shared semantics validator requires the output language to match the
-request; triage always condenses in English unless asked otherwise.
+One structured call per incident, no tools, for triage; the Spark
+agent loop ends with one validated ``AnalysisVerdict`` after its
+bounded tool turns. Every field is bounded in length and count so a
+runaway completion fails schema validation instead of filling the
+database. ``language`` exists because the shared semantics validator
+requires the output language to match the request; triage always
+condenses in English unless asked otherwise.
 
 Grounding is enforced by :meth:`CondensedIncident.semantic_errors`,
 which :func:`corvus.llm.call.validate_semantics` runs after the
@@ -19,11 +21,13 @@ from __future__ import annotations
 
 import ipaddress
 from collections.abc import Iterator, Mapping
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "AnalysisVerdict",
+    "AnalysisVerdictKind",
     "CondensedEntity",
     "CondensedIncident",
     "KeyEvent",
@@ -33,6 +37,48 @@ __all__ = [
 #: Entity kinds the triage output may cite. Fixed set: anything else
 #: is a schema failure, never a silent pass.
 EntityKind = Literal["host", "user", "ip", "process", "file"]
+
+#: Verdicts the Spark analysis loop may return. Fixed set: anything
+#: else is a schema failure, never a silent pass.
+AnalysisVerdictKind = Literal[
+    "true_positive", "benign_authorized", "false_positive", "needs_human"
+]
+
+#: One response-plan step (a single actionable instruction).
+ResponseStep = Annotated[str, Field(min_length=1, max_length=500)]
+
+#: One visibility-gap or uncertainty note.
+AnalysisNote = Annotated[str, Field(min_length=1, max_length=280)]
+
+
+class AnalysisVerdict(BaseModel):
+    """The final verdict Muse Spark returns for one incident.
+
+    Every field is bounded in length and count so a runaway
+    completion fails schema validation instead of filling the
+    database. ``severity_id`` follows the floor policy enforced by
+    :func:`corvus.llm.call.validate_policy`: at most one level above
+    the deterministic floor, only citing event uids validated as
+    belonging to the incident, never below the floor. Every
+    ``timeline`` entry cites its ``event_uid`` (checked by the
+    generic ``event_uid`` walk in :mod:`corvus.llm.call`). Entities
+    named in free text are pseudonyms (``HOST-``/``USER-``/``IP-``);
+    the agent loop maps them back to real values on-prem only when
+    storing the verdict for the UI — real values never go to the
+    cloud. ``language`` is always emitted explicitly to match the
+    request (``en`` or ``es``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: AnalysisVerdictKind
+    severity_id: int = Field(ge=1, le=6)
+    confidence: float = Field(ge=0.0, le=1.0)
+    timeline: list[TimelineEntry] = Field(default_factory=list, max_length=60)
+    response_plan: list[ResponseStep] = Field(default_factory=list, max_length=20)
+    visibility_gaps: list[AnalysisNote] = Field(default_factory=list, max_length=20)
+    uncertainties: list[AnalysisNote] = Field(default_factory=list, max_length=20)
+    language: Literal["en", "es"] = "en"
 
 
 class CondensedEntity(BaseModel):

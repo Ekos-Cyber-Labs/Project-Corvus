@@ -301,3 +301,134 @@ def test_registered_typed_entity_hidden_in_other_free_text(
     pseudo.register([("host", "jump01"), ("user", "frank")])
     out = pseudo.pseudonymize({"note": "seen from jump host jump01 by frank"})
     assert out == {"note": "seen from jump host HOST-0001 by USER-0001"}
+
+
+#: Registered names per kind for the sentence-punctuation sweep.
+_SENTENCE_NAMES: dict[str, list[str]] = {
+    "host": ["workstation5", "workstation6"],
+    "user": ["svc-backup", "operator2"],
+    "ip": ["10.0.0.5", "10.0.0.6"],
+    "domain": ["theshire.local", "shire.example.com"],
+    "email": ["operator@theshire.local", "admin@shire.example.com"],
+}
+
+#: Ten sentence templates: end punctuation, commas, brackets and pairs.
+_SENTENCE_TEMPLATES: list[str] = [
+    "tool on {name}.",
+    "tool on {name}?",
+    "tool on {name}!",
+    "tool on {name}, then more",
+    "tool on {name}; then more",
+    "tool on {name}: done",
+    "({name}) did it",
+    "[{name}] did it",
+    "on {name}. {other}.",
+    "{name}...\nnext line",
+]
+
+
+def test_sentence_punctuation_keeps_no_raw_name(pseudo_db: Any) -> None:
+    """Property-style sweep: no template leaks any registered name."""
+    pseudo, _ = pseudo_db
+    known: dict[tuple[str, str], str] = {}
+    for kind, names in _SENTENCE_NAMES.items():
+        for raw in names:
+            created = pseudo.get_or_create(kind, raw)
+            assert created is not None
+            known[(kind, raw)] = created
+    raws = [raw for names in _SENTENCE_NAMES.values() for raw in names]
+    for (kind, raw), _ in known.items():
+        others = [item for item in _SENTENCE_NAMES[kind] if item != raw]
+        other = others[0] if others else raw
+        for template in _SENTENCE_TEMPLATES:
+            text = template.format(name=raw, other=other)
+            out = pseudo.pseudonymize({"t": text})["t"]
+            assert isinstance(out, str)
+            for leaked in raws:
+                assert leaked not in out, f"{template!r} leaks {leaked!r}"
+
+
+def test_sentence_punctuation_exact_replacement(pseudo_db: Any) -> None:
+    """Each template replaces the name and keeps its punctuation."""
+    pseudo, _ = pseudo_db
+    host = pseudo.get_or_create("host", "workstation5")
+    assert host is not None
+    other = pseudo.get_or_create("host", "workstation6")
+    assert other is not None
+    cases = [
+        ("tool on workstation5.", f"tool on {host}."),
+        ("tool on workstation5?", f"tool on {host}?"),
+        ("tool on workstation5!", f"tool on {host}!"),
+        ("tool on workstation5, then more", f"tool on {host}, then more"),
+        ("tool on workstation5; then more", f"tool on {host}; then more"),
+        ("tool on workstation5: done", f"tool on {host}: done"),
+        ("(workstation5) did it", f"({host}) did it"),
+        ("[workstation5] did it", f"[{host}] did it"),
+        (
+            "on workstation5. workstation6.",
+            f"on {host}. {other}.",
+        ),
+        ("workstation5...\nnext line", f"{host}...\nnext line"),
+    ]
+    for text, expected in cases:
+        assert pseudo.pseudonymize({"t": text}) == {"t": expected}
+
+
+def test_real_sentence_from_live_request(pseudo_db: Any) -> None:
+    """The live Glimmer sentence that sent a real host to the cloud."""
+    pseudo, _ = pseudo_db
+    pseudo.register([("host", "workstation5")])
+    out = pseudo.pseudonymize(
+        {"t": "ADSI-Cache file creation by uncommon tool on workstation5."}
+    )
+    assert out["t"].endswith(".")
+    assert "workstation5" not in out["t"]
+    assert out == {"t": "ADSI-Cache file creation by uncommon tool on HOST-0001."}
+
+
+def test_fqdn_trailing_dot_is_one_unit(pseudo_db: Any) -> None:
+    """A dotted name matches as one unit, never split at the last dot."""
+    pseudo, _ = pseudo_db
+    pseudo.register([("host", "workstation5.theshire.local")])
+    out = pseudo.pseudonymize({"t": "on workstation5.theshire.local."})
+    assert out == {"t": "on HOST-0001."}
+
+
+def test_sentence_case_variants(pseudo_db: Any) -> None:
+    """Upper, lower and mixed case all match at a sentence end."""
+    pseudo, _ = pseudo_db
+    pseudo.register([("host", "workstation5")])
+    for text in ("on WORKSTATION5.", "on Workstation5.", "on workstation5."):
+        out = pseudo.pseudonymize({"t": text})["t"]
+        assert isinstance(out, str)
+        assert "workstation5" not in out.lower()
+        assert out == "on HOST-0001."
+
+
+def test_longer_tokens_never_match(pseudo_db: Any) -> None:
+    """An entity inside a longer token stays untouched, dot or not."""
+    pseudo, _ = pseudo_db
+    pseudo.register([("host", "workstation5")])
+    for text in (
+        "on workstation55.",
+        "on myworkstation5.",
+        "on workstation5x.",
+        "on workstation55, then",
+    ):
+        assert pseudo.pseudonymize({"t": text}) == {"t": text}
+
+
+def test_sentence_quotes_braces_tab_and_edges(pseudo_db: Any) -> None:
+    """Quotes, braces, tabs and start/end positions all replace."""
+    pseudo, _ = pseudo_db
+    pseudo.register([("host", "workstation5")])
+    cases = [
+        ("tool 'workstation5'.", "tool 'HOST-0001'."),
+        ('say "workstation5".', 'say "HOST-0001".'),
+        ("{workstation5} ran", "{HOST-0001} ran"),
+        ("workstation5\tdid", "HOST-0001\tdid"),
+        ("workstation5 is down", "HOST-0001 is down"),
+        ("down is workstation5", "down is HOST-0001"),
+    ]
+    for text, expected in cases:
+        assert pseudo.pseudonymize({"t": text}) == {"t": expected}
