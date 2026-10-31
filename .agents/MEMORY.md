@@ -985,3 +985,24 @@ rules back to Wazuh (shadow first, human approval).
   API with strict CSP, and the React+Vite SPA under `ui/` served by
   the same FastAPI app. Compose Postgres left running. Awaiting
   maintainer commit.
+- 2026-10-30: registry-quality fix (llm-engineer, then
+  security-reviewer pass; no paid API call). File and executable
+  names and non-host path components never register as host or
+  domain; free-text FQDN registration needs a real public suffix;
+  one host token covers the short host and its FQDN form, including
+  the typed host field. Triage-model entities register only on a
+  canonical match with typed event fields (drops counted in a log
+  line, no values). `get_events` with no entity filter now lists
+  only this run's allowlisted pseudonyms and its schema says at
+  least one filter is required. Analysis claiming is scoped to the
+  requested incident's job, so concurrent analyses cannot steal
+  jobs. Added the dry-run-by-default `corvus db clean-pseudonyms`
+  one-off (referenced rows kept, counts only). New tests: 14 in a
+  new registry suite (including a bounded replay-store check that
+  registers no file-named host/domain rows), plus 1 tool test and
+  1 concurrent-analysis test; 2 pre-existing assertions updated to
+  the new file-name behaviour. Verified with `make lint` (green)
+  and the full `make test` (800 passed with Postgres) and
+  `pre-commit run gitleaks --all-files` (Passed). No normalizer or
+  correlation change, so no eval delta. Compose Postgres left
+  running. Awaiting maintainer commit.

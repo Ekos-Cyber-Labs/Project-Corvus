@@ -52,8 +52,9 @@ matches.
 
 Before that replacement, :func:`scan_entities` finds entities that
 appear only in free text: IPv4 and IPv6 literals, e-mail addresses,
-FQDNs (two or more labels, last label two or more ASCII letters),
-UNC hosts, ``DOMAIN\\user`` spans, Windows profile and Unix home
+FQDNs whose last label is a real public suffix (never a file
+extension or a non-host path component), UNC hosts,
+``DOMAIN\\user`` spans, Windows profile and Unix home
 path owners, and the user arguments of ``net user``, ``/user:``,
 ``runas /user:``, ssh/scp ``-u`` and bare ``user@host`` forms. Each
 hit is looked up with its kind, so it is hidden even when no typed
@@ -61,9 +62,24 @@ field names it. Bare words in no recognizable position (``jump01``
 in ``seen from jump host jump01``) cannot be found
 deterministically: they are hidden only when the caller registers
 the incident's typed entities first (see :meth:`Pseudonymizer.register`).
-File-like two-label names (``a.sh`` in ``scp a.sh``) match the FQDN
-shape and are pseudonymized as domains; telling them apart from real
-names is undecidable syntactically, so the scanner fails closed.
+File and executable names are never entities: a dotted name whose
+last label is in :data:`FILE_EXTENSIONS` (``plink.exe``, ``a.sh``)
+and any non-host path component (``winlogon.exe`` in
+``C:\\Windows\\System32\\winlogon.exe``, ``Desktop`` in
+``C:\\Users\\ieuser\\Desktop``) creates no host or domain row and
+reaches the model verbatim. A free-text FQDN registers as a domain
+only when its last label is a real public suffix
+(:func:`is_public_fqdn`); an internal FQDN such as
+``pc01.example.corp`` creates no domain row from free text, but is
+hidden by the host-suffix rule when ``pc01`` is already a registered
+host. Host canonicalization strips the suffix, so a host seen as
+``pc01`` and as ``pc01.example.corp`` is one ``HOST-`` token
+everywhere, including the typed ``host`` field: that field is
+replaced through :data:`FIELD_KINDS` with the canonical host's
+pseudonym, so the model can pass the same token back to
+``get_events``. A host literally named like a path component
+(``desktop``) still pseudonymizes from the typed host field; the
+identical spelling inside a path stays verbatim.
 """
 
 from __future__ import annotations
@@ -83,9 +99,14 @@ from corvus.normalize.ocsf import (
 __all__ = [
     "EMAIL_PATTERN",
     "FIELD_KINDS",
+    "FILE_EXTENSIONS",
     "KINDS",
     "PREFIX",
+    "PUBLIC_SUFFIXES",
     "Pseudonymizer",
+    "is_file_like_name",
+    "is_public_fqdn",
+    "purge_file_pseudonyms",
     "scan_entities",
 ]
 
@@ -154,6 +175,590 @@ PSEUDONYM_PATTERN = re.compile(r"\b(HOST|USER|IP|DOMAIN|EMAIL)-(\d+)\b")
 
 #: Loose email shape check (full validation is not needed for lookup).
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+#: File extensions: a dotted name ending in one of these is a file,
+#: never a host or a domain, wherever it is seen. This list is the
+#: registration deny-list; telling ``plink.exe`` from a host is
+#: decidable precisely because the extension is in this set.
+FILE_EXTENSIONS = frozenset(
+    {
+        "exe",
+        "dll",
+        "sys",
+        "bat",
+        "cmd",
+        "ps1",
+        "vbs",
+        "js",
+        "jse",
+        "wsf",
+        "wsh",
+        "msi",
+        "lnk",
+        "scr",
+        "tmp",
+        "log",
+        "txt",
+        "dat",
+        "ini",
+        "zip",
+        "rar",
+        "7z",
+        "tar",
+        "gz",
+        "bz2",
+        "xz",
+        "jar",
+        "war",
+        "py",
+        "pyc",
+        "sh",
+        "bash",
+        "zsh",
+        "rb",
+        "pl",
+        "php",
+        "asp",
+        "aspx",
+        "jsp",
+        "class",
+        "o",
+        "so",
+        "dylib",
+        "app",
+        "dmg",
+        "iso",
+        "img",
+        "vhd",
+        "vhdx",
+        "mdf",
+        "bin",
+        "run",
+        "deb",
+        "rpm",
+        "cab",
+        "doc",
+        "docx",
+        "xls",
+        "xlsx",
+        "ppt",
+        "pptx",
+        "pdf",
+        "csv",
+        "xml",
+        "json",
+        "yaml",
+        "yml",
+        "html",
+        "htm",
+        "css",
+        "scss",
+        "ts",
+        "tsx",
+        "jsx",
+        "vue",
+        "lock",
+        "cfg",
+        "conf",
+        "reg",
+        "inf",
+        "drv",
+        "fon",
+        "ttf",
+        "otf",
+        "db",
+        "sqlite",
+    }
+)
+
+#: Real public suffixes (IANA-style top-level labels) for free-text
+#: FQDN registration. A two-letter label is a country-code suffix.
+#: Anything else (``corp``, ``local``, ``example``, a file extension)
+#: is not a public suffix: such an FQDN creates no domain row from
+#: free text. It is still hidden when its short label is a host
+#: already registered from a typed field (the host-suffix rule).
+PUBLIC_SUFFIXES = frozenset(
+    {
+        "com",
+        "net",
+        "org",
+        "edu",
+        "gov",
+        "mil",
+        "int",
+        "io",
+        "ai",
+        "co",
+        "me",
+        "tv",
+        "cc",
+        "info",
+        "biz",
+        "name",
+        "pro",
+        "aero",
+        "asia",
+        "cat",
+        "coop",
+        "jobs",
+        "mobi",
+        "museum",
+        "tel",
+        "travel",
+        "post",
+        "geo",
+        "app",
+        "dev",
+        "page",
+        "xyz",
+        "online",
+        "site",
+        "top",
+        "club",
+        "shop",
+        "store",
+        "tech",
+        "cloud",
+        "digital",
+        "email",
+        "group",
+        "live",
+        "news",
+        "press",
+        "media",
+        "today",
+        "world",
+        "company",
+        "network",
+        "systems",
+        "solutions",
+        "services",
+        "support",
+        "center",
+        "agency",
+        "direct",
+        "global",
+        "life",
+        "space",
+        "website",
+        "blog",
+        "art",
+        "audio",
+        "auto",
+        "bank",
+        "bar",
+        "beer",
+        "bid",
+        "bike",
+        "blue",
+        "boo",
+        "box",
+        "build",
+        "buzz",
+        "cards",
+        "care",
+        "cash",
+        "chat",
+        "city",
+        "claims",
+        "cleaning",
+        "click",
+        "clinic",
+        "clothing",
+        "coach",
+        "codes",
+        "coffee",
+        "college",
+        "community",
+        "computer",
+        "condos",
+        "construction",
+        "consulting",
+        "contact",
+        "cool",
+        "country",
+        "coupons",
+        "courses",
+        "credit",
+        "cricket",
+        "cruises",
+        "dance",
+        "date",
+        "dating",
+        "day",
+        "deals",
+        "degree",
+        "delivery",
+        "democrat",
+        "dental",
+        "dentist",
+        "design",
+        "diamonds",
+        "directory",
+        "discount",
+        "doctor",
+        "dog",
+        "domains",
+        "earth",
+        "education",
+        "energy",
+        "engineer",
+        "engineering",
+        "enterprises",
+        "equipment",
+        "estate",
+        "events",
+        "everyone",
+        "exchange",
+        "expert",
+        "exposed",
+        "express",
+        "fail",
+        "faith",
+        "family",
+        "fans",
+        "farm",
+        "fashion",
+        "feedback",
+        "finance",
+        "financial",
+        "fish",
+        "fishing",
+        "fit",
+        "fitness",
+        "flights",
+        "florist",
+        "flowers",
+        "fly",
+        "football",
+        "forsale",
+        "forum",
+        "foundation",
+        "fun",
+        "fund",
+        "furniture",
+        "futbol",
+        "fyi",
+        "gallery",
+        "game",
+        "games",
+        "garden",
+        "gay",
+        "gifts",
+        "gives",
+        "glass",
+        "gle",
+        "gmbh",
+        "gold",
+        "golf",
+        "graphics",
+        "gratis",
+        "green",
+        "gripe",
+        "guide",
+        "guitars",
+        "guru",
+        "haus",
+        "health",
+        "healthcare",
+        "help",
+        "hiphop",
+        "hiring",
+        "history",
+        "hockey",
+        "holdings",
+        "holiday",
+        "homes",
+        "horse",
+        "hospital",
+        "host",
+        "hosting",
+        "house",
+        "how",
+        "ic",
+        "immo",
+        "immobilien",
+        "industries",
+        "ink",
+        "institute",
+        "insure",
+        "international",
+        "investments",
+        "irish",
+        "jewelry",
+        "juegos",
+        "kaufen",
+        "kitchen",
+        "land",
+        "lawyer",
+        "lease",
+        "legal",
+        "lgbt",
+        "lighting",
+        "limited",
+        "limo",
+        "living",
+        "loan",
+        "loans",
+        "lol",
+        "love",
+        "ltd",
+        "luxe",
+        "luxury",
+        "maison",
+        "management",
+        "market",
+        "marketing",
+        "markets",
+        "marriage",
+        "mba",
+        "memorial",
+        "men",
+        "menu",
+        "mint",
+        "moda",
+        "moe",
+        "mom",
+        "money",
+        "monster",
+        "mortgage",
+        "moscow",
+        "motorcycles",
+        "mov",
+        "movie",
+        "nagoya",
+        "navy",
+        "ninja",
+        "now",
+        "observer",
+        "okinawa",
+        "one",
+        "ong",
+        "onl",
+        "ooo",
+        "open",
+        "organic",
+        "partners",
+        "parts",
+        "party",
+        "pet",
+        "pharmacy",
+        "photo",
+        "photography",
+        "photos",
+        "physio",
+        "pics",
+        "pictures",
+        "pink",
+        "pizza",
+        "place",
+        "plumbing",
+        "plus",
+        "poker",
+        "porn",
+        "productions",
+        "prof",
+        "properties",
+        "property",
+        "protection",
+        "pub",
+        "qpon",
+        "quebec",
+        "quest",
+        "racing",
+        "radio",
+        "realty",
+        "recipes",
+        "red",
+        "rehab",
+        "reise",
+        "reisen",
+        "rent",
+        "rentals",
+        "repair",
+        "report",
+        "republican",
+        "restaurant",
+        "review",
+        "reviews",
+        "rip",
+        "rocks",
+        "rodeo",
+        "rugby",
+        "run",
+        "ryukyu",
+        "sale",
+        "salon",
+        "sar",
+        "school",
+        "science",
+        "security",
+        "select",
+        "sex",
+        "sexy",
+        "shoes",
+        "shopping",
+        "show",
+        "singles",
+        "ski",
+        "soccer",
+        "social",
+        "software",
+        "solar",
+        "soy",
+        "sport",
+        "storage",
+        "stream",
+        "studio",
+        "study",
+        "style",
+        "sucks",
+        "supplies",
+        "supply",
+        "surf",
+        "surgery",
+        "tattoo",
+        "tax",
+        "taxi",
+        "team",
+        "technology",
+        "tennis",
+        "theater",
+        "theatre",
+        "tickets",
+        "tienda",
+        "tips",
+        "tires",
+        "tokyo",
+        "tools",
+        "tours",
+        "town",
+        "toys",
+        "trade",
+        "training",
+        "tube",
+        "university",
+        "uno",
+        "vacations",
+        "vegas",
+        "ventures",
+        "versicherung",
+        "vet",
+        "viajes",
+        "video",
+        "villas",
+        "vin",
+        "vip",
+        "vision",
+        "vodka",
+        "vote",
+        "voting",
+        "voto",
+        "voyage",
+        "watch",
+        "webcam",
+        "wedding",
+        "wiki",
+        "win",
+        "wine",
+        "work",
+        "works",
+        "wow",
+        "wtf",
+        "yachts",
+        "yoga",
+        "yokohama",
+        "zone",
+    }
+)
+
+
+def is_file_like_name(value: str) -> bool:
+    """True when ``value``'s last path segment ends in a file extension."""
+    text = (value or "").strip().rstrip(".")
+    if not text:
+        return False
+    segment = re.split(r"[\\/]", text)[-1]
+    if "." not in segment:
+        return False
+    return segment.rsplit(".", 1)[-1].lower() in FILE_EXTENSIONS
+
+
+def is_public_fqdn(value: str) -> bool:
+    """True when ``value`` is an FQDN whose last label is a public suffix."""
+    text = (value or "").strip().lower().rstrip(".")
+    labels = text.split(".")
+    if len(labels) < 2 or any(not label for label in labels):
+        return False
+    last = labels[-1]
+    if len(last) < 2 or not last.isalpha():
+        return False
+    if last in FILE_EXTENSIONS:
+        return False
+    return last in PUBLIC_SUFFIXES or len(last) == 2
+
+
+def _token_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """Expand ``(start, end)`` to the whitespace-delimited token around it."""
+    begin = start
+    while begin > 0 and not text[begin - 1].isspace() and text[begin - 1] not in "\"'":
+        begin -= 1
+    stop = end
+    while stop < len(text) and not text[stop].isspace() and text[stop] not in "\"'":
+        stop += 1
+    return begin, stop
+
+
+def _is_path_component(text: str, start: int, end: int, kind: str) -> bool:
+    """True when the span at ``(start, end)`` is a non-host path component.
+
+    Host positions stay replaceable: a UNC first component
+    (``\\\\HOST\\share``), a URL host (``https://HOST/path``) and a
+    profile/home owner (``C:\\Users\\USER\\...``, ``/home/USER/...``).
+    Every other component of a token holding a path separator is a
+    file or directory name and is never an entity.
+    """
+    if kind in ("email", "ip"):
+        return False
+    begin, stop = _token_bounds(text, start, end)
+    token = text[begin:stop]
+    if "\\" not in token and "/" not in token:
+        return False
+    rel_start, rel_end = start - begin, end - begin
+    if token[rel_end : rel_end + 2] in (":/", ":\\"):
+        return False
+    if "://" in token:
+        host_start = token.index("://") + 3
+        host_end = token.find("/", host_start)
+        if host_end == -1:
+            host_end = len(token)
+        host_end = min(
+            host_end,
+            token.find(":", host_start) if ":" in token[host_start:] else host_end,
+        )
+        return not (rel_start >= host_start and rel_end <= host_end)
+    if rel_start != rel_end and ("\\" in text[start:end] or "/" in text[start:end]):
+        return False
+    comps = [(m.start(), m.end(), m.group(0)) for m in re.finditer(r"[^\\/]+", token)]
+    index = next(
+        (i for i, (cs, ce, _) in enumerate(comps) if cs <= rel_start < ce),
+        None,
+    )
+    if index is None:
+        return False
+    if (
+        index > 0
+        and kind == "user"
+        and comps[index - 1][2].lower() in ("users", "home")
+    ):
+        return False
+    if index == 0:
+        prefix = token[: comps[0][0]]
+        if prefix.endswith(("\\\\", "//")):
+            return False
+        return len(comps) > 1
+    return True
+
 
 _LOCK_KEY = "corvus:pseudonyms"
 
@@ -299,6 +904,10 @@ def scan_entities(text: str) -> list[tuple[str, str]]:
     for match in _SCAN_USER_AT_HOST.finditer(text):
         _hit(match, 8, "user")
     for match in _SCAN_FQDN.finditer(text):
+        if not is_public_fqdn(match.group(0)):
+            continue
+        if _is_path_component(text, match.start(), match.end(), "domain"):
+            continue
         _hit(match, 9, "domain")
     spans.sort(key=lambda span: (span[0], -span[1], span[2]))
     kept: list[tuple[str, str]] = []
@@ -359,6 +968,8 @@ class Pseudonymizer:
                 raise TypeError(
                     f"value must be a string, got {type(raw_value).__name__}"
                 )
+            if kind in ("host", "domain") and is_file_like_name(raw_value):
+                continue
             canonical = _canonical(kind, raw_value)
             if canonical is not None:
                 pairs.append((kind, canonical))
@@ -366,6 +977,11 @@ class Pseudonymizer:
 
     def _ensure_many(self, items: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
         """Map each (kind, canonical) pair, allocating missing numbers."""
+        items = [
+            (kind, canonical)
+            for kind, canonical in items
+            if not (kind == "domain" and is_file_like_name(canonical))
+        ]
         ordered: list[tuple[str, str]] = list(dict.fromkeys(items))
         if not ordered:
             return {}
@@ -445,7 +1061,37 @@ class Pseudonymizer:
         dumped = payload.model_dump() if hasattr(payload, "model_dump") else payload
         collected: list[tuple[str, str, str]] = []
         self._collect(dumped, collected)
-        known = self._known_map()
+        collected = [
+            (kind, canonical, raw)
+            for kind, canonical, raw in collected
+            if not (kind in ("host", "domain") and is_file_like_name(raw))
+        ]
+        known = {
+            value: entry
+            for value, entry in self._known_map().items()
+            if not (entry[1] in ("host", "domain") and is_file_like_name(value))
+        }
+        _host_values = {
+            value for value, (_, kind) in known.items() if kind == "host"
+        } | {canonical for kind, canonical, _ in collected if kind == "host"}
+        known = {
+            value: entry
+            for value, entry in known.items()
+            if not (
+                entry[1] == "domain"
+                and (short := canonicalize_host(value)) is not None
+                and short in _host_values
+            )
+        }
+        collected = [
+            (kind, canonical, raw)
+            for kind, canonical, raw in collected
+            if not (
+                kind == "domain"
+                and (short := canonicalize_host(raw)) is not None
+                and short in _host_values
+            )
+        ]
         known_hosts = {value for value, (_, kind) in known.items() if kind == "host"}
         structured_hosts = {
             canonical for kind, canonical, _ in collected if kind == "host"
@@ -597,6 +1243,77 @@ class Pseudonymizer:
         )
 
 
+def purge_file_pseudonyms(database_url: str, *, apply: bool = False) -> dict[str, int]:
+    """One-off cleanup of wrong pseudonym rows; counts only, no values.
+
+    Candidates are ``host``/``domain`` rows whose value is file-like
+    (a known file extension), holds a path separator, or is a domain
+    whose short label is already a registered host. A candidate whose
+    pseudonym token appears in a stored analysis payload or a
+    persisted agent step is *kept* (it is referenced by stored
+    analyses, so deleting it would lose the reveal mapping); new runs
+    already ignore such rows when building the replacement table, so
+    kept rows cannot poison them. With ``apply`` the unreferenced
+    candidates are deleted in one transaction; without it nothing is
+    written. Returns candidate / referenced-kept / deleted counts.
+    """
+    if not database_url:
+        raise ValueError("purge_file_pseudonyms needs a database URL")
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT entity_kind, entity_value, pseudonym FROM pseudonyms")
+            rows = [(str(k), str(v), str(p)) for k, v, p in cur.fetchall()]
+            hosts = {value for kind, value, _ in rows if kind == "host"}
+            candidates: list[str] = []
+            for kind, value, pseudonym in rows:
+                if kind not in ("host", "domain"):
+                    continue
+                wrong = (
+                    is_file_like_name(value)
+                    or "\\" in value
+                    or "/" in value
+                    or (
+                        kind == "domain"
+                        and (short := canonicalize_host(value)) is not None
+                        and short in hosts
+                        and short != value
+                    )
+                )
+                if wrong:
+                    candidates.append(pseudonym)
+            kept = 0
+            deletable: list[str] = []
+            for pseudonym in candidates:
+                pattern = f"%{pseudonym}%"
+                cur.execute(
+                    "SELECT EXISTS(SELECT 1 FROM incident_analyses"
+                    " WHERE payload::text LIKE %s)"
+                    " OR EXISTS(SELECT 1 FROM agent_steps"
+                    " WHERE arguments::text LIKE %s"
+                    " OR COALESCE(result_summary, '') LIKE %s)",
+                    (pattern, pattern, pattern),
+                )
+                row = cur.fetchone()
+                if row is not None and bool(row[0]):
+                    kept += 1
+                else:
+                    deletable.append(pseudonym)
+            deleted = 0
+            if apply and deletable:
+                cur.execute(
+                    "DELETE FROM pseudonyms WHERE pseudonym = ANY(%s)",
+                    (deletable,),
+                )
+                deleted = int(cur.rowcount)
+        conn.commit()
+    return {
+        "candidates": len(candidates),
+        "referenced_kept": kept,
+        "deleted": deleted if apply else 0,
+        "deletable": len(deletable),
+    }
+
+
 def _suffix_number(pseudonym: str) -> int | None:
     """Parse the trailing ``-NNNN`` counter of a pseudonym."""
     head, sep, tail = pseudonym.rpartition("-")
@@ -648,8 +1365,17 @@ def _replace_free_text(text: str, table: dict[str, tuple[str, str]]) -> str:
             flags,
         )
 
-        def _emit(match: re.Match[str], pseudo: str = pseudonym) -> str:
-            return pseudo + (match.group("punct") or "")
+        def _emit(
+            match: re.Match[str],
+            pseudo: str = pseudonym,
+            kind: str = kind,
+            source: str = text,
+        ) -> str:
+            punct = match.group("punct") or ""
+            core_end = match.end() - len(punct)
+            if _is_path_component(source, match.start(), core_end, kind):
+                return match.group(0)
+            return pseudo + punct
 
         text = pattern.sub(_emit, text)
     return text

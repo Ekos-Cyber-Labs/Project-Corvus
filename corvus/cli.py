@@ -21,6 +21,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("DATABASE_URL"),
         help="Postgres URL (default: $DATABASE_URL).",
     )
+    clean_pseudo = db_sub.add_parser(
+        "clean-pseudonyms",
+        help="Report (and with --apply, delete) unreferenced file-like "
+        "pseudonym rows; counts only, never values.",
+    )
+    clean_pseudo.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    clean_pseudo.add_argument(
+        "--apply",
+        action="store_true",
+        help="Delete the unreferenced candidate rows (default: dry run).",
+    )
 
     attack = sub.add_parser("attack", help="ATT&CK dictionary commands.")
     attack_sub = attack.add_subparsers(dest="attack_command", required=True)
@@ -332,6 +347,19 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"applied {name}")
         else:
             print("up to date")
+        return 0
+    if args.command == "db" and args.db_command == "clean-pseudonyms":
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        from corvus.guardrails.pseudonymizer import purge_file_pseudonyms
+
+        counts = purge_file_pseudonyms(args.database_url, apply=args.apply)
+        mode = "applied" if args.apply else "dry run"
+        print(
+            f"clean-pseudonyms ({mode}): {counts['candidates']} candidates, "
+            f"{counts['referenced_kept']} referenced kept, "
+            f"{counts['deleted']} deleted"
+        )
         return 0
     if args.command == "attack" and args.attack_command == "build":
         from corvus.attack import build as attack_build

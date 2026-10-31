@@ -53,6 +53,7 @@ from corvus.guardrails.pseudonymizer import (
     Pseudonymizer,
     canonicalize_domain,
     canonicalize_email,
+    is_file_like_name,
     scan_entities,
 )
 from corvus.llm.prompts.triage import (
@@ -146,7 +147,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": GET_EVENTS_NAME,
             "description": (
                 "Query incident events by pseudonymized entity, ISO-8601 "
-                "time window and OCSF classes (limit <= 200). Entity "
+                "time window and OCSF classes (limit <= 200). At least "
+                "one of host, user or ip is required. Entity "
                 "filters take HOST-/USER-/IP- pseudonyms only, never raw "
                 "values, and only pseudonyms already shown in this run. "
                 "Only classes present in the source inventory for "
@@ -199,9 +201,13 @@ def collect_incident_entities(
     flat loader columns, the compact
     :func:`corvus.llm.prompts.triage.project_event` projection
     (``host``, ``user``, ``user_domain`` as domain, ``src``/``dst`` as
-    ip with any port stripped), and :func:`scan_entities` over the
-    serialized record for entity-shaped spans (e-mails, domains, IP
-    literals, ``DOMAIN\\\\user`` forms) in recognizable positions. The
+    ip with any port stripped), and :func:`scan_entities` over each
+    string leaf of the record (never the serialized JSON, so keys
+    register nothing) for entity-shaped spans (IP literals, e-mails,
+    public-suffix FQDNs, ``DOMAIN\\\\user`` forms) in recognizable
+    positions. File names and non-host path components register
+    nothing, and a scanned domain whose short label is a typed host
+    is dropped (the host token covers its FQDN form). The
     caller registers the result through
     :meth:`Pseudonymizer.register` before any cloud payload is built,
     so a bare word typed in one event is hidden in another event's
@@ -213,6 +219,8 @@ def collect_incident_entities(
 
     def _add(kind: str, raw: Any) -> None:
         if not isinstance(raw, str) or not raw.strip():
+            return
+        if kind in ("host", "domain") and is_file_like_name(raw):
             return
         key = (kind, raw)
         if key not in seen:
@@ -229,9 +237,11 @@ def collect_incident_entities(
                 bare = head.strip("[]")
         _add("ip", bare)
 
+    typed_items: list[Mapping[str, Any]] = []
     for item in items:
         if not isinstance(item, Mapping):
             continue
+        typed_items.append(item)
         _add("host", item.get("host"))
         _add("user", item.get("user"))
         for column in ("ip", "src_ip", "dst_ip"):
@@ -246,13 +256,39 @@ def collect_incident_entities(
             _add("domain", projected.get("user_domain"))
             _add_ip(projected.get("src"))
             _add_ip(projected.get("dst"))
+    typed_hosts = {
+        canonical
+        for kind, raw in pairs
+        if kind == "host" and (canonical := canonicalize_host(raw)) is not None
+    }
+
+    def _leaves(value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, Mapping):
+            out: list[str] = []
+            for item in value.values():
+                out.extend(_leaves(item))
+            return out
+        if isinstance(value, (list, tuple)):
+            out = []
+            for item in value:
+                out.extend(_leaves(item))
+            return out
+        return []
+
+    for item in typed_items:
         data = item.get("data")
-        if isinstance(data, Mapping):
-            try:
-                text = json.dumps(data, sort_keys=True, default=str)
-            except TypeError, ValueError:
-                continue
-            for kind, raw in scan_entities(text):
+        if not isinstance(data, Mapping):
+            continue
+        for leaf in _leaves(data):
+            for kind, raw in scan_entities(leaf):
+                if kind in ("host", "domain") and is_file_like_name(raw):
+                    continue
+                if kind == "domain":
+                    short = canonicalize_host(raw)
+                    if short is not None and short in typed_hosts:
+                        continue
                 _add(kind, raw)
     # Keep only values that canonicalize (placeholders never register).
     kept: list[tuple[str, str]] = []
@@ -463,9 +499,17 @@ def _run_get_events(
                 filter_field, arguments[filter_field], context, allowed
             )
     if not filters:
+        valid_tokens = sorted(
+            token
+            for token in allowed
+            if (match := _PSEUDO_FULL.fullmatch(token)) is not None
+            and match.group(1) in _ALLOWLIST_PREFIXES
+        )
+        valid = ", ".join(valid_tokens) if valid_tokens else "none shown yet"
         return (
             "error: at least one of host, user or ip is required "
-            "(as HOST-/USER-/IP- pseudonyms)",
+            "(as HOST-/USER-/IP- pseudonyms); "
+            f"valid pseudonyms for this run: {valid}",
             empty,
         )
     start = _parse_tool_time(arguments.get("start"), "start")

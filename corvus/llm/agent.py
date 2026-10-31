@@ -71,7 +71,12 @@ from corvus.guardrails.injection import (
     scan_incident,
     signals_for_incident,
 )
-from corvus.guardrails.pseudonymizer import Pseudonymizer, scan_entities
+from corvus.guardrails.pseudonymizer import (
+    Pseudonymizer,
+    canonicalize_domain,
+    canonicalize_email,
+    is_file_like_name,
+)
 from corvus.llm.call import CallContext, ToolLoop, call_model
 from corvus.llm.config import BackendConfig
 from corvus.llm.price_book import ModelPrice
@@ -85,6 +90,7 @@ from corvus.llm.tools import (
     execute_tool_calls,
 )
 from corvus.llm.transport import Attempt
+from corvus.normalize.ocsf import canonicalize_host, canonicalize_ip, canonicalize_user
 from corvus.state.queue import Job, WorkQueue, heartbeat_interval_for
 
 __all__ = [
@@ -123,9 +129,6 @@ MAX_TOOL_CALLS_VAR = "ANALYSIS_MAX_TOOL_CALLS"
 TOKEN_BUDGET_VAR = "ANALYSIS_AGENT_TOKEN_BUDGET"
 TIMEOUT_VAR = "ANALYSIS_AGENT_TIMEOUT_SECONDS"
 MAX_TURNS_VAR = "ANALYSIS_MAX_TURNS"
-
-#: Safety cap on queue-drain rounds in :func:`run_analysis`.
-MAX_AGENT_CLAIM_ROUNDS = 1000
 
 #: Claim lease when the backend cannot be resolved (its failure ends
 #: pending_ai before any model call, so the lease barely matters).
@@ -508,43 +511,81 @@ def _incident_entities(
     """Collect the whole incident's typed entities for registration.
 
     Loader rows give the typed entities (see
-    :func:`collect_incident_entities`); the triage's own typed
-    entities are added as well (they were grounded in the evidence
-    at triage time, so they stay covered even when the loader finds
-    nothing), plus entity-shaped spans in the condensed triage text,
-    so a name the triage wrote down is hidden in another event's
-    free text. ``process``/``file`` entities have no pseudonym kind:
-    only their entity-shaped spans are registered.
+    :func:`collect_incident_entities`). A name the triage model emits
+    as an entity never creates a registry row by itself: it is kept
+    only when its canonical form matches a value already collected
+    from the typed event fields (a triage ``host`` FQDN matches the
+    typed short host, and a triage ``domain`` naming that host is
+    kept as the host). Everything else the model emits — unmatched
+    hosts, users and IPs, and every ``process``/``file`` value — is
+    dropped; the drop count is logged with no values. The condensed
+    free text is not scanned for new entities either: a typed name
+    the triage repeats there is already registered and is hidden by
+    the pseudonymizer's known-value replacement.
     """
     pairs = collect_incident_entities(items)
     seen = set(pairs)
 
-    def _add(kind: str, raw: Any) -> None:
-        if not isinstance(raw, str) or not raw.strip():
-            return
-        if kind not in ("host", "user", "ip", "domain", "email"):
-            for span_kind, span_raw in scan_entities(raw):
-                if (span_kind, span_raw) not in seen:
-                    seen.add((span_kind, span_raw))
-                    pairs.append((span_kind, span_raw))
-            return
-        if (kind, raw) not in seen:
-            seen.add((kind, raw))
-            pairs.append((kind, raw))
+    def _canonical_for(kind: str, raw: str) -> str | None:
+        if kind == "host":
+            return canonicalize_host(raw)
+        if kind == "user":
+            return canonicalize_user(raw)
+        if kind == "ip":
+            return canonicalize_ip(raw)
+        if kind == "domain":
+            return canonicalize_domain(raw)
+        if kind == "email":
+            return canonicalize_email(raw)
+        return None
 
+    typed: dict[str, set[str]] = {}
+    for kind, raw in pairs:
+        canonical = _canonical_for(kind, raw)
+        if canonical is not None:
+            typed.setdefault(kind, set()).add(canonical)
+
+    dropped = 0
     entities = condensed.get("entities")
     if isinstance(entities, list):
         for entry in entities:
-            if isinstance(entry, Mapping):
-                _add(str(entry.get("type")), entry.get("value"))
-    try:
-        text = json.dumps(condensed, sort_keys=True, default=str)
-    except TypeError, ValueError:
-        return pairs
-    for kind, raw in scan_entities(text):
-        if (kind, raw) not in seen:
-            seen.add((kind, raw))
-            pairs.append((kind, raw))
+            if not isinstance(entry, Mapping):
+                dropped += 1
+                continue
+            kind = str(entry.get("type") or "").strip().lower()
+            value: Any = entry.get("value")
+            if kind not in ("host", "user", "ip", "domain", "email"):
+                dropped += 1
+                continue
+            if not isinstance(value, str) or not value.strip():
+                dropped += 1
+                continue
+            if kind in ("host", "domain") and is_file_like_name(value):
+                dropped += 1
+                continue
+            canonical = _canonical_for(kind, value)
+            if canonical is not None and canonical in typed.get(kind, set()):
+                if (kind, value) not in seen:
+                    seen.add((kind, value))
+                    pairs.append((kind, value))
+                continue
+            if kind == "domain":
+                short = canonicalize_host(value)
+                if short is not None and short in typed.get("host", set()):
+                    if ("host", value) not in seen:
+                        seen.add(("host", value))
+                        pairs.append(("host", value))
+                    continue
+            if kind == "host":
+                # A host FQDN whose canonical short form is typed.
+                if canonical is not None and canonical in typed.get("host", set()):
+                    if (kind, value) not in seen:
+                        seen.add((kind, value))
+                        pairs.append((kind, value))
+                    continue
+            dropped += 1
+    if dropped:
+        _log.info("dropped %d triage-model entities without a typed match", dropped)
     return pairs
 
 
@@ -1449,42 +1490,39 @@ def run_analysis(
     )
     if _job_status(db_url, job_id) in ("done", "dead"):
         key = f"{key}:retry:{uuid.uuid4().hex[:8]}"
-        queue.enqueue(ANALYSIS_JOB_KIND, {"incident_id": incident.id}, dedupe_key=key)
+        job_id = queue.enqueue(
+            ANALYSIS_JOB_KIND, {"incident_id": incident.id}, dedupe_key=key
+        )
     # One resolved lease per run for BOTH the claim below and the
     # heartbeat inside process_analysis_job (see _resolve_claim_lease).
     claim_lease = _resolve_claim_lease(lease_seconds, backend)
-    for _ in range(MAX_AGENT_CLAIM_ROUNDS):
-        job = queue.claim(
-            active_worker,
-            kinds=[ANALYSIS_JOB_KIND],
-            lease_seconds=claim_lease,
-        )
-        if job is None:
-            current = read_analysis(db_url, incident.id, ANALYSIS_STAGE)
-            if current is not None and current["status"] == "resolved":
-                return _stored_outcome(
-                    db_url, read_incident(db_url, incident.id) or incident
-                )
-            return _busy_outcome(_load_steps(db_url, incident.id))
-        outcome = process_analysis_job(
-            job,
-            database_url=db_url,
-            worker_id=active_worker,
-            adapter=adapter,
-            backend=backend,
-            prices=prices,
-            egress_filter=egress_filter,
-            evidence_loader=evidence_loader,
-            replay_dir=replay_dir,
-            lang=lang,
-            max_tool_calls=max_tool_calls,
-            token_budget=token_budget,
-            timeout_seconds=timeout_seconds,
-            max_turns=max_turns,
-            lease_seconds=claim_lease,
-            clock=clock,
-            call_id=call_id,
-        )
-        if job.payload.get("incident_id") == incident.id:
-            return outcome
-    return _busy_outcome(_load_steps(db_url, incident.id))
+    # Claim only this incident's job (the scoped claim the triage path
+    # uses): another incident's job is never touched, so concurrent
+    # analyses of different incidents cannot steal each other's work.
+    job = queue.claim_job(job_id, active_worker, lease_seconds=claim_lease)
+    if job is None:
+        current = read_analysis(db_url, incident.id, ANALYSIS_STAGE)
+        if current is not None and current["status"] == "resolved":
+            return _stored_outcome(
+                db_url, read_incident(db_url, incident.id) or incident
+            )
+        return _busy_outcome(_load_steps(db_url, incident.id))
+    return process_analysis_job(
+        job,
+        database_url=db_url,
+        worker_id=active_worker,
+        adapter=adapter,
+        backend=backend,
+        prices=prices,
+        egress_filter=egress_filter,
+        evidence_loader=evidence_loader,
+        replay_dir=replay_dir,
+        lang=lang,
+        max_tool_calls=max_tool_calls,
+        token_budget=token_budget,
+        timeout_seconds=timeout_seconds,
+        max_turns=max_turns,
+        lease_seconds=claim_lease,
+        clock=clock,
+        call_id=call_id,
+    )

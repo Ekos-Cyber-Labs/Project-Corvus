@@ -786,6 +786,48 @@ def test_missing_entity_is_error(tools_db: str) -> None:
     assert "host, user or ip" in answers[0]["content"]
 
 
+def test_missing_entity_error_lists_only_allowlisted(tools_db: str) -> None:
+    """The no-filter error names this run's pseudonyms, and no others."""
+    context = _tool_context(tools_db, _incident_events())
+    other_rows = _loader_rows(_other_incident_events())
+    foreign = Pseudonymizer(tools_db).register(collect_incident_entities(other_rows))
+    foreign_host = foreign[("host", "web99")]
+    answers = execute_tool_calls(
+        [
+            ToolCall(
+                call_id="call-no-entity-list",
+                name=GET_EVENTS_NAME,
+                arguments_raw=json.dumps({"start": START_ISO, "end": END_ISO}),
+                arguments={"start": START_ISO, "end": END_ISO},
+            )
+        ],
+        context,
+    )
+    content = answers[0]["content"]
+    assert "at least one of host, user or ip is required" in content
+    allowed = context.allowed_pseudonyms or set()
+    listed = set(re.findall(r"(?:HOST|USER|IP)-\d+", content))
+    assert listed
+    assert listed <= allowed
+    assert foreign_host not in content
+    assert "web99" not in content
+    # The listed host can be used at once on the next turn: the first
+    # call does not leave the model guessing (or wasting a call).
+    host_token = next(token for token in listed if token.startswith("HOST-"))
+    follow = execute_tool_calls(
+        [_get_events_call("call-after-list", tools_db, context, {"host": host_token})],
+        context,
+    )
+    assert not follow[0]["content"].startswith("error:")
+    assert "showing" in follow[0]["content"]
+    schema = next(
+        tool["function"]
+        for tool in TOOL_SCHEMAS
+        if tool["function"]["name"] == GET_EVENTS_NAME
+    )
+    assert "At least one of host, user or ip is required" in schema["description"]
+
+
 def test_oversized_result_cut_with_note_and_cap(tools_db: str) -> None:
     """60 matching events are cut to the cap with a showing-N-of-M note."""
     events = [

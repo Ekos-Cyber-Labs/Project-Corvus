@@ -188,12 +188,12 @@ def test_user_name_under_user_parent(pseudo_db: Any) -> None:
 
 
 def test_generic_name_key_untouched(pseudo_db: Any) -> None:
-    # A bare "name" key is not a user field, so bare "bob" stays; but
-    # "bob.exe" is FQDN-shaped and the scanner fails closed on it.
+    # A bare "name" key is not a user field, so bare "bob" stays, and
+    # "bob.exe" is a file name: it is never a domain entity either.
     pseudo, test_url = pseudo_db
     out = pseudo.pseudonymize({"name": "bob", "process": {"name": "bob.exe"}})
-    assert out == {"name": "bob", "process": {"name": "DOMAIN-0001"}}
-    assert _row_count(test_url) == 1
+    assert out == {"name": "bob", "process": {"name": "bob.exe"}}
+    assert _row_count(test_url) == 0
 
 
 def test_reveal_roundtrip_and_unknown(pseudo_db: Any) -> None:
