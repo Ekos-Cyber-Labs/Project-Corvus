@@ -946,3 +946,33 @@ rules back to Wazuh (shadow first, human approval).
   lease cases plus 1 interval unit. `make lint` green; full `make
   test` 759 passed with Postgres; gitleaks passed. Compose Postgres
   left running. Awaiting maintainer commit.
+- 2026-10-30: added the paid model-path eval (`eval/llm_harness.py`,
+  `corvus eval llm --min-floor 4 --analyze N --lang en|es --labels
+  visible|blind --max-usd X --concurrency C`, reports
+  `eval/reports/llm_latest.md`/`.json`): scoped triage enqueue with a
+  new `min_floor` filter (`corvus/llm/triage_worker.py`), floor-first
+  selection (largest day-1-covering incident, then id), resumable
+  (resolved skipped, second run zero model calls), max-usd stop,
+  per-incident progress. Metrics with n: per-model/purpose
+  first-pass validity, avg attempts, outcomes, token-source share,
+  tokens/USD per resolved, wall median/p90 plus labelled remaining
+  estimate, day-1 timeline coverage (best/all), hallucinated-uid
+  share, ATT&CK accuracy blind-only, benign from adversarial
+  fixtures, floor-hold. Five `eval/adversarial/` fixtures (RFC 5737
+  + example.com, each with a clean twin, one tool-result variant).
+  Anti-leakage: request-body markers check (test-mode capture) and
+  the pseudonym-table deny-list check over persisted texts, both
+  fail the run. New `tests/test_eval_llm.py` (17 tests: math on
+  hand-written rows, max-usd stop, resume, scoped queue rows,
+  leakage hits on planted strings, blind attack removal, honest and
+  obeying adversarial, tool-result quarantine) plus sentence-final /
+  FQDN-final / ellipsis / upper-case / mid-path pseudonymizer tests.
+  Failing first: cost formula uses cached-input discount, JSONB
+  needs `jsonb_array_elements_text`, stub summaries need stopwords,
+  obeying suppress verdicts quarantine (validator 5 steering check
+  ignores `timeline` evidence; `requested_verdict` never set —
+  measured and pinned, no product change). `make lint` green; full
+  `make test` 777 passed with Postgres. Live model run not done
+  here (reviewer runs it); cost bound assume full caps zero cache
+  hits: 0.10 USD per analyzed incident. Compose Postgres left
+  running. Awaiting maintainer commit.

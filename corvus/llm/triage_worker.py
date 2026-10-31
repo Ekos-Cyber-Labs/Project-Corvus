@@ -150,12 +150,17 @@ def enqueue_triage_jobs(
     *,
     limit: int | None = None,
     incident_ids: Sequence[int] | None = None,
+    min_floor: int | None = None,
 ) -> list[int]:
     """Enqueue one ``triage`` job per incident lacking a triage analysis.
 
     With ``incident_ids`` only those incidents are considered (each
     must be an int; an empty list enqueues nothing), so an
     incident-scoped runner never creates jobs for other incidents.
+    With ``min_floor`` only incidents at or above that severity floor
+    are considered (1-6; anything else raises). Both filters compose:
+    the eval harness passes the selected ids plus the floor so a
+    re-run never enqueues incidents outside the selection.
     Returns the job ids (existing dedupe keys return their original
     job id, so re-running enqueue never duplicates work).
     """
@@ -167,6 +172,13 @@ def enqueue_triage_jobs(
         " WHERE a.incident_id IS NULL"
     )
     params: list[Any] = []
+    if min_floor is not None:
+        if isinstance(min_floor, bool) or not isinstance(min_floor, int):
+            raise ValueError(f"min_floor must be an int, got {min_floor!r}")
+        if not 1 <= min_floor <= 6:
+            raise ValueError(f"min_floor must be 1..6, got {min_floor!r}")
+        query += " AND i.severity_floor >= %s"
+        params.append(min_floor)
     if incident_ids is not None:
         wanted: list[int] = []
         for incident_id in incident_ids:

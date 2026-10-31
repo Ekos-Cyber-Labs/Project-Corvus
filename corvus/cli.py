@@ -245,6 +245,72 @@ def build_parser() -> argparse.ArgumentParser:
             "for in-repo paths; default: eval/reports/latest.json)."
         ),
     )
+    eval_llm = eval_sub.add_parser(
+        "llm",
+        help="Run the paid model-path eval (Glimmer triage + Spark analysis) "
+        "and write eval/reports/llm_latest.md and llm_latest.json.",
+    )
+    eval_llm.add_argument(
+        "--min-floor",
+        type=int,
+        default=4,
+        help="Only incidents at or above this severity floor (default: 4).",
+    )
+    eval_llm.add_argument(
+        "--analyze",
+        type=int,
+        default=1,
+        help="Spark-analyze the first N selected incidents (default: 1).",
+    )
+    eval_llm.add_argument(
+        "--lang",
+        default="en",
+        choices=["en", "es"],
+        help="Answer language for the verdict (default: %(default)s).",
+    )
+    eval_llm.add_argument(
+        "--labels",
+        default="blind",
+        choices=["visible", "blind"],
+        help="Detector-label mode for model payloads (default: %(default)s).",
+    )
+    eval_llm.add_argument(
+        "--max-usd",
+        type=float,
+        default=None,
+        help="Hard USD cap on top of SPEND_CAP_USD; the run stops when reached.",
+    )
+    eval_llm.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help="Max in-flight triage jobs (default: the TRIAGE_CONCURRENCY).",
+    )
+    eval_llm.add_argument(
+        "--adversarial",
+        action="store_true",
+        help="Also run the eval/adversarial/ injection fixtures.",
+    )
+    eval_llm.add_argument(
+        "--replay-dir",
+        default="data/replay",
+        help="Replay Parquet store directory (default: data/replay).",
+    )
+    eval_llm.add_argument(
+        "--report-md",
+        default="eval/reports/llm_latest.md",
+        help="Markdown report path (default: eval/reports/llm_latest.md).",
+    )
+    eval_llm.add_argument(
+        "--report-json",
+        default="eval/reports/llm_latest.json",
+        help="JSON report path (default: eval/reports/llm_latest.json).",
+    )
+    eval_llm.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
     return parser
 
 
@@ -452,6 +518,36 @@ def main(argv: list[str] | None = None) -> int:
             f" loop tokens: {outcome.loop_tokens}"
         )
         return 0
+    if args.command == "eval" and args.eval_command == "llm":
+        from eval.llm_harness import main as llm_harness_main
+
+        return llm_harness_main(
+            [
+                "--min-floor",
+                str(args.min_floor),
+                "--analyze",
+                str(args.analyze),
+                "--lang",
+                args.lang,
+                "--labels",
+                args.labels,
+                *(["--max-usd", str(args.max_usd)] if args.max_usd is not None else []),
+                *(
+                    ["--concurrency", str(args.concurrency)]
+                    if args.concurrency is not None
+                    else []
+                ),
+                *([] if not args.adversarial else ["--adversarial"]),
+                "--replay-dir",
+                args.replay_dir,
+                "--report-md",
+                args.report_md,
+                "--report-json",
+                args.report_json,
+                "--database-url",
+                args.database_url or "",
+            ]
+        )
     if args.command == "eval" and args.eval_command == "run":
         from eval.harness import main as harness_main
 

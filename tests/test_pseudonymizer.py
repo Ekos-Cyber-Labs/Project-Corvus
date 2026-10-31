@@ -432,3 +432,44 @@ def test_sentence_quotes_braces_tab_and_edges(pseudo_db: Any) -> None:
     ]
     for text, expected in cases:
         assert pseudo.pseudonymize({"t": text}) == {"t": expected}
+
+
+def test_fqdn_final_forms_replace(pseudo_db: Any) -> None:
+    """FQDN-final, ellipsis, upper-case and trailing-comma forms all replace."""
+    pseudo, _ = pseudo_db
+    pseudo.register([("host", "web01")])
+    cases = [
+        ("alert from web01.example.com.", "alert from HOST-0001."),
+        ("alert from web01.example.com...", "alert from HOST-0001..."),
+        ("alert from WEB01.EXAMPLE.COM?", "alert from HOST-0001?"),
+        ("saw web01.example.com, then more", "saw HOST-0001, then more"),
+    ]
+    for text, expected in cases:
+        out = pseudo.pseudonymize({"t": text})["t"]
+        assert isinstance(out, str)
+        assert out == expected, text
+        assert "web01" not in out.lower()
+
+
+def test_mid_path_forms_replace(pseudo_db: Any) -> None:
+    """Hostnames embedded in UNC paths, URLs and host paths replace."""
+    pseudo, _ = pseudo_db
+    pseudo.register([("host", "filesrv02"), ("host", "web01")])
+    cases = [
+        (
+            "copy to \\\\filesrv02\\share next",
+            "copy to \\\\HOST-0001\\share next",
+        ),
+        (
+            "fetch https://web01.example.com/path now",
+            "fetch https://HOST-0002/path now",
+        ),
+        (
+            "run \\\\web01.example.com\\sysvol next",
+            "run \\\\HOST-0002\\sysvol next",
+        ),
+    ]
+    for text, expected in cases:
+        out = pseudo.pseudonymize({"t": text})["t"]
+        assert isinstance(out, str)
+        assert out == expected, text
