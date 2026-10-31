@@ -302,6 +302,100 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("DATABASE_URL"),
         help="Postgres URL (default: $DATABASE_URL).",
     )
+    propose = rules_sub.add_parser(
+        "propose",
+        help="Propose one Sigma rule for an incident (Muse Spark loop).",
+    )
+    propose.add_argument("--incident", type=int, required=True, help="Incident id.")
+    propose.add_argument(
+        "--max-usd",
+        type=float,
+        default=None,
+        help="Per-proposal USD cap on top of SPEND_CAP_USD (default: none).",
+    )
+    propose.add_argument(
+        "--lang",
+        default="en",
+        choices=["en", "es"],
+        help="Answer language for the rationale (default: %(default)s).",
+    )
+    propose.add_argument(
+        "--replay-dir",
+        default="data/replay-linux-chain1",
+        help="Replay store holding the incident events.",
+    )
+    propose.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    approve = rules_sub.add_parser(
+        "approve", help="Move a stored rule to a new status (approver required)."
+    )
+    approve.add_argument("rule_id", type=int, help="Stored rule id.")
+    approve.add_argument(
+        "--to",
+        required=True,
+        choices=["shadow", "active", "archived"],
+        help="Target status (allowed moves only).",
+    )
+    approve.add_argument("--approver", required=True, help="Approver name.")
+    approve.add_argument("--reason", required=True, help="Approval reason.")
+    approve.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    rollback = rules_sub.add_parser(
+        "rollback", help="Roll a shadow or active rule back instantly."
+    )
+    rollback.add_argument("rule_id", type=int, help="Stored rule id.")
+    rollback.add_argument("--approver", required=True, help="Approver name.")
+    rollback.add_argument("--reason", required=True, help="Rollback reason.")
+    rollback.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    shadow_eval = rules_sub.add_parser(
+        "shadow-eval",
+        help="Evaluate shadow rules over a replay store (no model calls).",
+    )
+    shadow_eval.add_argument(
+        "--replay-dir",
+        default="data/replay-linux-chain1-off",
+        help="Replay store to evaluate over.",
+    )
+    shadow_eval.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    prove = rules_sub.add_parser(
+        "prove",
+        help="Learning proof: stored rule fires on the control store, "
+        "detection spends nothing, rollback silences it.",
+    )
+    prove.add_argument(
+        "--chain-dir",
+        default="data/replay-linux-chain1",
+        help="Attack-chain store the rule is stored from.",
+    )
+    prove.add_argument(
+        "--control-dir",
+        default="data/replay-linux-chain1-off",
+        help="Control-variant store the rule must fire on.",
+    )
+    prove.add_argument(
+        "--baseline-dir",
+        default="data/replay-linux-baseline",
+        help="Benign baseline store.",
+    )
+    prove.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
 
     evaluation = sub.add_parser("eval", help="Evaluation harness commands.")
     eval_sub = evaluation.add_subparsers(dest="eval_command", required=True)
@@ -809,6 +903,154 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"unknown rule id {args.rule_id}")
         assert stored is not None
         print(json.dumps(stored, indent=2, sort_keys=True, default=str))
+        return 0
+    if args.command == "rules" and args.rules_command == "propose":
+        import tempfile
+        import zipfile
+        from pathlib import Path as _Path
+
+        from corvus.learning.propose import propose_rule, spark_model_fn
+        from corvus.learning.rule_tools import build_search_index
+        from corvus.llm.config import LlmConfigError, get_backend
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        try:
+            backend = get_backend("analysis")
+        except LlmConfigError as exc:
+            parser.error(f"analysis backend unavailable ({exc})")
+        migrate(args.database_url)
+        index: list = []
+        zip_path = _Path("data/sigma/sigma_all_rules.zip")
+        if zip_path.is_file():
+            tmpdir = tempfile.TemporaryDirectory(prefix="lnx-corpus")
+            with zipfile.ZipFile(zip_path) as bundle:
+                names = [
+                    name
+                    for name in bundle.namelist()
+                    if name.startswith("rules/linux/")
+                ]
+                for name in names:
+                    rule_path = _Path(tmpdir.name) / name
+                    rule_path.parent.mkdir(parents=True, exist_ok=True)
+                    rule_path.write_bytes(bundle.read(name))
+            index = build_search_index(_Path(tmpdir.name) / "rules" / "linux")
+        try:
+            proposal_outcome = propose_rule(
+                incident_id=args.incident,
+                database_url=args.database_url,
+                replay_dir=args.replay_dir,
+                backend=backend,
+                model_fn=spark_model_fn(backend),
+                max_usd=args.max_usd,
+                lang=args.lang,
+                rules_index=index,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"status: {proposal_outcome.status}")
+        print(
+            f"rounds: {len(proposal_outcome.rounds)}"
+            f" (attempts: {proposal_outcome.attempts},"
+            f" tool calls: {proposal_outcome.tool_calls_used},"
+            f" loop tokens: {proposal_outcome.loop_tokens},"
+            f" spend: ${proposal_outcome.spend_usd:.6f})"
+        )
+        for item in proposal_outcome.rounds:
+            print(f"  round {item.round_number}: {list(item.codes)}")
+        if proposal_outcome.rule_db_id is not None:
+            print(
+                f"stored candidate id={proposal_outcome.rule_db_id}"
+                f" sigma={proposal_outcome.sigma_rule_id}"
+            )
+        for error in proposal_outcome.errors:
+            print(f"error: {error.get('code')}: {error.get('message')}")
+        return 0 if proposal_outcome.status == "accepted" else 1
+    if args.command == "rules" and args.rules_command == "approve":
+        from corvus.learning.rules import transition_rule
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        migrate(args.database_url)
+        try:
+            row = transition_rule(
+                args.database_url,
+                args.rule_id,
+                args.to,
+                approver=args.approver,
+                reason=args.reason,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"rule {row['id']} is now {row['status']}")
+        return 0
+    if args.command == "rules" and args.rules_command == "rollback":
+        from corvus.learning.rules import roll_back_rule
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        migrate(args.database_url)
+        try:
+            row = roll_back_rule(
+                args.database_url,
+                args.rule_id,
+                approver=args.approver,
+                reason=args.reason,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"rule {row['id']} is now {row['status']}")
+        return 0
+    if args.command == "rules" and args.rules_command == "shadow-eval":
+        from corvus.learning.shadow import evaluate_shadow
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        migrate(args.database_url)
+        shadow_report = evaluate_shadow(args.replay_dir, args.database_url)
+        print(
+            f"shadow eval: enabled={shadow_report.enabled},"
+            f" rules={shadow_report.rules_evaluated},"
+            f" findings={len(shadow_report.findings)}"
+        )
+        for rule_db_id in sorted(shadow_report.hits_by_rule):
+            print(f"  rule {rule_db_id}: {shadow_report.hits_by_rule[rule_db_id]} hits")
+        if shadow_report.skipped:
+            print(f"  skipped: {shadow_report.skipped}")
+        return 0
+    if args.command == "rules" and args.rules_command == "prove":
+        import json
+
+        from corvus.learning.proof import run_proof
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        migrate(args.database_url)
+        try:
+            proof_report = run_proof(
+                args.database_url,
+                chain_dir=args.chain_dir,
+                control_dir=args.control_dir,
+                baseline_dir=args.baseline_dir,
+            )
+        except ValueError as exc:
+            print(f"proof FAILED: {exc}")
+            return 1
+        print(json.dumps(proof_report.to_dict(), indent=2))
+        print(
+            f"proof passed: rule {proof_report.rule_db_id} fires"
+            f" {proof_report.control_hits} times on the control store"
+            f" (n={proof_report.control_n}), silent after rollback,"
+            " detection added"
+            f" {proof_report.attempts_after - proof_report.attempts_before}"
+            " attempts and"
+            f" {proof_report.spend_after - proof_report.spend_before} spend rows"
+        )
         return 0
     parser.error("unknown command")
     return 2

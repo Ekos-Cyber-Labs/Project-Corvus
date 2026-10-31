@@ -38,6 +38,14 @@ Deterministic acceptance, each reason a stable code:
 - ``dangerous_regex`` — a ``|re`` pattern with nested quantifiers
   (catastrophic-backtracking shape; rejected statically, never run);
 - ``level_too_high`` — above ``LEARNED_MAX_LEVEL`` for a learned rule;
+- ``pseudonym_in_rule`` — a selector holds a pseudonym-shaped token
+  (``HOST-``/``USER-``/``IP-``/``DOMAIN-``/``EMAIL-`` plus digits)
+  from the ``forbidden_tokens`` set: such a rule can never match real
+  data, since the model only ever sees pseudonyms;
+- ``attacker_literal`` — a selector holds another ``forbidden_tokens``
+  entry (an attacker-controlled string from the incident's injection
+  signals): a rule keyed on attacker-chosen text hides nothing and
+  travels with the attacker;
 - ``empty_target`` — the target names no resolvable event;
 - ``unknown_target_uid`` — none of the cited uids exist in either store;
 - ``no_target_match`` — the rule matches no target event;
@@ -55,7 +63,8 @@ Documented limits (chosen for the Linux lab data, fixed here):
   rejected before they ever reach it.
 - ``MAX_EXCLUSIONS`` 1: at most one ``NOT`` in the executed SQL.
 - ``MIN_LITERAL_LEN`` 4: substring/wildcard literals need at least 4
-  effective characters (``curl`` passes, ``sh`` does not).
+  effective characters (``curl`` passes, ``sh`` does not); forbidden
+  tokens shorter than this are ignored by the same floor.
 - ``MAX_CLASS_SHARE`` 0.05: a rule matching more than 5% of all events
   of its class across the baseline-plus-chain data is over-broad.
 - ``LEARNED_MAX_LEVEL`` ``high``: a learned rule may not ship
@@ -148,6 +157,8 @@ ALL_CODES = frozenset(
         "leading_wildcard_regex",
         "dangerous_regex",
         "level_too_high",
+        "pseudonym_in_rule",
+        "attacker_literal",
         "empty_target",
         "unknown_target_uid",
         "no_target_match",
@@ -437,17 +448,90 @@ def _store_host_window(
     return found
 
 
+#: Pseudonym token shape (``HOST-0001`` and kin, any entity kind).
+#: A forbidden token matching this shape is reported as
+#: ``pseudonym_in_rule``; any other forbidden token is reported as
+#: ``attacker_literal``.
+_PSEUDONYM_TOKEN = re.compile(r"^(HOST|USER|IP|DOMAIN|EMAIL)-\d+$", re.IGNORECASE)
+
+
+def _selector_literals(rule: Any) -> list[tuple[str, str]]:
+    """Return every ``(field, literal)`` pair in the rule's selections.
+
+    Plain values contribute their literal characters; ``|re`` values
+    contribute the pattern with Sigma wildcards restored, so a
+    forbidden token hides in neither form.
+    """
+    found: list[tuple[str, str]] = []
+    for detection in rule.detection.detections.values():
+        for item in _iter_leaf_items(detection):
+            values = item.value if isinstance(item.value, list) else [item.value]
+            for value in values:
+                found.append((str(item.field), _sigma_text_parts(value)))
+                pattern = _sigma_pattern(getattr(value, "regexp", value))
+                if pattern != found[-1][1]:
+                    found.append((str(item.field), pattern))
+    return found
+
+
+def _check_forbidden(
+    rule: Any, forbidden: frozenset[str] | None
+) -> BacktestResult | None:
+    """Reject selectors holding a forbidden token; None when clean.
+
+    ``forbidden`` is the registry pseudonyms plus the incident's
+    attacker-controlled strings (the rule-proposal loop builds it;
+    plain :func:`backtest` callers pass nothing and skip the screen).
+    Tokens shorter than ``MIN_LITERAL_LEN`` are ignored so a tiny
+    fragment cannot ban legitimate selectors. Matching is a
+    case-insensitive substring of each selector literal. The note
+    names the field but never the token: the token may be a registry
+    pseudonym from another incident, and the note travels back to the
+    model as correction feedback.
+    """
+    if not forbidden:
+        return None
+    tokens = sorted({token for token in forbidden if len(token) >= MIN_LITERAL_LEN})
+    if not tokens:
+        return None
+    for field_name, literal in _selector_literals(rule):
+        lowered = literal.lower()
+        for token in tokens:
+            if token.lower() in lowered:
+                if _PSEUDONYM_TOKEN.fullmatch(token.strip()):
+                    return _fail(
+                        "pseudonym_in_rule",
+                        f"selector {field_name!r} holds a forbidden pseudonym token",
+                    )
+                return _fail(
+                    "attacker_literal",
+                    f"selector {field_name!r} holds a forbidden attacker literal",
+                )
+    return None
+
+
 def backtest(
     sigma_text: Any,
     target: Any,
     *,
     baseline_dir: str | Path = "data/replay-linux-baseline",
     chain_dir: str | Path = "data/replay-linux-chain1",
+    forbidden_tokens: frozenset[str] | None = None,
 ) -> BacktestResult:
-    """Backtest one candidate Sigma rule against a target; never raises."""
+    """Backtest one candidate Sigma rule against a target; never raises.
+
+    ``forbidden_tokens`` (None by default, skipping the screen) holds
+    registry pseudonyms plus attacker-controlled strings; any
+    selector containing one is rejected with ``pseudonym_in_rule``
+    (pseudonym-shaped) or ``attacker_literal`` (anything else).
+    """
     try:
         return _backtest_inner(
-            sigma_text, target, baseline_dir=baseline_dir, chain_dir=chain_dir
+            sigma_text,
+            target,
+            baseline_dir=baseline_dir,
+            chain_dir=chain_dir,
+            forbidden_tokens=forbidden_tokens,
         )
     except Exception as exc:  # never raises on bad input
         return BacktestResult(
@@ -463,6 +547,7 @@ def _backtest_inner(
     *,
     baseline_dir: str | Path,
     chain_dir: str | Path,
+    forbidden_tokens: frozenset[str] | None = None,
 ) -> BacktestResult:
     started = time.monotonic()
     if not isinstance(sigma_text, str) or not sigma_text.strip():
@@ -513,6 +598,10 @@ def _backtest_inner(
     if regex_hit is not None:
         code, _, note = regex_hit.partition(":")
         return _fail(code, note)
+
+    forbidden_hit = _check_forbidden(rule, forbidden_tokens)
+    if forbidden_hit is not None:
+        return forbidden_hit
 
     from corvus.detect.rules import ALL_STATUSES, load_rules
 

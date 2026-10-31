@@ -107,6 +107,7 @@ def add_candidate(
     producer_version: str,
     created: datetime | None = None,
     native_rule_id: int | None = None,
+    extra_lineage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Store a verified candidate rule; return the stored row.
 
@@ -117,7 +118,10 @@ def add_candidate(
     per Sigma id while older rows are kept. ``native_rule_id`` is
     allocated automatically unless the caller passes one explicitly
     (out-of-range values raise; collisions raise the database's
-    unique violation, so a racer never overwrites).
+    unique violation, so a racer never overwrites). ``extra_lineage``
+    merges additional keys into the stored lineage (the proposal
+    loop records rounds used, model, prompt version and ledger ids
+    there); colliding keys raise and store nothing.
     """
     from corvus.learning.backtest import BacktestResult
 
@@ -163,6 +167,7 @@ def add_candidate(
                 "version": version,
                 "producer": producer,
                 "producer_version": producer_version,
+                "source_incident": incident_id,
                 "cited_uids": list(cited_uids),
                 "backtest": {
                     "codes": verdict.get("codes"),
@@ -181,6 +186,13 @@ def add_candidate(
                     }
                 ],
             }
+            if extra_lineage:
+                for key, value in extra_lineage.items():
+                    if key in lineage:
+                        raise ValueError(
+                            f"extra_lineage key {key!r} collides with stored lineage"
+                        )
+                    lineage[key] = value
             cur.execute(
                 "INSERT INTO rules (title, sigma_text, native_rule_id, version, "
                 "status, lineage, incident_id, created_at, updated_at) "

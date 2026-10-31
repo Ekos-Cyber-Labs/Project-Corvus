@@ -88,8 +88,9 @@ read-only and typed. Hackathon scope: two tools.
 - `get_attack_technique` — look up a MITRE ATT&CK technique in the exact-key
   dictionary.
 
-`[ROADMAP]` `get_entity_profile`, `search_sigma_rules`.
-`propose_rule` is how the learning loop starts (Section 4).
+`[ROADMAP]` `get_entity_profile`. (`search_sigma_rules` exists as a
+rule-loop-only tool; analysis never gains it.) `propose_rule` is how
+the learning loop starts (Section 4).
 
 Spark writes verdict, timeline and response plan in English or Spanish, citing
 evidence event ids. Every Spark tool call is shown in a visible live trace
@@ -102,18 +103,46 @@ incidents), all-cloud (no GPU).
 ### 4. Rule -> backtest -> Wazuh shadow deployment (Linux plane)
 
 Rules are developed against exported Wazuh archives of our lab attack chain,
-then deployed in shadow to the live Wazuh. The loop:
+then deployed in shadow to the live Wazuh. The loop
+(`corvus/learning/propose.py`, CLI `corvus rules propose --incident ID`):
 
-1. Spark drafts a Sigma rule (`propose_rule`).
-2. Deterministic verifier checks Sigma syntax, backtest (detects the target,
-   zero false positives on the benign baseline, bounded scope) and evaluation
-   cost. Before creating a rule, existing rules run on the evidence: if one
-   fires, no new rule is created.
-3. Shadow deployment: the rule runs on live data and logs would-be alerts
-   without alerting.
-4. Deployment to the customer SIEM requires human approval by default
-   (approve/reject in the UI). Auto-deploy is optional and only for additive
-   rules in shadow mode.
+1. Spark drafts a Sigma rule over the condensed, pseudonymized incident,
+   with three read-only tools: `get_events` (the same allowlisted tool
+   analysis uses), `search_sigma_rules` (at most 8 shipped-corpus hits;
+   rule-loop only, analysis never gains it) and `backtest_rule` (stable
+   codes, counts and matched target uids only — never raw events).
+2. At most 3 rounds of generate -> backtest -> correct with hard caps on
+   tool calls, turns and tokens; every turn lands in `llm_attempts`
+   (purpose `rule_proposal`) with that round's verifier codes, and billed
+   turns land in `spend`. The model cites incident event uids it found
+   itself; the final `RuleProposal` JSON (all properties required,
+   nothing else accepted) must match the accepted round's YAML exactly.
+   Selectors holding a registry pseudonym are rejected
+   (`pseudonym_in_rule`); selectors keyed on attacker-controlled strings
+   from the incident's injection signals are rejected
+   (`attacker_literal`). A final output echoing injected content ends
+   `rejected_unsafe` without retry and stores nothing.
+3. An accepted rule is stored as `candidate` with lineage (source
+   incident, cited uids, accepted backtest, rounds used, model, prompt
+   version `rule_proposal/v1`, ledger ids, creation time). Outcomes:
+   `accepted`, `exhausted`, `rejected_unsafe`, `budget_stopped`.
+4. Shadow (`corvus rules approve ID --to shadow --approver NAME --reason
+   TEXT`, `corvus/learning/shadow.py`): the rule runs through the same
+   loader, engine and mapping as the shipped rules; matches become
+   findings marked shadow (rule id, version, Sigma id) that are
+   returned, never persisted to the findings store, so no notification
+   fires and no incident severity changes. Hits bump the rule counter;
+   operator `tp`/`fp` verdicts land in `dispositions`.
+   `corvus rules rollback ID` silences a rule instantly;
+   `LEARNED_RULES_ENABLED=0` disables all learned rules at once.
+5. Deployment to the customer SIEM requires human approval by default.
+   Auto-deploy is optional and only for additive rules in shadow mode.
+
+The learning proof (`corvus rules prove`, `corvus/learning/proof.py`)
+stores the golden stand-in, shows it fires on the control-variant
+store while the detection adds zero `llm_attempts`/`spend` rows, and
+shows the rolled-back rule silent. There is no fine-tuning anywhere:
+what is learned is a verified, versioned rule.
 
 Sigma is the source format. Wazuh XML is generated from it (local rule id
 range 100000-120000) and validated with `wazuh-logtest`. `[ROADMAP]`

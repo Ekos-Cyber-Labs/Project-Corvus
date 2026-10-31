@@ -136,6 +136,7 @@ __all__ = [
     "StructuredError",
     "ToolLoop",
     "call_model",
+    "run_chat_turn",
     "validate_policy",
     "validate_schema",
     "validate_security",
@@ -466,22 +467,6 @@ def _turn_tokens(attempt: Attempt) -> int:
         + attempt.answer_tokens
         + attempt.overhead_tokens
     )
-
-
-def _assistant_tool_message(attempt: Attempt) -> dict[str, Any]:
-    """Rebuild the assistant turn echoing its tool calls for the wire."""
-    return {
-        "role": "assistant",
-        "content": attempt.content or "",
-        "tool_calls": [
-            {
-                "id": call.call_id,
-                "type": "function",
-                "function": {"name": call.name, "arguments": call.arguments_raw},
-            }
-            for call in attempt.tool_calls
-        ],
-    }
 
 
 def _check_tool_messages(messages: list[dict[str, Any]]) -> None:
@@ -1014,6 +999,34 @@ def _resolve_database_url(explicit: str | None) -> str:
             "(every attempt is recorded in llm_attempts)"
         )
     return url
+
+
+def run_chat_turn(
+    backend: BackendConfig,
+    messages: Sequence[Mapping[str, Any]],
+    tools: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    temperature: float = DEFAULT_TEMPERATURE,
+    reasoning_strength: str = DEFAULT_REASONING_STRENGTH,
+) -> Attempt:
+    """Send one chat turn on ``backend`` and return its attempt.
+
+    The rule-proposal loop's live turn sender: budgets, the spend
+    ledger and attempt audit stay with the caller
+    (:mod:`corvus.learning.propose`), so this function performs no
+    reservation and records nothing — but the HTTP contact itself
+    stays inside this module, the single entry point every model
+    call flows through. Cloud backends pass the egress allowlist
+    inside :func:`corvus.llm.transport.run_attempt`.
+    """
+    return transport_module.run_attempt(
+        backend,
+        messages,
+        temperature=temperature,
+        max_tokens=backend.max_output_tokens,
+        reasoning_strength=reasoning_strength,
+        tools=tools or None,
+    )
 
 
 def _worst_case_usd(backend: BackendConfig, prices: Mapping[str, ModelPrice]) -> float:
@@ -1756,7 +1769,11 @@ def _run_backend_loop(
                     result.tool_calls_used += len(attempt.tool_calls)
                     tool_messages = tool_loop.on_tool_calls(attempt)
                     _check_tool_messages(tool_messages)
-                    history.append(_assistant_tool_message(attempt))
+                    history.append(
+                        transport_module.assistant_tool_message(
+                            attempt.content, attempt.tool_calls
+                        )
+                    )
                     history.extend(tool_messages)
                     corrections = []
                     continue

@@ -1094,3 +1094,67 @@ rules back to Wazuh (shadow first, human approval).
   --all-files` (Passed), and the Windows detect harness before and
   after (delta +0 on every count). Compose Postgres left running.
   Awaiting maintainer commit.
+- 2026-10-31: built the Spark rule-proposal loop (detection-engineer).
+  Pipeline check on a temp store copy (read-only data): shipped Linux
+  rules give 5 matches on 5 events over the chain store, correlating
+  to 1 incident (floor 4), so no pipeline fix was needed; the loop
+  works from that incident. New `corvus/learning/rule_tools.py`
+  (search_sigma_rules max 8 hits, backtest_rule returning only codes,
+  counts, matched uids, baseline count) plus the shared allowlisted
+  get_events; analysis never gains the new tools. New
+  `corvus/learning/propose.py` (max 3 generate-backtest-correct
+  rounds, tool/turn/token caps, optional per-proposal USD cap, strict
+  RuleProposal schema, every turn in llm_attempts purpose
+  rule_proposal with round codes, billed turns in spend; outcomes
+  accepted/exhausted/rejected_unsafe/budget_stopped). Backtest gained
+  the forbidden-token screen (`pseudonym_in_rule`,
+  `attacker_literal`, token values never echoed). Lineage now carries
+  source incident plus rounds/model/prompt version/ledger ids. New
+  `corvus/learning/shadow.py` (same loader/engine/mapping, findings
+  marked shadow and never persisted, hits/disposition counters,
+  LEARNED_RULES_ENABLED kill switch) and `corvus/learning/proof.py`
+  (`corvus rules prove`: stored rule fires 6 times on the control
+  store with zero attempts/spend rows added, silent after rollback).
+  CLI gained rules propose/approve/rollback/shadow-eval/prove; live
+  turns go through a new `run_chat_turn` in `corvus/llm/call.py` so
+  the single-entry transport gate stays green. `tests/
+  test_rule_proposal.py` has 25 tests (pipeline, tools, loop,
+  injection/exclusion/attacker-literal/bomb/oversize/unknown-tool
+  safety, kill switch, proof, leak check, CLI). Docs section 4
+  rewritten. Verified with `make lint` (green), the full `make test`
+  (904 passed with Postgres), `pre-commit run gitleaks --all-files`
+  (Passed), and the Linux rules measurement re-run (delta +0,
+  report byte-identical). No paid API called. Compose Postgres left
+  running. Awaiting maintainer commit.
+- 2026-10-31: fixed the rule-proposal loop's missing assistant echo
+  (live Spark returned HTTP 400 on turn 2: tool messages with no
+  preceding assistant tool_calls). `assistant_tool_message` moved
+  from `corvus/llm/call.py` to `corvus/llm/transport.py` and is now
+  shared by both loops; `ModelResponse` carries `ToolCall` values
+  with raw arguments, `ModelFn` takes the real message structure,
+  and turn failures surface `ModelTransportError` (HTTP status,
+  provider type, capped secret-free message) instead of a bare class
+  name. New `tests/history_check.py` strict validator (same
+  sequencing the provider enforces) drives a 2-tool-turn loop test
+  against a 400-raising stand-in and now also checks the analysis
+  3-turn histories. Verified with `make lint` (green), the full
+  `make test` (907 passed with Postgres), `pre-commit run gitleaks
+  --all-files` (Passed). No paid API called. Compose Postgres left
+  running. Awaiting maintainer commit.
+- 2026-10-31: fixed the two live Spark defects in the rule-proposal
+  loop (detection-engineer). Budgets are now per tool (searches 4,
+  event queries 6, reserved backtests 6 over 14 turns), enforced per
+  call inside batched turns with budget-exhausted observations; every
+  tool result carries the remaining counts and the system message
+  states the budgets. A steer message fires with 3 turns left and a
+  final without acceptance gets one reserved correction turn (+2
+  turns, backtest-first). Final YAML is compared to the accepted
+  round by parsed structure (formatting ignored); the verified text
+  is stored, semantic diffs reject with the differing top-level
+  keys. `tests/test_rule_proposal.py` has 8 new strict-history tests
+  (search-forever, batched cap, reserved correction incl. at-cap,
+  steer, reformatted/block-scalar equivalence and diff-keys). Old
+  exhaustion tests moved from 3 to 6 rounds. Verified with `make
+  lint` (green), the full `make test` (915 passed with Postgres),
+  `pre-commit run gitleaks --all-files` (Passed). No paid API
+  called. Compose Postgres left running. Awaiting maintainer commit.

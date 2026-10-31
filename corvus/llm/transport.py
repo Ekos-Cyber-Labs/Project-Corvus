@@ -115,6 +115,33 @@ class ToolCall:
     arguments: Any
 
 
+def assistant_tool_message(
+    content: str | None, tool_calls: Sequence[ToolCall]
+) -> dict[str, Any]:
+    """Build the assistant history message echoing its tool calls.
+
+    Every turn that returns tool calls must be followed in the
+    history by this message — content plus the tool calls with the
+    same ids, names and raw arguments the model produced — BEFORE
+    the tool messages. Without it the provider rejects the next
+    request (a ``tool`` message with no matching assistant
+    ``tool_calls`` entry is HTTP 400). Both the analysis loop and
+    the rule-proposal loop build their history through this helper.
+    """
+    return {
+        "role": "assistant",
+        "content": content or "",
+        "tool_calls": [
+            {
+                "id": call.call_id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments_raw},
+            }
+            for call in tool_calls
+        ],
+    }
+
+
 @dataclass(frozen=True)
 class ToolCallError:
     """A typed tool-call parse failure; never raised out of transport.
@@ -767,7 +794,7 @@ def _outgoing_tool_calls(raw: Any, position: int) -> list[dict[str, Any]]:
 
 def run_attempt(
     backend: BackendConfig,
-    messages: Sequence[Mapping[str, str]],
+    messages: Sequence[Mapping[str, Any]],
     *,
     temperature: float,
     max_tokens: int,

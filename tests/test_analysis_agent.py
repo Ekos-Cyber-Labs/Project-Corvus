@@ -561,6 +561,12 @@ def test_three_turn_parallel_run(
     # split the recorded turn total exactly (636 + 292 + 178).
     assert sum(step["tokens"] for step in steps[:3]) == 636 + 292 + 178
     _assert_no_raw(stub.calls)
+    # Every request history satisfies the provider's own sequencing
+    # (assistant echo before tool messages, no orphan ids).
+    from tests.history_check import validate_openai_history
+
+    for call in stub.calls:
+        validate_openai_history(call["messages"])
 
 
 def test_six_tool_calls_force_final(

@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     correlation_auth_failure_threshold: int = Field(
         default=3, validation_alias="CORRELATION_AUTH_FAILURE_THRESHOLD"
     )
+    # Kill switch for learned rules: when false, no stored rule in
+    # shadow (or any other learned status) is evaluated anywhere.
+    learned_rules_enabled: bool = Field(
+        default=True, validation_alias="LEARNED_RULES_ENABLED"
+    )
 
 
 def get_settings() -> Settings:
