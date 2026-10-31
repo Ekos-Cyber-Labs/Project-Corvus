@@ -28,6 +28,7 @@ from corvus.detect.backend import FULLTEXT_COLUMN
 from corvus.normalize.windows import wire_fields
 
 __all__ = [
+    "LINUX_CATEGORY_GROUPS",
     "MAPPED_SERVICE_EVENT_IDS",
     "Extractor",
     "GroupDef",
@@ -503,6 +504,61 @@ def _file_event_fields() -> dict[str, Extractor]:
     }
 
 
+#: Decoder names the Linux file slice covers (auditd file syscalls
+#: plus the three syscheck decoders; all carry ``file.path``).
+_LINUX_FILE_LOGS = frozenset(
+    {
+        "auditd",
+        "syscheck_new_entry",
+        "syscheck_integrity_changed",
+        "syscheck_deleted",
+    }
+)
+
+
+def _linux_process_creation_fields() -> dict[str, Extractor]:
+    # Only fields with a faithful slot on the Linux 1007/1 events
+    # (auditd execve/USER_CMD, sudo): Image is the executable path,
+    # CommandLine the joined argv, User the invoking account. There
+    # is no parent process object anywhere in the mapper output
+    # (verified: 0 of 2245 chain 1007/1 events carry
+    # ``parent_process``), so ParentImage/ParentCommandLine have no
+    # entry, and neither do CurrentDirectory/LogonId (cwd lives in
+    # ``unmapped["linux.cwd"]`` under a different name, LogonId is a
+    # Windows concept). Rules using them are skipped, never nulled.
+    return {
+        "Image": typed("process", "file", "path"),
+        "CommandLine": typed("process", "cmd_line"),
+        "User": actor_user,
+    }
+
+
+def _linux_file_event_fields() -> dict[str, Extractor]:
+    # TargetFilename is the event path on auditd file syscalls and
+    # syscheck entries alike. Image has no entry on purpose: the
+    # actor process on Linux file events carries pid and name only
+    # (verified: 0 of 502 chain file events carry an actor process
+    # path), so matching an image path against it would be
+    # unfaithful. Rules using Image are skipped with the field name.
+    return {
+        "TargetFilename": typed("file", "path"),
+    }
+
+
+def _linux_network_fields() -> dict[str, Extractor]:
+    # The auditd connect peer is the destination endpoint; the
+    # invoking account is the actor user. Image has no entry (actor
+    # process carries pid and name only, verified 0 of 253 chain
+    # network events with a path), nor do Initiated,
+    # DestinationHostname, Protocol and the source fields, which
+    # have no slot on the mapped connect rows.
+    return {
+        "DestinationIp": typed("dst_endpoint", "ip"),
+        "DestinationPort": typed("dst_endpoint", "port"),
+        "User": actor_user,
+    }
+
+
 def _registry_fields() -> dict[str, dict[str, Extractor]]:
     base_key = {
         "TargetObject": registry_target,
@@ -683,6 +739,27 @@ GROUPS: dict[str, GroupDef] = {
     "ps_script": _group("ps_script", {1009}, {1}, PS_OPERATIONAL, _ps_script_fields()),
     "ps_module": _group("ps_module", {1009}, {1}, PS_OPERATIONAL, _ps_module_fields()),
     "ps_classic": _group("ps_classic", {1009}, {1}, PS_CLASSIC, _ps_classic_fields()),
+    "linux/process_creation": GroupDef(
+        name="linux/process_creation",
+        class_uids=frozenset({1007}),
+        activity_ids=frozenset({1}),
+        log_names=frozenset({"auditd", "sudo"}),
+        fields=_linux_process_creation_fields(),
+    ),
+    "linux/file_event": GroupDef(
+        name="linux/file_event",
+        class_uids=frozenset({1001}),
+        activity_ids=None,
+        log_names=_LINUX_FILE_LOGS,
+        fields=_linux_file_event_fields(),
+    ),
+    "linux/network_connection": GroupDef(
+        name="linux/network_connection",
+        class_uids=frozenset({4001}),
+        activity_ids=frozenset({1, 4}),
+        log_names=frozenset({"auditd"}),
+        fields=_linux_network_fields(),
+    ),
     "security": _group(
         "security", {3002, 1006, 201004}, None, SECURITY, _security_fields()
     ),
@@ -713,6 +790,16 @@ CATEGORY_GROUPS = frozenset(
 )
 
 
+#: Linux categories routed to the Linux OCSF slices (auditd-execve
+#: and sudo process launches, auditd/syscheck file paths, auditd
+#: connect peers). The auditd-service rules (raw ``type``/``aN`` record
+#: shapes) and the syslog/sshd/cron keyword rules stay out of scope
+#: and return None below.
+LINUX_CATEGORY_GROUPS = frozenset(
+    {"process_creation", "file_event", "network_connection"}
+)
+
+
 def route_logsource(product: object, category: object, service: object) -> str | None:
     """Route a Sigma logsource triple to a group name, if any.
 
@@ -720,11 +807,18 @@ def route_logsource(product: object, category: object, service: object) -> str |
     by name (``ps_classic_start`` lands on the ``ps_classic``
     group); the ``powershell-classic`` service is the taxonomy alias
     of the same classic-pipeline group; ``security``, ``system`` and
-    ``taskscheduler`` route by service. Anything else (other
-    products, DNS, pipes, drivers, threat-hunting and
-    emerging-threats products) returns None and the rule is counted
-    per logsource and skipped.
+    ``taskscheduler`` route by service. ``linux``-product rules
+    route by category for the three mapped slices (service must be
+    unset); the auditd-service rules and the syslog/sshd/cron
+    keyword rules return None and are counted per logsource.
+    Anything else (other products, DNS, pipes, drivers,
+    threat-hunting and emerging-threats products) returns None and
+    the rule is counted per logsource and skipped.
     """
+    if product == "linux":
+        if category in LINUX_CATEGORY_GROUPS and service is None:
+            return f"linux/{category}"
+        return None
     if product != "windows":
         return None
     if category in CATEGORY_GROUPS:

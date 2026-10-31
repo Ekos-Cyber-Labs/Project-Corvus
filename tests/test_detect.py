@@ -907,7 +907,9 @@ def test_route_logsource_covers_mapped_triples() -> None:
     assert route_logsource("windows", "pipe_created", None) is None
     assert route_logsource("windows", None, "windefend") is None
     assert route_logsource("windows", None, "sysmon") is None
-    assert route_logsource("linux", "process_creation", None) is None
+    assert (
+        route_logsource("linux", "process_creation", None) == "linux/process_creation"
+    )
 
 
 def test_experimental_status_is_skipped(tmp_path: Path) -> None:
@@ -1347,3 +1349,62 @@ def test_cli_detect_writes_findings(tmp_path: Path) -> None:
         == 0
     )
     assert len(list(findings_dir(replay_dir).glob("*.parquet"))) == 1
+
+
+# Linux routing unit tests -------------------------------------------------
+
+
+def test_linux_logsource_routes_to_linux_groups() -> None:
+    assert (
+        route_logsource("linux", "process_creation", None) == "linux/process_creation"
+    )
+    assert route_logsource("linux", "file_event", None) == "linux/file_event"
+    assert (
+        route_logsource("linux", "network_connection", None)
+        == "linux/network_connection"
+    )
+
+
+def test_linux_out_of_scope_shapes_stay_unrouted() -> None:
+    assert route_logsource("linux", None, "auditd") is None
+    assert route_logsource("linux", None, "sshd") is None
+    assert route_logsource("linux", None, "syslog") is None
+    assert route_logsource("linux", None, "cron") is None
+    assert route_logsource("linux", None, None) is None
+    assert route_logsource("linux", "process_creation", "auditd") is None
+
+
+def test_linux_process_row_reads_typed_slots() -> None:
+    group = mapping_mod.GROUPS["linux/process_creation"]
+    event = {
+        "process": {"file": {"path": "/usr/bin/find"}, "cmd_line": "find /x -exec"},
+        "actor": {"user": {"name": "deploy"}},
+        "raw_data": "{}",
+    }
+    row = mapping_mod.extract_row(event, group, need_fulltext=False)
+    assert row["Image"] == "/usr/bin/find"
+    assert row["CommandLine"] == "find /x -exec"
+    assert row["User"] == "deploy"
+
+
+def test_linux_unmapped_fields_skip_with_field_name(tmp_path: Path) -> None:
+    rule = """title: Linux parent probe
+id: 44444444-4444-4433-8444-444444444444
+status: test
+description: Probe rule for tests.
+author: Probe Author
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  selection:
+    ParentImage: '/usr/bin/bash'
+  condition: selection
+level: high
+"""
+    rules_dir = write_rules(tmp_path, [rule])
+    compiled, stats = load_rules(rules_dir)
+    assert compiled == []
+    assert stats.skip_details["unmapped_field"] == {
+        "linux/process_creation ParentImage": 1
+    }

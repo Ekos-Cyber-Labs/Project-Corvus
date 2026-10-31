@@ -1072,3 +1072,25 @@ rules back to Wazuh (shadow first, human approval).
   llm_latest.json and pycache, none in changed files). Windows eval
   harness untouched, no shared-path behavior change, so no eval
   delta. Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-30: added Linux detection routes and the learned-rule
+  verifier (detection-engineer). `corvus/detect/mapping.py` routes
+  `linux/process_creation`, `linux/file_event`,
+  `linux/network_connection` (verified field-by-field against the
+  real normalized chain events); auditd-service and
+  syslog/sshd/cron shapes stay unrouted and counted. Shipped Linux
+  rules measured by `eval/linux_rules_measured.py` into
+  `eval/reports/linux_rules_measured.md`: 149 inventoried, 73
+  evaluate, 7 baseline matches on 7 events (n=55794), 5 chain
+  matches on 5 events (n=3567), chain steps 1-6 uncovered by any
+  shipped rule. New `corvus/learning/backtest.py` (21 stable codes,
+  same engine and mapping as shipped rules) and
+  `corvus/learning/rules.py` over the rules table plus migration
+  `0007_rules_native_uid.sql` (unique native id, no reuse), with
+  `corvus rules backtest/add/list/show`. Golden control
+  `tests/fixtures/rules/linux_golden_rule.yml` accepted (2 target
+  hits, 0 baseline); the broad sibling rejected with
+  `over_broad_literal`. Verified with `make lint` (green), the full
+  `make test` (879 passed with Postgres), `pre-commit run gitleaks
+  --all-files` (Passed), and the Windows detect harness before and
+  after (delta +0 on every count). Compose Postgres left running.
+  Awaiting maintainer commit.

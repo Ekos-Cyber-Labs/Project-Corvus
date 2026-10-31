@@ -1,0 +1,22 @@
+title: Sudo Find Writing SSH Authorized Keys
+id: 7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d
+status: test
+description: >-
+  Hand-written control rule for chain 1 step 6: a find process launched
+  through sudo writing root's authorized_keys. Selectors are the system
+  binary path plus standard find/file tokens; the attacker-chosen cron
+  filename from step 5 is deliberately not used.
+author: Corvus detection engineering
+date: 2026-10-30
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  sel_img:
+    Image|endswith: '/find'
+  sel_key:
+    CommandLine|contains: 'authorized_keys'
+  sel_exec:
+    CommandLine|contains: '-exec'
+  condition: sel_img and sel_key and sel_exec
+level: medium

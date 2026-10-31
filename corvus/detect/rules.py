@@ -52,6 +52,13 @@ __all__ = [
 #: counted under the ``status`` skip reason.
 EVALUATED_STATUSES = frozenset({"test", "stable"})
 
+#: Every status Sigma defines; the backtest passes this set so a
+#: candidate is judged on its detection, never on its status (the
+#: stored copy is forced to ``experimental`` at store time).
+ALL_STATUSES = frozenset(
+    {"experimental", "test", "stable", "deprecated", "unsupported"}
+)
+
 #: Skip reasons, in the order they are checked (first hit wins).
 REASON_STATUS = "status"
 REASON_LOGSOURCE = "logsource"
@@ -166,7 +173,11 @@ def _rule_level(rule: SigmaRule) -> str | None:
 
 
 def load_rules(
-    rules_dir: str | Path, *, validate_regex: bool = True, strict_nulls: bool = False
+    rules_dir: str | Path,
+    *,
+    validate_regex: bool = True,
+    strict_nulls: bool = False,
+    statuses: frozenset[str] | None = None,
 ) -> tuple[list[CompiledRule], LoadStats]:
     """Load, route, analyze and compile every rule under ``rules_dir``.
 
@@ -176,9 +187,13 @@ def load_rules(
     DuckDB and the rule is skipped as an unsupported construct when
     DuckDB rejects it. ``strict_nulls`` selects the legacy strict
     backend (measurement only, for the old-vs-new match delta).
+    ``statuses`` overrides the evaluated status set (default
+    :data:`EVALUATED_STATUSES`); the backtest passes
+    :data:`ALL_STATUSES` so candidates are judged on detection.
     """
     compiled: list[CompiledRule] = []
     stats = LoadStats()
+    allowed = EVALUATED_STATUSES if statuses is None else statuses
     root = Path(rules_dir)
     for path in iter_rule_files(root):
         stats.files += 1
@@ -192,7 +207,7 @@ def load_rules(
             if isinstance(rule, SigmaCorrelationRule):
                 stats.skip(REASON_CONSTRUCT, "correlation rule")
                 continue
-            item = _analyze(rule, path, stats)
+            item = _analyze(rule, path, stats, allowed)
             if item is None:
                 continue
             try:
@@ -215,9 +230,11 @@ def load_rules(
     return compiled, stats
 
 
-def _analyze(rule: SigmaRule, path: Path, stats: LoadStats) -> CompiledRule | None:
+def _analyze(
+    rule: SigmaRule, path: Path, stats: LoadStats, allowed: frozenset[str]
+) -> CompiledRule | None:
     """Route and field-check one rule; None when it is skipped."""
-    if str(rule.status) not in EVALUATED_STATUSES:
+    if str(rule.status) not in allowed:
         stats.skip(REASON_STATUS, str(rule.status))
         return None
     logsource = rule.logsource

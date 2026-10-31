@@ -1,0 +1,19 @@
+title: Deliberately Too Broad Find Rule
+id: 8d5f4b32-0c7f-4e3b-9d2e-4f6a7b8c9d0e
+status: test
+description: >-
+  Negative control for the golden rule: the 'sh' substring is shorter
+  than the documented minimum, so the verifier must reject this with
+  over_broad_literal without ever evaluating it.
+author: Corvus detection engineering
+date: 2026-10-30
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  sel_img:
+    Image|endswith: '/find'
+  sel_short:
+    CommandLine|contains: 'sh'
+  condition: sel_img and sel_short
+level: medium

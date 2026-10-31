@@ -227,6 +227,82 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replay Parquet store for incident evidence (default: data/replay).",
     )
 
+    rules = sub.add_parser("rules", help="Learned-rule commands.")
+    rules_sub = rules.add_subparsers(dest="rules_command", required=True)
+    bt = rules_sub.add_parser(
+        "backtest",
+        help="Backtest one candidate Sigma rule file against a target.",
+    )
+    bt.add_argument("file", help="Candidate Sigma YAML file.")
+    bt.add_argument(
+        "--event-uid",
+        action="append",
+        default=[],
+        help="Target event uid (repeatable; or use --host/--start/--end).",
+    )
+    bt.add_argument("--host", default=None, help="Target host for a time window.")
+    bt.add_argument("--start", default=None, help="Window start (ISO-8601 or ms).")
+    bt.add_argument("--end", default=None, help="Window end (ISO-8601 or ms).")
+    bt.add_argument(
+        "--baseline-dir",
+        default="data/replay-linux-baseline",
+        help="Benign baseline store (default: %(default)s).",
+    )
+    bt.add_argument(
+        "--chain-dir",
+        default="data/replay-linux-chain1",
+        help="Attack-chain store (default: %(default)s).",
+    )
+    add = rules_sub.add_parser(
+        "add", help="Backtest and store a candidate rule (refused when rejected)."
+    )
+    add.add_argument("file", help="Candidate Sigma YAML file.")
+    add.add_argument(
+        "--event-uid",
+        action="append",
+        default=[],
+        help="Cited target event uid (repeatable).",
+    )
+    add.add_argument(
+        "--incident",
+        type=int,
+        default=None,
+        help="Incident id the rule was learned from (optional).",
+    )
+    add.add_argument("--producer", required=True, help="Producer name (free field).")
+    add.add_argument(
+        "--producer-version", required=True, help="Producer version (free field)."
+    )
+    add.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    add.add_argument(
+        "--baseline-dir",
+        default="data/replay-linux-baseline",
+        help="Benign baseline store (default: %(default)s).",
+    )
+    add.add_argument(
+        "--chain-dir",
+        default="data/replay-linux-chain1",
+        help="Attack-chain store (default: %(default)s).",
+    )
+    lst = rules_sub.add_parser("list", help="List stored rules (newest first).")
+    lst.add_argument("--status", default=None, help="Filter by status (optional).")
+    lst.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    show = rules_sub.add_parser("show", help="Show one stored rule as JSON.")
+    show.add_argument("rule_id", type=int, help="Stored rule id.")
+    show.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+
     evaluation = sub.add_parser("eval", help="Evaluation harness commands.")
     eval_sub = evaluation.add_subparsers(dest="eval_command", required=True)
     eval_run = eval_sub.add_parser(
@@ -641,6 +717,99 @@ def main(argv: list[str] | None = None) -> int:
                 args.baseline,
             ]
         )
+    if args.command == "rules" and args.rules_command == "backtest":
+        import json
+        from pathlib import Path
+
+        from corvus.learning.backtest import backtest
+
+        try:
+            sigma_text = Path(args.file).read_text(encoding="utf-8")
+        except OSError as exc:
+            parser.error(f"cannot read rule file: {exc}")
+        if args.event_uid:
+            target: dict[str, object] = {"event_uids": list(args.event_uid)}
+        elif args.host is not None or args.start is not None or args.end is not None:
+            target = {"host": args.host, "start": args.start, "end": args.end}
+        else:
+            parser.error("give --event-uid (repeatable) or --host/--start/--end")
+        result = backtest(
+            sigma_text,
+            target,  # type: ignore[arg-type]
+            baseline_dir=args.baseline_dir,
+            chain_dir=args.chain_dir,
+        )
+        print(json.dumps(result.to_dict(), indent=2))
+        print(f"verdict: {'accepted' if result.accepted else 'rejected'}")
+        return 0 if result.accepted else 1
+    if args.command == "rules" and args.rules_command == "add":
+        from pathlib import Path
+
+        from corvus.learning.backtest import backtest
+        from corvus.learning.rules import add_candidate
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        if not args.event_uid:
+            parser.error("give at least one --event-uid citing the target event")
+        try:
+            sigma_text = Path(args.file).read_text(encoding="utf-8")
+        except OSError as exc:
+            parser.error(f"cannot read rule file: {exc}")
+        result = backtest(
+            sigma_text,
+            {"event_uids": list(args.event_uid)},
+            baseline_dir=args.baseline_dir,
+            chain_dir=args.chain_dir,
+        )
+        if not result.accepted:
+            print(f"rejected: {result.codes}")
+            return 1
+        migrate(args.database_url)
+        try:
+            row = add_candidate(
+                args.database_url,
+                sigma_text,
+                args.incident,
+                list(args.event_uid),
+                result,
+                args.producer,
+                args.producer_version,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            f"stored candidate id={row['id']} "
+            f"native_rule_id={row['native_rule_id']} version={row['version']}"
+        )
+        return 0
+    if args.command == "rules" and args.rules_command == "list":
+        from corvus.learning.rules import list_rules
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        for row in list_rules(args.database_url, status=args.status):
+            lineage = row["lineage"] or {}
+            print(
+                f"{row['id']:>6}  {row['status']:<11}  v{row['version']}  "
+                f"native={row['native_rule_id']}  "
+                f"{lineage.get('sigma_rule_id')}  {row['title']}"
+            )
+        return 0
+    if args.command == "rules" and args.rules_command == "show":
+        import json
+
+        from corvus.learning.rules import get_rule
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        stored = get_rule(args.database_url, args.rule_id)
+        if stored is None:
+            parser.error(f"unknown rule id {args.rule_id}")
+        assert stored is not None
+        print(json.dumps(stored, indent=2, sort_keys=True, default=str))
+        return 0
     parser.error("unknown command")
     return 2
 

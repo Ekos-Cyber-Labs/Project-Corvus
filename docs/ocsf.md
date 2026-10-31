@@ -293,6 +293,30 @@ Rules the detector never evaluates:
 - rules whose conversion fails (legacy pipe conditions, rejected
   regex, correlation rules): counted per construct.
 
+## Linux logsource mapping (`corvus/detect/mapping.py`)
+
+The three Linux slices below route `product: linux` by category
+(service must be unset), with the same `test` + `stable` status gate
+as Windows. Field behaviour verified against the real normalized
+Linux events (chain store, n=2245 process / 502 file / 253 network
+events): a Sigma field with no faithful slot stays unmapped and the
+rule is skipped and counted, never evaluated against null.
+
+| Sigma logsource | OCSF slice (class/activity, log) | Sigma field to OCSF value |
+|---|---|---|
+| `linux/process_creation` | 1007/1, `auditd` + `sudo` | `Image` process.file.path, `CommandLine` process.cmd_line, `User` actor (`name`, no domain on Linux). `ParentImage`/`ParentCommandLine` have no slot (no `parent_process` in mapper output), nor do `CurrentDirectory`/`LogonId`: rules using them are skipped |
+| `linux/file_event` | 1001 (all activities), `auditd` + the three `syscheck` decoders | `TargetFilename` file.path. `Image` has no slot (the actor process carries pid and name only): skipped |
+| `linux/network_connection` | 4001/1 + 4001/4, `auditd` | `DestinationIp`/`DestinationPort` dst_endpoint, `User` actor. `Image`/`Initiated`/`DestinationHostname`/`Protocol`/source fields have no slot: skipped |
+
+Out of scope and counted per logsource: the `auditd`-service rules
+(raw `type`/`SYSCALL`/`aN` record shapes, evaluated against merged
+one-event-per-serial rows that have no such fields) and the
+syslog/sshd/cron keyword rules. Measured in
+`eval/reports/linux_rules_measured.md` (producing script
+`eval/linux_rules_measured.py`). Learned rules are judged by the
+deterministic verifier in `corvus/learning/backtest.py` and stored
+through `corvus/learning/rules.py` (`corvus rules backtest/add/list/show`).
+
 ## Canonicalization
 
 Placeholders (`-`, `n/a`, `unknown`, case-insensitive) count as missing
