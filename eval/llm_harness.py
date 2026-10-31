@@ -111,7 +111,8 @@ def select_llm_incidents(
                 "SELECT id, severity_floor, correlation_key,"
                 " COALESCE(jsonb_array_length(event_uids), 0),"
                 " first_seen, last_seen FROM incidents"
-                " WHERE severity_floor >= %s ORDER BY id ASC",
+                " WHERE severity_floor >= %s"
+                " AND correlation_key NOT LIKE 'adv-llm:%%' ORDER BY id ASC",
                 (min_floor,),
             )
             rows = cur.fetchall()

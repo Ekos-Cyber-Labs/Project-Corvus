@@ -976,3 +976,12 @@ rules back to Wazuh (shadow first, human approval).
   here (reviewer runs it); cost bound assume full caps zero cache
   hits: 0.10 USD per analyzed incident. Compose Postgres left
   running. Awaiting maintainer commit.
+- 2026-10-30: built the reduced read-only UI (frontend-engineer, then
+  security-reviewer pass). Failures first: none in the final runs.
+  Counts: `make lint` green; full `make test` 784 passed with
+  Postgres; `make ui-test` 3 passed; `make ui-build` built;
+  gitleaks passed. Added the `adv-llm:` exclusion in the eval
+  selection and every API listing, the read-only incident/health
+  API with strict CSP, and the React+Vite SPA under `ui/` served by
+  the same FastAPI app. Compose Postgres left running. Awaiting
+  maintainer commit.

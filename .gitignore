@@ -256,3 +256,7 @@ eval/runs/
 .DS_Store
 .idea/
 .vscode/
+
+# Corvus UI build output (built by Dockerfile node stage / make ui-build)
+ui/dist/
+ui/node_modules/

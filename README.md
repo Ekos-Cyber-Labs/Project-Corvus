@@ -65,6 +65,25 @@ Run the skeleton stack:
   with `make lint` and the full `make test`, including the live
   migration test.
 
+## Web UI (read-only)
+
+The UI shows what Corvus did — every claim is verifiable against stored
+evidence. It is read-only: there is no write endpoint.
+
+- Run: `CORVUS_ENV_FILE=/path/outside/repo.env make up`, then open
+  http://127.0.0.1:8000/ . The API and UI are served by the same FastAPI
+  app (`corvus-api`); Postgres and the API bind to `127.0.0.1` only in
+  `docker-compose.yml`. To expose the API elsewhere, change the host side
+  of the `corvus-api` ports mapping (for example `0.0.0.0:8000:8000`) —
+  do this only behind your own access controls, as the UI has no login
+  in hackathon scope.
+- Local UI development: `make ui-build` builds `ui/` to `ui/dist`
+  (git-ignored; the Dockerfile builds it in a Node stage), `make ui-test`
+  runs the frontend tests. They are separate from `make test` because CI
+  may not have Node; run both where Node is available.
+- Pinned UI versions (verified live on 2026-10-30): React 19.3.1,
+  Vite 8.3.5, TypeScript 7.0.2, Vitest 5.0.5.
+
 ## Built during the hackathon
 
 All product code in this repo was written between Oct 27 and Nov 4, 2026. The commit history shows what was built when.
