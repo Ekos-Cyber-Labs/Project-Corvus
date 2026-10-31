@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-10-29T00:02:09.156+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793232129.543086",
+  "full_log": "type=EXECVE msg=audit(1793232129.118:965744): argc=2 a0=\"sed\" a1=732F5C285B5B3A616C6E756D3A5D5D5C2B5C295C205C2B5B5B3A64696769743A5D5D5C2B5C205C2B5B5B3A64696769743A5D5D5C2B5C205C2B5C282E2A5C293A5C285B5B3A64696769743A5D5D2A5C295C205C2B5C285B302D395C2E5C3A5C2A5D5C2B5C292E5C2B5C205C285B5B3A64696769743A5D5D2A5C2F5B5B3A616C6E756D3A5D5C2D5D2A5C292E2A2F5C31205C32203D3D205C33203D3D205C34205C352F type=CWD msg=audit(1793232129.118:965744): cwd=\"/var/ossec\" type=PATH msg=audit(1793232129.118:965744): item=0 name=\"/usr/bin/sed\" inode=33489 dev=08:01 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PATH msg=audit(1793232129.118:965744): item=1 name=\"/lib64/ld-linux-x86-64.so.2\" inode=12226 dev=08:01 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PROCTITLE msg=audit(1793232129.118:965744): proctitle=73656400732F5C285B5B3A616C6E756D3A5D5D5C2B5C295C205C2B5B5B3A64696769743A5D5D5C2B5C205C2B5B5B3A64696769743A5D5D5C2B5C205C2B5C282E2A5C293A5C285B5B3A64696769743A5D5D2A5C295C205C2B5C285B302D395C2E5C3A5C2A5D5C2B5C292E5C2B5C205C285B5B3A64696769743A5D5D2A5C2F5B5B",
+  "decoder": {
+    "parent": "auditd",
+    "name": "auditd"
+  },
+  "data": {
+    "audit": {
+      "type": "EXECVE",
+      "id": "965744",
+      "execve": {
+        "argc": "2",
+        "a0": "sed"
+      },
+      "cwd": "/var/ossec",
+      "file": {
+        "name": "/usr/bin/sed",
+        "inode": "33489",
+        "mode": "0100755"
+      }
+    }
+  },
+  "location": "/var/log/audit/audit.log"
+}

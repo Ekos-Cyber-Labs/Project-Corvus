@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-10-29T00:05:03.158+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793232303.543086",
+  "full_log": "type=LOGIN msg=audit(1793232301.521:965758): pid=39759 uid=0 subj=unconfined old-auid=4294967295 auid=0 tty=(none) old-ses=4294967295 ses=176 res=1\u001dUID=\"root\" OLD-AUID=\"unset\" AUID=\"root\" type=SYSCALL msg=audit(1793232301.521:965758): arch=c000003e syscall=1 success=yes exit=1 a0=7 a1=7ffdc97b6940 a2=1 a3=0 items=0 ppid=6411 pid=39759 auid=0 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=(none) ses=176 comm=\"cron\" exe=\"/usr/sbin/cron\" subj=unconfined key=(null)\u001dARCH=x86_64 SYSCALL=write AUID=\"root\" UID=\"root\" GID=\"root\" EUID=\"root\" SUID=\"root\" FSUID=\"root\" EGID=\"root\" SGID=\"root\" FSGID=\"root\" type=PROCTITLE msg=audit(1793232301.521:965758): proctitle=2F7573722F7362696E2F43524F4E002D66002D50",
+  "decoder": {
+    "parent": "auditd",
+    "name": "auditd"
+  },
+  "data": {
+    "audit": {
+      "type": "LOGIN",
+      "id": "965758",
+      "pid": "39759",
+      "uid": "0",
+      "subj": "unconfined"
+    }
+  },
+  "location": "/var/log/audit/audit.log"
+}

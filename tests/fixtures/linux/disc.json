@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-10-28T00:16:36.848+0000",
+  "agent": {
+    "id": "000",
+    "name": "wazuh01"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793146596.1363",
+  "full_log": "Oct 28 00:16:35 wazuh01 sshd[5019]: Disconnected from user root 198.51.100.23 port 3741",
+  "predecoder": {
+    "program_name": "sshd",
+    "timestamp": "Oct 28 00:16:35",
+    "hostname": "wazuh01"
+  },
+  "decoder": {
+    "parent": "sshd",
+    "name": "sshd"
+  },
+  "data": {
+    "srcip": "198.51.100.23",
+    "srcport": "3741",
+    "srcuser": "root"
+  },
+  "location": "journald"
+}

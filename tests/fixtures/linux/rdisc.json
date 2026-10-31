@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-10-28T00:16:36.848+0000",
+  "agent": {
+    "id": "000",
+    "name": "wazuh01"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793146596.1363",
+  "full_log": "Oct 28 00:16:35 wazuh01 sshd[5019]: Received disconnect from 198.51.100.23 port 3741:11: disconnected by user",
+  "predecoder": {
+    "program_name": "sshd",
+    "timestamp": "Oct 28 00:16:35",
+    "hostname": "wazuh01"
+  },
+  "decoder": {
+    "parent": "sshd",
+    "name": "sshd"
+  },
+  "location": "journald"
+}

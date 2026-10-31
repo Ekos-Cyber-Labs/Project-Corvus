@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-10-29T14:25:37.694+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793283937.120141",
+  "full_log": "type=USER_AUTH msg=audit(1793283937.112:1104768): pid=44871 uid=0 auid=0 ses=285 subj=unconfined msg='op=PAM:authentication grantors=pam_rootok acct=\"deploy\" exe=\"/usr/bin/su\" hostname=? addr=? terminal=? res=success'\u001dUID=\"root\" AUID=\"root\"",
+  "decoder": {
+    "parent": "auditd",
+    "name": "auditd"
+  },
+  "data": {
+    "srcip": "?",
+    "audit": {
+      "type": "USER_AUTH",
+      "id": "1104768",
+      "pid": "44871",
+      "uid": "0",
+      "auid": "0",
+      "session": "285",
+      "subj": "unconfined",
+      "acct": "deploy",
+      "exe": "/usr/bin/su"
+    }
+  },
+  "location": "/var/log/audit/audit.log"
+}

@@ -75,6 +75,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=5000,
         help="Rows buffered before one Parquet write (default: 5000).",
     )
+    load_linux = replay_sub.add_parser(
+        "load-linux",
+        help="Normalize Wazuh Linux archives into Parquet under data/replay-linux/.",
+    )
+    load_linux.add_argument("path", help="Archive file or directory to load.")
+    load_linux.add_argument(
+        "--replay-dir",
+        default="data/replay-linux",
+        help="Linux replay store directory (default: data/replay-linux).",
+    )
+    load_linux.add_argument(
+        "--data-dir",
+        default="data",
+        help="Dataset root for data-relative provenance paths (default: data).",
+    )
+    load_linux.add_argument(
+        "--batch-size",
+        type=int,
+        default=5000,
+        help="Rows buffered before one Parquet write (default: 5000).",
+    )
     detect = replay_sub.add_parser(
         "detect",
         help="Evaluate Sigma rules over the replay store into findings.",
@@ -380,6 +401,23 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             parser.error(str(exc))
         print(format_summary(summary, args.replay_dir))
+        return 0
+    if args.command == "replay" and args.replay_command == "load-linux":
+        from corvus.adapters.replay.linux_loader import (
+            format_linux_summary,
+            load_linux_path,
+        )
+
+        try:
+            linux_summary = load_linux_path(
+                args.path,
+                replay_dir=args.replay_dir,
+                data_dir=args.data_dir,
+                batch_size=args.batch_size,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(format_linux_summary(linux_summary, args.replay_dir))
         return 0
     if args.command == "replay" and args.replay_command == "detect":
         import json

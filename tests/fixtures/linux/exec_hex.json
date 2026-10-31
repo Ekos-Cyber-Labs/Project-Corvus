@@ -1,0 +1,56 @@
+{
+  "timestamp": "2026-10-28T00:04:27.427+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793145867.2487130",
+  "full_log": "type=SYSCALL msg=audit(1793145867.400:134195): arch=c000003e syscall=59 success=yes exit=0 a0=720eb31cb42f a1=720eb17cbc60 a2=7ffcdef736c8 a3=8 items=2 ppid=991 pid=2146 auid=4294967295 uid=0 gid=111 euid=0 suid=0 fsuid=0 egid=111 sgid=111 fsgid=111 tty=(none) ses=4294967295 comm=\"sh\" exe=\"/usr/bin/dash\" subj=unconfined key=\"process_creation\"\u001dARCH=x86_64 SYSCALL=execve AUID=\"unset\" UID=\"root\" GID=\"wazuh\" EUID=\"root\" SUID=\"root\" FSUID=\"root\" EGID=\"wazuh\" SGID=\"wazuh\" FSGID=\"wazuh\" type=EXECVE msg=audit(1793145867.400:134195): argc=4 a0=\"sh\" a1=\"-c\" a2=\"--\" a3=6E657473746174202D74756C706E207C207365642027732F5C285B5B3A616C6E756D3A5D5D5C2B5C295C205C2B5B5B3A64696769743A5D5D5C2B5C205C2B5B5B3A64696769743A5D5D5C2B5C205C2B5C282E2A5C293A5C285B5B3A64696769743A5D5D2A5C295C205C2B5C285B302D395C2E5C3A5C2A5D5C2B5C292E5C2B5C205C285B5B3A64696769743A5D5D2A5C2F5B5B3A616C6E756D3A5D5C2D5D2A5C292E2A2F5C31205C32203D3D205C33203D3D205C34205C352F27207C20736F7274202D6B2034202D67207C207365642027732F203D3D205C282E2A5C29203D3D2F3A5C312F27207C2073656420312C3264 type=CWD msg=audit(1793145867.400:134195): cwd=\"/var/ossec\" type=PATH msg=audit(1793145867.400:134195): item=0 name=\"/bin/sh\" inode=593 dev=08:01 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PATH msg=audit(1793145867.400:134195): item=1 name=\"/lib64/ld-linux-x86-64.so.2\" inode=43312 dev=08:01 mode=0100755 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0\u001dOUID=\"root\" OGID=\"root\" type=PROCTITLE msg=audit(1793145867.400:134195): proctitle=7368002D63002D2D006E657473746174202D74756C706E207C207365642027732F5C285B5B3A616C6E756D3A5D5D5C2B5C295C205C2B5B5B3A64696769743A5D5D5C2B5C205C2B5B5B3A64696769743A5D5D5C2B5C205C2B5C282E2A5C293A5C285B5B3A64696769743A5D5D2A5C295C205C2B5C285B302D395C2E5C3A5C2A5D",
+  "decoder": {
+    "parent": "auditd",
+    "name": "auditd"
+  },
+  "data": {
+    "audit": {
+      "type": "SYSCALL",
+      "id": "134195",
+      "arch": "c000003e",
+      "syscall": "59",
+      "success": "yes",
+      "exit": "0",
+      "ppid": "991",
+      "pid": "2146",
+      "auid": "4294967295",
+      "uid": "0",
+      "gid": "111",
+      "euid": "0",
+      "suid": "0",
+      "fsuid": "0",
+      "egid": "111",
+      "sgid": "111",
+      "fsgid": "111",
+      "tty": "(none)",
+      "session": "4294967295",
+      "command": "sh",
+      "exe": "/usr/bin/dash",
+      "key": "process_creation",
+      "execve": {
+        "argc": "4",
+        "a0": "sh",
+        "a1": "-c",
+        "a2": "--"
+      },
+      "cwd": "/var/ossec",
+      "file": {
+        "name": "/bin/sh",
+        "inode": "593",
+        "mode": "0100755"
+      }
+    }
+  },
+  "location": "/var/log/audit/audit.log"
+}

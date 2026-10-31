@@ -49,10 +49,10 @@ endpoints).
 
 | OCSF class | class_uid | category_uid | Activity IDs we use | Source |
 |---|---|---|---|---|
-| Authentication | 3002 | 3 | 1 Logon, 2 Logoff, 3 Authentication Ticket, 4 Service Ticket Request, 5 Service Ticket Renew, 6 Preauth | `windows.py` (Security 4624/4625) |
-| Process Activity | 1007 | 1 | 1 Launch, 2 Terminate, 3 Open, 4 Inject, 5 Set User ID | `windows.py` (Sysmon 1, Sysmon 10 as Open) |
-| Network Activity | 4001 | 4 | 1 Open, 2 Close, 3 Reset, 4 Fail, 5 Refuse, 6 Traffic, 7 Listen | `windows.py` (Sysmon 3) |
-| File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open | `windows.py` (Sysmon 11) |
+| Authentication | 3002 | 3 | 1 Logon, 2 Logoff, 3 Authentication Ticket, 4 Service Ticket Request, 5 Service Ticket Renew, 6 Preauth | `windows.py` (Security 4624/4625); `wazuh.py` (sshd Accepted/Failed/Invalid user as Logon, disconnect/closed as Logoff; pam/su sessions; audit USER_AUTH/USER_START/LOGIN/USER_END) |
+| Process Activity | 1007 | 1 | 1 Launch, 2 Terminate, 3 Open, 4 Inject, 5 Set User ID | `windows.py` (Sysmon 1, Sysmon 10 as Open); `wazuh.py` (audit execve with joined EXECVE/PROCTITLE, sudo, audit USER_CMD) |
+| Network Activity | 4001 | 4 | 1 Open, 2 Close, 3 Reset, 4 Fail, 5 Refuse, 6 Traffic, 7 Listen | `windows.py` (Sysmon 3); `wazuh.py` (audit `connect` with decoded SADDR peer) |
+| File System Activity | 1001 | 1 | 1 Create, 2 Read, 3 Update, 4 Delete, 5 Rename, 6 Set Attributes, 7 Set Security, 8 Get Attributes, 9 Get Security, 10 Encrypt, 11 Decrypt, 12 Mount, 13 Unmount, 14 Open | `windows.py` (Sysmon 11); `wazuh.py` (audit file syscalls with joined PATH, syscheck) |
 | Scheduled Job Activity | 1006 | 1 | 1 Create, 2 Update, 3 Delete, 4 Enable, 5 Disable, 6 Start | `windows.py` (Security 4698, TaskScheduler 106) |
 | Script Activity | 1009 | 1 | 1 Execute | `windows.py` (PowerShell 4104/4103, Windows PowerShell 800) |
 | Module Activity | 1005 | 1 | 1 Load | `windows.py` (Sysmon 7; `events/system/module_activity.json`) |
@@ -199,6 +199,28 @@ nested layout (a `winlog` object holding `channel` / `event_id` /
   `WindowsReadStats`; `read_dataset_file` collects the same stream and is
   kept for tests. The replay loader uses the iterator so it never holds a
   whole dataset in memory.
+
+## Linux archive normalizer (`wazuh.py`)
+
+Raw Wazuh archive documents (one JSON object per line, `.json.gz` or
+`.json`) map through `map_linux_doc`, sharing the alert/archive
+mappers above. Audit companions (EXECVE/CWD/PATH/PROCTITLE) join
+their SYSCALL by kernel serial — hex-encoded arguments decode as
+UTF-8 with replacements counted — so one execution yields one
+event; companions without a SYSCALL stay unmapped. `connect`
+syscalls map with the decoded `SADDR` peer (`data.audit` drops the
+`SOCKADDR` record, so the mapper reads `full_log`). PAM `session
+opened/closed` and `su` invocations map to Authentication Logon /
+Logoff; the pinned `authorize_session` activities are privilege
+assignments, not sessions, so they are not used. Cron sessions
+carry `unmapped["linux.cron"]` for later filtering. The ssh user
+name is attacker-controlled: kept verbatim up to
+`LINUX_USERNAME_CAP` (256), never sanitised. Event time comes from
+the log line (kernel audit stamp, ISO-8601 auth.log, or journald
+`Mon dd HH:MM:SS` with the manager year), never the manager receive
+time. The same event arriving twice (auth.log and journald copies)
+shares the dedupe key `agent + canonical body`; audit documents
+share `agent + serial` (session records add their type).
 
 ## Sigma logsource mapping (`corvus/detect/mapping.py`)
 

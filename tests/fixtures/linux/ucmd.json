@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-10-29T14:25:37.709+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793283937.120141",
+  "full_log": "type=USER_CMD msg=audit(1793283937.134:1104775): pid=44872 uid=1000 auid=0 ses=285 subj=unconfined msg='cwd=\"/root\" cmd=2F7573722F62696E2F66696E64202F746D70202D6D617864657074682030 exe=\"/usr/bin/sudo\" terminal=? res=success'\u001dUID=\"deploy\" AUID=\"root\"",
+  "decoder": {
+    "name": "auditd"
+  },
+  "data": {
+    "audit": {
+      "type": "USER_CMD",
+      "id": "1104775",
+      "pid": "44872",
+      "auid": "0",
+      "uid": "1000",
+      "session": "285",
+      "exe": "\"/usr/bin/sudo\"",
+      "res": "success",
+      "cwd": "/root"
+    }
+  },
+  "location": "/var/log/audit/audit.log"
+}

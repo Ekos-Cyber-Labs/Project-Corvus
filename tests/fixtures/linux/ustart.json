@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-10-29T00:05:03.158+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793232303.543086",
+  "full_log": "type=USER_START msg=audit(1793232301.522:965759): pid=39759 uid=0 auid=0 ses=176 subj=unconfined msg='op=PAM:session_open grantors=pam_loginuid,pam_env,pam_env,pam_permit,pam_umask,pam_unix,pam_limits acct=\"root\" exe=\"/usr/sbin/cron\" hostname=? addr=? terminal=cron res=success'\u001dUID=\"root\" AUID=\"root\"",
+  "decoder": {
+    "parent": "auditd",
+    "name": "auditd"
+  },
+  "data": {
+    "srcip": "?",
+    "audit": {
+      "type": "USER_START",
+      "id": "965759",
+      "pid": "39759",
+      "uid": "0",
+      "auid": "0",
+      "session": "176",
+      "subj": "unconfined",
+      "acct": "root",
+      "exe": "/usr/sbin/cron"
+    }
+  },
+  "location": "/var/log/audit/audit.log"
+}

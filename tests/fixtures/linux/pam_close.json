@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-10-28T00:05:03.436+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793145903.2487130",
+  "full_log": "2026-10-28T00:05:01.805585+00:00 web01 CRON[2155]: pam_unix(cron:session): session closed for user root",
+  "predecoder": {
+    "program_name": "CRON",
+    "timestamp": "2026-10-28T00:05:01.805585+00:00"
+  },
+  "decoder": {
+    "parent": "pam",
+    "name": "pam"
+  },
+  "data": {
+    "dstuser": "root"
+  },
+  "location": "/var/log/auth.log"
+}

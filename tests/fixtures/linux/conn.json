@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-10-28T00:00:21.372+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793145621.2487130",
+  "full_log": "type=SYSCALL msg=audit(1793145621.003:134151): arch=c000003e syscall=42 success=yes exit=0 a0=4 a1=7ffd088d6590 a2=10 a3=7ffd088d656c items=0 ppid=1 pid=862 auid=4294967295 uid=108 gid=110 euid=108 suid=108 fsuid=108 egid=110 sgid=110 fsgid=110 tty=(none) ses=4294967295 comm=\"chronyd\" exe=\"/usr/sbin/chronyd\" subj=/usr/sbin/chronyd key=\"network_connect_4\"\u001dARCH=x86_64 SYSCALL=connect AUID=\"unset\" UID=\"_chrony\" GID=\"_chrony\" EUID=\"_chrony\" SUID=\"_chrony\" FSUID=\"_chrony\" EGID=\"_chrony\" SGID=\"_chrony\" FSGID=\"_chrony\" type=SOCKADDR msg=audit(1793145621.003:134151): saddr=0200007BAC689AB60000000000000000\u001dSADDR={ saddr_fam=inet laddr=203.0.113.7 lport=123 } type=PROCTITLE msg=audit(1793145621.003:134151): proctitle=2F7573722F7362696E2F6368726F6E7964002D460031",
+  "decoder": {
+    "parent": "auditd",
+    "name": "auditd"
+  },
+  "data": {
+    "audit": {
+      "type": "SYSCALL",
+      "id": "134151",
+      "arch": "c000003e",
+      "syscall": "42",
+      "success": "yes",
+      "exit": "0",
+      "ppid": "1",
+      "pid": "862",
+      "auid": "4294967295",
+      "uid": "108",
+      "gid": "110",
+      "euid": "108",
+      "suid": "108",
+      "fsuid": "108",
+      "egid": "110",
+      "sgid": "110",
+      "fsgid": "110",
+      "tty": "(none)",
+      "session": "4294967295",
+      "command": "chronyd",
+      "exe": "/usr/sbin/chronyd",
+      "key": "network_connect_4"
+    }
+  },
+  "location": "/var/log/audit/audit.log"
+}

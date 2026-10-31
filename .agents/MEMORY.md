@@ -1032,3 +1032,43 @@ rules back to Wazuh (shadow first, human approval).
   delta. Layout widths reasoned from CSS, not measured in a
   browser. Compose Postgres left running. Awaiting maintainer
   commit.
+- 2026-10-30: mapped the Linux archive baseline to typed OCSF 1.9.0
+  (detection-engineer; no paid API call). Census
+  (`eval/linux_census.py`, `eval/reports/linux_baseline_census.md`):
+  n=157451 over 2026-10-28T00:00:01Z..2026-10-31T00:00:00Z, 2 agents,
+  benign lab activity only (cron, systemd, monitoring, a few ssh
+  sessions; no attack, no Failed/Invalid-user lines). Current
+  normalizer mapped 107103 (1007: 107009, 3002: 89, 1001: 5).
+  Normalizers (`corvus/normalize/wazuh.py`): sshd
+  Accepted/Failed/Invalid-user/disconnect/closed to 3002 (auth
+  method and invalid-user flag in unmapped; user verbatim up to a
+  256-char cap), pam/su sessions to 3002 Logon/Logoff (cron tagged
+  for later filtering), execve SYSCALLs to 1007 with the EXECVE and
+  PROCTITLE records joined by serial (hex decoded, replacements
+  counted; quoted values stay literal), USER_AUTH/USER_START/LOGIN/
+  USER_END to 3002, USER_CMD to 1007, watch-key file syscalls to
+  1001 via joined PATH records (last non-trivial path wins), connect
+  syscalls to 4001 via the decoded SADDR peer (present in every
+  baseline connect blob), event time from the log line, dedupe keys
+  (syslog: agent plus canonical body; audit: agent plus serial).
+  Loader (`corvus/adapters/replay/linux_loader.py`, `corvus replay
+  load-linux`): archives into data/replay-linux with file SHA-256
+  plus line provenance, serial-join window, manifest-skipped reruns;
+  measured n=157451 to 55794 events (1001: 17080, 1007: 31373,
+  3002: 3819, 4001: 3522), 81119 unmapped, 2935 merged, 17603
+  deduplicated, 0 malformed. Injection detector needed no field
+  change (ssh user, cmdline, file path already scanned; end-to-end
+  test added). Sigma report
+  (`eval/reports/linux_sigma_coverage.md`): 149 linux rules in the
+  full bundle, 0 routable by the windows-only engine, 0 false
+  positives (vacuous); per-service field gaps listed. 16 real-record
+  fixtures plus 38 tests; full-conformance sweep 0 errors on all
+  mapped events. One existing adapter test pinned manager-time
+  event times, so log-line time applies to the raw-doc path only
+  (hit path keeps cursor-sorted manager time). Verified with `make
+  lint` (green) and the full `make test` (841 passed with
+  Postgres) and `pre-commit run gitleaks --all-files` (Passed;
+  direct tree detect flags only pre-existing git-ignored data,
+  llm_latest.json and pycache, none in changed files). Windows eval
+  harness untouched, no shared-path behavior change, so no eval
+  delta. Compose Postgres left running. Awaiting maintainer commit.

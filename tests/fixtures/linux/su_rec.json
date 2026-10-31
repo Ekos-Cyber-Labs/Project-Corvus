@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-10-29T14:25:37.473+0000",
+  "agent": {
+    "id": "001",
+    "name": "web01",
+    "ip": "192.0.2.10"
+  },
+  "manager": {
+    "name": "wazuh01"
+  },
+  "id": "1793283937.117998",
+  "full_log": "2026-10-29T14:25:37.114463+00:00 web01 su[44871]: (to deploy) root on none",
+  "predecoder": {
+    "program_name": "su",
+    "timestamp": "2026-10-29T14:25:37.114463+00:00"
+  },
+  "decoder": {
+    "parent": "su",
+    "name": "su"
+  },
+  "location": "/var/log/auth.log"
+}
