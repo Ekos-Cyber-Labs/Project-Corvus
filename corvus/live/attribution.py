@@ -1,15 +1,26 @@
 """Learned-rule attribution for Wazuh alert findings (no model calls).
 
-A finding whose Wazuh rule id is in 100000-120000 (or that carries a
-``corvus_<sigma id>`` group) was produced by a learned rule. This
-module joins it to its stored rule row:
+A finding is a learned-rule finding ONLY when its alert carries at
+least one Corvus group (``corvus_shadow``, ``corvus_active`` or
+``corvus_<sigma id>``): Wazuh sites commonly keep their own custom
+rules in the 100000-120000 range, so a bare in-range rule id proves
+nothing. Past the gate, the native id and the Sigma group must AGREE
+on the same stored rule row:
 
-- exact join: the alert rule id equals the row's ``native_rule_id``;
+- exact join: the alert rule id equals the row's ``native_rule_id``
+  and every resolving Sigma group names the same row;
 - pair join: a deployed rule ships as a sudo/auditd pair of native
   ids under one ``corvus_<sigma id>`` group (the second id is the
   next free id above the anchor at export time, so it is NOT
-  ``anchor + 1`` in general), so a ``corvus_<sigma id>`` group naming
-  a stored Sigma id joins to that row whatever the native id is.
+  ``anchor + 1`` in general and has no stored row of its own), so a
+  ``corvus_<sigma id>`` group naming a stored Sigma id joins to that
+  row when the native id is unstored but in the learned range.
+
+Anything else with a Corvus group (unknown Sigma group, out-of-range
+or non-numeric native id, or id and group naming different rows) is
+``unknown_learned_rule``. A finding without any Corvus group is a
+normal finding: not stamped, not muted, even when its rule id lies
+in the learned range.
 
 The finding is stamped in ``unmapped`` (kept, flagged, never
 trusted blindly):
@@ -19,9 +30,9 @@ trusted blindly):
   lineage id (the Sigma id again, which is what ``lineage`` keys
   on), the native id, and whether it is a shadow or pair-secondary
   match;
-- unresolvable but in the learned range (or carrying an unresolvable
-  ``corvus_`` group): kept with ``corvus_unknown_learned_rule`` and
-  never trusted.
+- gated but unresolvable (a Corvus group is present yet nothing
+  agrees on one stored row): kept with
+  ``corvus_unknown_learned_rule`` and never trusted.
 
 Shadow findings (group ``corvus_shadow``) and unknown learned
 findings never raise incident severity: :func:`mutes_severity`
@@ -44,6 +55,8 @@ __all__ = [
     "finding_muted",
     "finding_rule_id",
     "finding_sigma_groups",
+    "has_corvus_group",
+    "is_active_finding",
     "is_shadow_finding",
     "learned_refs_for_uids",
     "mutes_severity",
@@ -97,6 +110,31 @@ def is_shadow_finding(finding: Any) -> bool:
     return "corvus_shadow" in [part.strip() for part in str(category).split(",")]
 
 
+def is_active_finding(finding: Any) -> bool:
+    """Return True when the finding carries the ``corvus_active`` group."""
+    info = getattr(finding, "finding_info", None)
+    analytic = getattr(info, "analytic", None) if info is not None else None
+    category = getattr(analytic, "category", None) if analytic is not None else None
+    if not category:
+        return False
+    return "corvus_active" in [part.strip() for part in str(category).split(",")]
+
+
+def has_corvus_group(finding: Any) -> bool:
+    """Return True when the finding carries any Corvus group.
+
+    The gate for learned-rule attribution: ``corvus_shadow``,
+    ``corvus_active`` or any ``corvus_<sigma id>`` group (see
+    :func:`finding_sigma_groups`). Findings without one are normal
+    findings whatever their rule id is.
+    """
+    return (
+        is_shadow_finding(finding)
+        or is_active_finding(finding)
+        or bool(finding_sigma_groups(finding))
+    )
+
+
 def _native_id(rule_id: str | None) -> int | None:
     """Parse a numeric Wazuh rule id, else None (kept, never raised)."""
     if rule_id is None:
@@ -107,34 +145,70 @@ def _native_id(rule_id: str | None) -> int | None:
     return int(text)
 
 
+def _row_id(row: dict[str, Any]) -> Any:
+    """Return the stored row's record id (the identity for agreement)."""
+    record_id = row.get("id")
+    if isinstance(record_id, bool) or not isinstance(record_id, (int, str)):
+        return None
+    if isinstance(record_id, str):
+        record_id = record_id.strip()
+        if not record_id.isdigit():
+            return None
+        return int(record_id)
+    return record_id
+
+
 def resolve_learned(
     rule_id: str | None,
     sigma_groups: list[str],
     rows_by_native: dict[int, dict[str, Any]],
     rows_by_sigma: dict[str, dict[str, Any]],
+    *,
+    has_corvus: bool = False,
 ) -> dict[str, Any]:
     """Join one alert rule reference to its stored rule row.
 
     ``rows_by_native`` maps ``native_rule_id`` to the stored row;
     ``rows_by_sigma`` maps ``lineage.sigma_rule_id`` to the stored
-    row. Returns a stamp dict (see :func:`attribution_for_finding`);
-    ``resolved`` is False with ``unknown_learned_rule`` True when the
-    reference is learned-range but matches no stored rule.
+    row. ``has_corvus`` must say whether the alert carries a Corvus
+    group: without one the finding is normal (``learned`` False) even
+    when the rule id is in the learned range or equals a stored
+    native id. Past the gate the native id and the Sigma groups must
+    agree on one stored row, else the stamp is
+    ``unknown_learned_rule``: a native id with a stored row joins
+    exactly when no resolving Sigma group names a different row, and
+    a Sigma group joins exactly when the native id is unstored but in
+    the learned range (the pair-secondary id has no row of its own).
+    Returns a stamp dict (see :func:`attribution_for_finding`).
     """
     native = _native_id(rule_id)
     in_range = native is not None and LEARNED_ID_MIN <= native <= LEARNED_ID_MAX
+    # sigma_groups itself is Corvus groups, so the gate also holds for
+    # direct callers that pass groups with has_corvus=False.
+    if not has_corvus and not sigma_groups:
+        return {"resolved": False, "learned": False}
+    native_row = rows_by_native.get(native) if native is not None else None
+    sigma_rows = [
+        rows_by_sigma[group[len(GROUP_PREFIX) :]]
+        for group in sigma_groups
+        if group[len(GROUP_PREFIX) :] and group[len(GROUP_PREFIX) :] in rows_by_sigma
+    ]
     row: dict[str, Any] | None = None
     via: str | None = None
-    if native is not None and native in rows_by_native:
-        row = rows_by_native[native]
-        via = "native"
-    if row is None:
-        for group in sigma_groups:
-            sigma_id = group[len(GROUP_PREFIX) :]
-            if sigma_id and sigma_id in rows_by_sigma:
-                row = rows_by_sigma[sigma_id]
-                via = "sigma_group"
-                break
+    if native_row is not None:
+        if any(_row_id(candidate) != _row_id(native_row) for candidate in sigma_rows):
+            row = None
+        else:
+            row = native_row
+            via = "native"
+    elif (
+        sigma_rows
+        and len({_row_id(candidate) for candidate in sigma_rows}) == 1
+        and native is not None
+        and in_range
+    ):
+        row = sigma_rows[0]
+        via = "sigma_group"
     if row is not None:
         lineage = row.get("lineage") or {}
         return {
@@ -148,15 +222,13 @@ def resolve_learned(
             "via": via,
             "in_learned_range": in_range,
         }
-    if in_range or sigma_groups:
-        return {
-            "resolved": False,
-            "unknown_learned_rule": True,
-            "native_rule_id": native,
-            "sigma_groups": list(sigma_groups),
-            "in_learned_range": in_range,
-        }
-    return {"resolved": False, "learned": False}
+    return {
+        "resolved": False,
+        "unknown_learned_rule": True,
+        "native_rule_id": native,
+        "sigma_groups": list(sigma_groups),
+        "in_learned_range": in_range,
+    }
 
 
 def mutes_severity(stamp: dict[str, Any], shadow: bool) -> bool:
@@ -266,15 +338,23 @@ def attribution_for_finding(
     """Stamp one finding with its learned-rule reference; return the stamp.
 
     The stamp lands in ``finding.unmapped`` (``corvus_learned_rule``
-    when resolved, ``corvus_unknown_learned_rule`` when learned-range
-    but unresolvable, plus ``corvus_shadow`` for the shadow group) and
+    when the native id and the Sigma groups agree on one stored row,
+    ``corvus_unknown_learned_rule`` when a Corvus group is present but
+    nothing agrees, plus ``corvus_shadow`` for the shadow group) and
     is also returned for the incident and cycle bookkeeping.
-    Non-learned findings get an empty stamp and no new keys.
+    Findings without any Corvus group get an empty stamp and no new
+    keys, whatever their rule id is.
     """
     rule_id = finding_rule_id(finding)
     groups = finding_sigma_groups(finding)
     shadow = is_shadow_finding(finding)
-    stamp = resolve_learned(rule_id, groups, rows_by_native, rows_by_sigma)
+    stamp = resolve_learned(
+        rule_id,
+        groups,
+        rows_by_native,
+        rows_by_sigma,
+        has_corvus=has_corvus_group(finding),
+    )
     unmapped = getattr(finding, "unmapped", None)
     if not isinstance(unmapped, dict):
         try:
@@ -301,6 +381,4 @@ def attribution_for_finding(
         }
         if shadow:
             unmapped["corvus_shadow"] = True
-    elif shadow:
-        unmapped["corvus_shadow"] = True
     return {**stamp, "shadow": shadow, "muted": mutes_severity(stamp, shadow)}

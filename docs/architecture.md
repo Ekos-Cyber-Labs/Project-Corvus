@@ -312,8 +312,15 @@ or model inputs. Details: `datasets/README.md`.
   FQDNs, UNC and `DOMAIN\user` forms, profile and home paths, command
   user arguments) and replaces each hit, after the caller registers the
   incident's typed entities — so a name typed in one event is hidden in
-  another event's free text. Bare words in no recognizable position
-  cannot be found deterministically.
+  another event's free text. Registered entities additionally match
+  across percent-escapes, `_`/`-` joins, non-canonical IPv4 spellings
+  (padded, spaced, hex) and inside dict keys; base64 blobs (UTF-8 or
+  UTF-16LE, 24+ characters) decoding to a registered entity are
+  replaced wholesale. Bare words in no recognizable position
+  cannot be found deterministically. Remaining limit, by design:
+  arbitrary encodings are not decoded (hex blobs, compressed or
+  encrypted payloads, other charsets stay verbatim), so a novel
+  encoding of an entity is a known residual leak path.
 - Egress filter before every Spark call: host allowlist (model endpoints,
   Wazuh only) plus a secret-pattern redactor (tokens, passwords in command
   lines). Network-level egress remains the operator's firewall; the HTTP
@@ -418,16 +425,21 @@ or model inputs. Details: `datasets/README.md`.
   `CORRELATION_AUTH_FAILURE_THRESHOLD` (else the correlate
   defaults), so the poll never requires model settings to run.
   Learned-rule attribution (`corvus/live/attribution.py`): a finding
-  whose rule id is in 100000-120000 joins its stored rule by
-  `native_rule_id`, and a sudo/auditd pair joins by its shared
-  `corvus_<sigma id>` group; the incident and the finding carry the
-  reference (rule record id, Sigma id, version, mode shadow/active,
-  lineage id), exposed read-only in the incidents API. Shadow
-  findings (group `corvus_shadow`) never raise incident severity,
-  never notify (no notification path exists), and read visibly
-  different through that reference; an in-range id matching no stored
-  rule is kept, flagged `unknown_learned_rule`, never trusted, never
-  raising severity. Every cycle writes one `wazuh_poll_cycles` row
+  is a learned-rule finding ONLY when its alert carries a Corvus
+  group (`corvus_shadow`, `corvus_active` or `corvus_<sigma id>`) —
+  sites commonly keep their own custom rules in 100000-120000, so a
+  bare in-range id is a normal finding. Past the gate the native id
+  and the Sigma groups must agree on one stored row (a sudo/auditd
+  pair joins by its shared `corvus_<sigma id>` group when the
+  pair-secondary id is unstored but in range); anything else with a
+  Corvus group is `unknown_learned_rule`. The incident and the
+  finding carry the reference (rule record id, Sigma id, version,
+  mode shadow/active, lineage id), exposed read-only in the incidents
+  API. Shadow findings (group `corvus_shadow`) never raise incident
+  severity, never notify (no notification path exists), and read
+  visibly different through that reference; an `unknown_learned_rule`
+  is kept, flagged, never trusted, never raising severity. Every
+  cycle writes one `wazuh_poll_cycles` row
   (counts only, including learned/shadow/unknown findings), and
   `corvus rules ledger-check --start ISO --end ISO [--expect-zero]`
   prints the `llm_attempts`/`spend` rows of a window grouped by

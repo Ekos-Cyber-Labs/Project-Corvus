@@ -320,9 +320,13 @@ _AUTH_HEADER = re.compile(
 )
 #: Cookie and Set-Cookie header values are opaque session secrets.
 _COOKIE = re.compile(r"(?im)^((?:Set-)?Cookie\s*:\s*)\S+")
-#: ``curl -u user:pass`` / ``curl --user user:pass`` pairs.
+#: ``curl -u user:pass`` / ``curl --user user:pass`` pairs. The user
+#: part excludes ``%`` so an already-redacted ``smbclient -U
+#: user%[REDACTED:credential]`` pair (whose marker holds a colon) is
+#: not eaten on a second pass (idempotency); curl user names with a
+#: literal ``%`` are vanishingly rare.
 _CURL_USER = re.compile(
-    r"((?:^|\s)(?:--user|-u)\s+)[^\s:\"']+:[^\s\"']+",
+    r"((?:^|\s)(?:--user|-u)\s+)[^\s:%\"']+:[^\s\"']+",
     re.IGNORECASE,
 )
 #: The literal argument of ``ConvertTo-SecureString`` (quoted or bare,
@@ -335,11 +339,69 @@ _NTLM_HASH = re.compile(
     r"(?i)((?:/)?(?:ntlm|rc4|aes128|aes256|hash):)"
     r"([0-9a-f]{32}(?:[0-9a-f]{32})?)(?![0-9a-f])"
 )
-#: The trailing password argument of ``net use`` (the last token when
-#: it is not a flag).
-_NET_USE_TRAILING = re.compile(
-    r"(?i)(\bnet\s+use\s+\S+(?:\s+\S+)*?\s+)([^\s/][^\s]*)(?=\s|$)",
+#: ``net user <name> <password>``: the token after the account name,
+#: unless it is a flag, ``*`` (prompt for the password) or ``help``.
+_NET_USER_CMD = re.compile(
+    r"(?i)(?P<head>\bnet\s+user\b\s+(?:\"[^\"]+\"|[^\s/\"']+))"
+    r"(?P<gap>\s+)(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)",
 )
+
+#: ``net use``: handled by :func:`_redact_net_use`, which classifies each
+#: token (flags, ``\\\\share`` paths and ``X:`` drives are never secrets)
+#: instead of blindly taking the last token.
+_NET_USE_CMD = re.compile(r"(?i)(?P<head>\bnet\s+use\b)(?P<tail>(?:\s+[^\s|;&]+)*)")
+
+#: Drive-letter device (``Z:``): never a password.
+_NET_USE_DRIVE = re.compile(r"^[A-Za-z]:$")
+
+#: ``schtasks ... /RP <password>`` (the run-as password; ``/RU`` names
+#: the user and is never touched).
+_SCHTASKS_RP = re.compile(
+    r"(?i)(?<![\w])(?P<flag>/RP\s+)(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)",
+)
+
+#: ``sqlcmd ... -P <password>``: scoped to the sqlcmd command segment so
+#: ``scp -P <port>`` and ``wget -P <dir>`` stay untouched.
+_SQLCMD_CMD = re.compile(r"(?i)\bsqlcmd\b[^\n;|&]*")
+_SQLCMD_P = re.compile(r"(?P<flag>(?<![\w-])-P\s+)(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)")
+
+#: ``ldapsearch ... -w <password>``: scoped to the ldapsearch command
+#: segment so ``curl -w <format>`` stays untouched.
+_LDAPSEARCH_CMD = re.compile(r"(?i)\bldapsearch\b[^\n;|&]*")
+_LDAPSEARCH_W = re.compile(
+    r"(?P<flag>(?<![\w-])-w\s+)(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)"
+)
+
+#: ``xfreerdp ... /p:<password>`` (``/pth:`` is a different flag and is
+#: never matched: the colon must follow ``/p`` directly).
+_XFREERDP_P = re.compile(
+    r"(?i)(?<![\w/])(?P<flag>/p:)(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)",
+)
+
+#: ``smbclient ... -U <user>%<password>``: the ``%`` is what makes this
+#: the password form, so a bare ``-U <user>`` never matches.
+_SMBCLIENT_U = re.compile(
+    r"(?i)(?<![\w-])(?P<flag>(?:-U|--user(?:name)?)(?:\s+|=))"
+    r"(?P<user>[^\s%\"'=]+)%(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)",
+)
+
+#: ``echo '<user>:<password>' | chpasswd`` (quoted or bare): only text
+#: piped into ``chpasswd`` counts.
+_CHPASSWD = re.compile(
+    r"(?i)\becho\s+(?P<q>['\"]?)(?P<user>[\w.+-]+):(?P<pw>[^\s\"'|]+)(?P=q)"
+    r"(?=\s*\|\s*chpasswd\b)",
+)
+
+#: ``openssl ... -passin pass:<password>`` (and ``-passout``): the
+#: ``pass:`` prefix is what makes this the password form, so
+#: ``-passin file:...`` never matches.
+_OPENSSL_PASS = re.compile(
+    r"(?i)(?P<flag>(?<![\w-])-(?:passin|passout)\s+pass:)"
+    r"(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)",
+)
+
+#: Bare NTLM ``LM:NT`` hash pairs (32 hex, colon, 32 hex).
+_NTLM_PAIR = re.compile(r"(?i)\b[0-9a-f]{32}:[0-9a-f]{32}\b")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _API_KEY = re.compile(
     r"\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{16,}|"
@@ -374,7 +436,9 @@ _CLI_FLAG = re.compile(
     r"(?P<eq>(?:--password(?:[_-]?[A-Za-z]+)?|--passwd|-p\b)\s*=\s*[^\s\"']+)"
     r"|(?P<sp>(?:--password(?:[_-]?[A-Za-z]+)?|--passwd|--token|--secret)"
     r"\s+[^\s-][^\s]*)"
-    r"|(?P<att>(?<![A-Za-z0-9])-p[^\s\"'\d][^\s\"']*)",
+    # ``-passin``/``-passout`` are openssl flags, not ``-p`` with an
+    # attached value: the openssl pattern owns them (see redact() order).
+    r"|(?P<att>(?<![A-Za-z0-9])-p(?!assin\b|assout\b)[^\s\"'\d][^\s\"']*)",
     re.IGNORECASE,
 )
 _PRIVATE_KEY = re.compile(
@@ -382,7 +446,14 @@ _PRIVATE_KEY = re.compile(
     r".*?-----END (?:RSA |OPENSSH |EC |DSA |ENCRYPTED )?PRIVATE KEY-----",
     re.DOTALL,
 )
-_URL_USERINFO = re.compile(r"(?i)\b(https?://)([^/\s@?#]+)@")
+#: URL userinfo (``user:password@``) for HTTP(S) and the non-HTTP
+#: schemes attackers embed credentials in (database, directory, file
+#: transfer, cache, queue and SMB URLs). A URL without userinfo never
+#: matches: the ``@`` after the authority is required.
+_URL_USERINFO = re.compile(
+    r"(?i)\b((?:https?|mysql|postgres(?:ql)?|ftp|redis|mongodb|amqp|ldap|smb)://)"
+    r"([^/\s@?#]+)@"
+)
 _SHORT_FLAG_VALUE = re.compile(r"(?<![A-Za-z0-9])-p\s+(\S+)")
 
 
@@ -408,6 +479,76 @@ def _redact_secret_literal(match: re.Match[str]) -> str:
     return f"{prefix}{marker}"
 
 
+def _mask_value(prefix: str, value: str) -> str:
+    """Replace ``value`` with the marker, keeping surrounding quotes."""
+    marker = REDACTED_TEMPLATE.format(kind="credential")
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return f"{prefix}{value[0]}{marker}{value[0]}"
+    return f"{prefix}{marker}"
+
+
+def _redact_password_token(match: re.Match[str]) -> str:
+    """Replace a ``net user`` password unless the token is not one."""
+    head, gap, password = match.group("head"), match.group("gap"), match.group("pw")
+    if password.startswith("/") or password.startswith("-") or password == "*":
+        return match.group(0)
+    if password.strip("'\"").lower() in ("help", "/?"):
+        return match.group(0)
+    return f"{head}{gap}{_mask_value('', password)}"
+
+
+def _redact_net_use(match: re.Match[str]) -> str:
+    """Replace ``net use`` password tokens, keeping targets and flags."""
+    head, tail = match.group("head"), match.group("tail")
+    parts = re.findall(r"\s+|\S+", tail)
+    tokens = [part for part in parts if not part[0].isspace()]
+    has_target = any(
+        token.startswith("\\")
+        or _NET_USE_DRIVE.fullmatch(token) is not None
+        or token[:6].lower() == "/user:"
+        for token in tokens
+    )
+    if not has_target:
+        return match.group(0)
+    marker = REDACTED_TEMPLATE.format(kind="credential")
+    rebuilt: list[str] = []
+    for part in parts:
+        if part[0].isspace() or part.startswith("/"):
+            rebuilt.append(part)
+        elif part.startswith("\\\\") or part == "*":
+            rebuilt.append(part)
+        elif _NET_USE_DRIVE.fullmatch(part) is not None:
+            rebuilt.append(part)
+        else:
+            rebuilt.append(marker)
+    return head + "".join(rebuilt)
+
+
+def _redact_flag_value(match: re.Match[str]) -> str:
+    """Replace a flag value unless it is a missing value (next flag)."""
+    flag, value = match.group("flag"), match.group("pw")
+    if value.startswith("/") or value.startswith("-"):
+        return match.group(0)
+    return _mask_value(flag, value)
+
+
+def _redact_chpasswd(match: re.Match[str]) -> str:
+    """Replace the password of a ``user:password | chpasswd`` pair."""
+    quote, user = match.group("q"), match.group("user")
+    return f"echo {quote}{user}:{_mask_value('', match.group('pw'))}{quote}"
+
+
+def _redact_in_command(
+    text: str, command: re.Pattern[str], flag: re.Pattern[str]
+) -> str:
+    """Apply the ``flag`` password pattern inside ``command`` segments."""
+
+    def _segment(match: re.Match[str]) -> str:
+        return flag.sub(_redact_flag_value, match.group(0))
+
+    return command.sub(_segment, text)
+
+
 def redact(text: str) -> str:
     """Replace tokens and credentials in ``text`` with ``[REDACTED:kind]``.
 
@@ -418,11 +559,18 @@ def redact(text: str) -> str:
     ``sk-…``), key=value pairs whose key holds ``secret``,
     ``token``, ``password``, ``passwd``, ``pwd`` or ``api_key`` as an
     underscore/dash segment (quoted or bare), ``curl -u`` / ``--user``
-    user:password pairs, the trailing password argument of
-    ``net use``, the ``ConvertTo-SecureString`` literal, 32/64-hex
-    NTLM/RC4/AES hashes, ``Cookie``/``Set-Cookie`` values, ``-p`` /
-    ``--password`` style command-line arguments, private key blocks,
-    and URLs with embedded userinfo. A
+    user:password pairs, command-line password forms (``net user``,
+    ``net use`` with its share/drive/user targets kept, ``schtasks
+    /RP``, ``sqlcmd -P`` and ``ldapsearch -w`` scoped to their own
+    command so ``scp -P``/``wget -P``/``curl -w`` stay untouched,
+    ``xfreerdp /p:``, ``smbclient -U user%pass``, ``user:pass |
+    chpasswd``, ``openssl -passin/-passout pass:``), the
+    ``ConvertTo-SecureString`` literal, 32/64-hex NTLM/RC4/AES hashes
+    and bare NTLM ``LM:NT`` (32 hex : 32 hex) pairs,
+    ``Cookie``/``Set-Cookie`` values, ``-p`` / ``--password`` style
+    command-line arguments, private key blocks, and URLs with embedded
+    userinfo (HTTP(S) plus mysql, postgresql, ftp, redis, mongodb,
+    amqp, ldap and smb schemes). A
     bare ``-p`` followed by only digits is left alone (it is almost
     always a port, e.g. ``ssh -p 22``). Prose disclosures without a
     key (``my password is hunter2``) are NOT redacted: the pattern set
@@ -451,12 +599,26 @@ def redact(text: str) -> str:
     redacted = _CURL_USER.sub(
         r"\1" + REDACTED_TEMPLATE.format(kind="credential"), redacted
     )
+    # Command-line password forms (each keeps every non-password token:
+    # account and share targets, user flags, hosts and flag names).
+    redacted = _NET_USER_CMD.sub(_redact_password_token, redacted)
+    redacted = _NET_USE_CMD.sub(_redact_net_use, redacted)
+    redacted = _SCHTASKS_RP.sub(_redact_flag_value, redacted)
+    redacted = _redact_in_command(redacted, _SQLCMD_CMD, _SQLCMD_P)
+    redacted = _redact_in_command(redacted, _LDAPSEARCH_CMD, _LDAPSEARCH_W)
+    redacted = _XFREERDP_P.sub(_redact_flag_value, redacted)
+    redacted = _SMBCLIENT_U.sub(
+        lambda match: _mask_value(
+            match.group("flag") + match.group("user") + "%", match.group("pw")
+        ),
+        redacted,
+    )
+    redacted = _CHPASSWD.sub(_redact_chpasswd, redacted)
+    redacted = _OPENSSL_PASS.sub(_redact_flag_value, redacted)
     redacted = _SECURE_STRING.sub(_redact_secret_literal, redacted)
     redacted = _NTLM_HASH.sub(r"\1" + REDACTED_TEMPLATE.format(kind="hash"), redacted)
+    redacted = _NTLM_PAIR.sub(REDACTED_TEMPLATE.format(kind="hash"), redacted)
     redacted = _CREDENTIAL_KV.sub(_redact_kv, redacted)
-    redacted = _NET_USE_TRAILING.sub(
-        r"\1" + REDACTED_TEMPLATE.format(kind="credential"), redacted
-    )
 
     def _cli(match: re.Match[str]) -> str:
         marker = REDACTED_TEMPLATE.format(kind="credential")

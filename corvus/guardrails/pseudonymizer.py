@@ -31,13 +31,24 @@ leaf is scanned for the raw values mapped during the call
 (structured fields first, then the whole deployment table, so an
 entity learned from an earlier payload is still hidden),
 longest-first. Matching is case-insensitive for host, user, domain
-and email, exact for ip. Boundary rule: an occurrence counts only
+and email, exact for ip. Percent-escapes decode for matching
+(``user%40domain.example`` matches the registered
+``user@domain.example``) and the original spelling is replaced.
+Boundary rule: an occurrence counts only
 when the character before it (if any) and the character after it (if
 any) are both outside ``[A-Za-z0-9_.@-]``. That keeps ``bob`` inside
 ``bobcat`` (letter follows), ``bob.exe`` (dot follows) and
 ``bob@example.com`` (``@`` follows) untouched, while ``bob`` in
 ``user=bob,``, ``EXAMPLE\\bob`` or ``"admin"`` is replaced — it is a
-whole user token there. One extension: a known short hostname also
+whole user token there. One extension: values known to be real
+entities (explicit :meth:`Pseudonymizer.register` calls, including
+via :meth:`Pseudonymizer.get_or_create`, plus typed structured fields)
+treat ``_`` and ``-`` as separators instead, so ``svc_<user>_backup``
+hides a registered ``<user>``; scanner-discovered values keep the
+strict boundary. Another extension: IPv4 entries match every spelling
+of their canonical quad (zero-padded octets, spaced dots, 32-bit hex),
+so ``010.070.001.020`` maps to the same pseudonym as ``10.70.1.20``.
+A third extension: a known short hostname also
 matches with a trailing multi-label domain suffix (``web01`` matches
 ``WEB01.example.com``), so a later payload cannot leak the internal
 domain through the FQDN form. Single-label suffixes (``web01.corp``,
@@ -80,12 +91,28 @@ pseudonym, so the model can pass the same token back to
 ``get_events``. A host literally named like a path component
 (``desktop``) still pseudonymizes from the typed host field; the
 identical spelling inside a path stays verbatim.
+
+Dict keys holding a registered entity are pseudonymized too
+(``{"<user>": 1}`` becomes ``{"USER-0001": 1}``): keys are chosen for
+this replacement rather than raising, so count-by-entity structures
+keep their shape for the model instead of failing the whole cloud
+call. Schema keys (``FIELD_KINDS``, the ``user`` parent, ``name``
+children) keep their spelling, and keys are scanned like values so a
+scanner-shaped key is looked up.
+
+Base64 blobs (UTF-8 or UTF-16LE) of at least 24 characters whose
+decoded printable text contains a registered entity — PowerShell
+``-EncodedCommand``/``-enc`` blobs included — are replaced wholesale
+with ``[ENCODED:contains-entity]``. Shorter tokens, undecodable
+tokens, binary decodes and hex blobs stay verbatim: hex and arbitrary
+encodings are not decoded (see ``docs/architecture.md``).
 """
 
 from __future__ import annotations
 
+import base64
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from typing import Any
 
 import psycopg
@@ -162,6 +189,16 @@ FIELD_KINDS: dict[str, str] = {
 
 #: Token characters that forbid a free-text match on either side.
 _TOKEN_CHARS = "A-Za-z0-9_.@-"
+
+#: Token characters for REGISTERED values: ``_`` and ``-`` count as
+#: separators (``svc_<user>_backup`` hides ``<user>``), so joined names
+#: cannot smuggle a known entity past the model. Scanner-discovered
+#: values keep the strict class above: the scanner never saw them as
+#: entities, so a joined spelling stays untouched.
+_REGISTERED_TOKEN_CHARS = "A-Za-z0-9.@"
+
+#: Marker replacing a base64 blob that decodes to a registered entity.
+ENCODED_MARKER = "[ENCODED:contains-entity]"
 
 #: Children of a ``user`` object holding the login name. The key
 #: ``name`` alone is far too generic for :data:`FIELD_KINDS` (file
@@ -793,11 +830,144 @@ _CANONICALIZE: dict[str, Callable[..., str | None]] = {
 
 
 def _canonical(kind: str, raw: str) -> str | None:
+    if kind == "ip":
+        return canonicalize_ip_text(raw)
     return _CANONICALIZE[kind](raw)
 
 
-#: Candidate IPv4 literal (kept only when it parses as an address).
+def canonicalize_ip_text(value: str | None) -> str | None:
+    """Canonicalize an IP, accepting non-canonical IPv4 spellings.
+
+    Zero-padded octets (``010.070.001.020``), spaced dots
+    (``10 . 70 . 1 . 20``) and 32-bit hex (``0x0A460114``) all resolve
+    to the same canonical dotted quad, so every spelling maps to one
+    pseudonym. Anything else delegates to
+    :func:`corvus.normalize.ocsf.canonicalize_ip` unchanged (IPv6
+    included).
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if re.fullmatch(r"0x[0-9a-f]{8}", lowered) is not None:
+        try:
+            packed = int(lowered, 16)
+        except ValueError:
+            return None
+        dotted = ".".join(str((packed >> shift) & 0xFF) for shift in (24, 16, 8, 0))
+        return canonicalize_ip(dotted)
+    squashed = re.sub(r"\s*\.\s*", ".", text)
+    parts = squashed.split(".")
+    if len(parts) == 4 and all(part.isdigit() for part in parts):
+        try:
+            squashed = ".".join(str(int(part)) for part in parts)
+        except ValueError:
+            return None
+    return canonicalize_ip(squashed)
+
+
+def _ip_match_body(canonical: str) -> str | None:
+    """Match every IPv4 spelling of a canonical dotted quad, else None.
+
+    One alternative covers the dotted form with optional leading zeros
+    and optional spaces around the dots; the other covers the 8-digit
+    hex form in either case. Non-quad canonicals (IPv6) return None
+    and keep their exact matcher.
+    """
+    parts = canonical.split(".")
+    if len(parts) != 4 or any(not part.isdigit() for part in parts):
+        return None
+    try:
+        numbers = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if any(number > 255 for number in numbers):
+        return None
+    octets = [("0+" if number == 0 else f"0*{number}") for number in numbers]
+    dotted = r"\s*\.\s*".join(octets)
+    packed = (numbers[0] << 24) | (numbers[1] << 16) | (numbers[2] << 8) | numbers[3]
+    hexed = "".join(
+        f"[{digit}{digit.lower()}]" if digit.isalpha() else digit
+        for digit in f"{packed:08X}"
+    )
+    return f"(?:{dotted}|0[xX]{hexed})"
+
+
+def _encoded_char_pattern(char: str) -> str:
+    """Match ``char`` literally or as UTF-8 percent-escapes.
+
+    ``@`` matches ``@`` and ``%40`` (either case), so
+    ``user%40domain.example`` matches the registered
+    ``user@domain.example`` and is replaced in its original spelling.
+    """
+    if char == "%":
+        return "(?:%|%25)"
+    encoded = ["%"]
+    for byte in char.encode("utf-8"):
+        for digit in f"{byte:02X}":
+            encoded.append(f"[{digit}{digit.lower()}]" if digit.isalpha() else digit)
+    return f"(?:{re.escape(char)}|{''.join(encoded)})"
+
+
+#: Base64 tokens of at least 24 characters (about 18 decoded bytes):
+#: shorter tokens cannot carry an entity plus context worth hiding.
+_B64_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9+/=])(?P<tok>[A-Za-z0-9+/]{24,}={0,2})(?![A-Za-z0-9+/=])"
+)
+
+
+def _mask_encoded_blobs(text: str, needles: Collection[str]) -> str:
+    """Replace base64 blobs decoding (UTF-8 or UTF-16LE) to an entity.
+
+    Every base64 token of at least 24 characters that strict-decodes
+    and, as printable text, contains one of ``needles``
+    (case-insensitive) becomes ``[ENCODED:contains-entity]``. Anything
+    else stays: short tokens, undecodable tokens, binary decodes and
+    hex blobs. Hex and arbitrary encodings are NOT decoded (a
+    documented limitation in ``docs/architecture.md``).
+    """
+    wanted = [needle.lower() for needle in needles if len(needle) >= 2]
+    if not text or len(text) < 24 or not wanted:
+        return text
+
+    def _blob(match: re.Match[str]) -> str:
+        token = match.group("tok")
+        if len(token) % 4 != 0:
+            return token
+        try:
+            raw = base64.b64decode(token, validate=True)
+        except ValueError:
+            return token
+        for encoding in ("utf-8", "utf-16le"):
+            try:
+                decoded = raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+            clean = decoded.replace("\x00", "").replace("﻿", "")
+            if not clean.strip():
+                continue
+            if not all(char.isprintable() or char.isspace() for char in clean):
+                continue
+            lowered = clean.lower()
+            if any(needle in lowered for needle in wanted):
+                return ENCODED_MARKER
+        return token
+
+    return _B64_TOKEN.sub(_blob, text)
+
+
+#: Candidate IPv4 literal (kept only when it parses as an address;
+#: validation is loose, so zero-padded octets resolve like canonical
+#: ones).
 _SCAN_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+
+#: IPv4 with spaces around the dots (``10 . 70 . 1 . 20``): kept only
+#: when the loose canonicalization parses it. Overlaps with
+#: :data:`_SCAN_IPV4` on canonical text resolve to one span.
+_SCAN_IPV4_SPACED = re.compile(r"(?<![\d.])(?:\d{1,3}\s*\.\s*){3}\d{1,3}(?![\d.])")
+
+#: 32-bit hex IPv4 (``0x0A460114``): kept only when it parses.
+_SCAN_IPV4_HEX = re.compile(r"(?<![\w.])0[xX][0-9a-fA-F]{8}(?![\w.])")
 
 #: Maximal runs that may hold an IPv6 literal (same validation; a
 #: trailing dot from sentence punctuation is stripped first).
@@ -880,7 +1050,14 @@ def scan_entities(text: str) -> list[tuple[str, str]]:
     for match in _SCAN_EMAIL.finditer(text):
         _hit(match, 0, "email")
     for match in _SCAN_IPV4.finditer(text):
-        if canonicalize_ip(match.group(0)) is not None:
+        if canonicalize_ip_text(match.group(0)) is not None:
+            _hit(match, 1, "ip")
+    for match in _SCAN_IPV4_SPACED.finditer(text):
+        if " " in match.group(0) or "\t" in match.group(0):
+            if canonicalize_ip_text(match.group(0)) is not None:
+                _hit(match, 1, "ip")
+    for match in _SCAN_IPV4_HEX.finditer(text):
+        if canonicalize_ip_text(match.group(0)) is not None:
             _hit(match, 1, "ip")
     for match in _SCAN_IPV6_RUN.finditer(text):
         token = match.group(0).strip(".")
@@ -933,6 +1110,13 @@ class Pseudonymizer:
         if not database_url:
             raise ValueError("Pseudonymizer needs a database URL")
         self._database_url = database_url
+        #: ``(kind, canonical)`` pairs known to be real entities: every
+        #: :meth:`register` call (explicit incident entities, including
+        #: via :meth:`get_or_create`) plus every typed structured field
+        #: seen by :meth:`pseudonymize`. Free-text replacement treats
+        #: these with ``_``/``-`` as separators; scanner-discovered
+        #: values never join this set.
+        self._registered: set[tuple[str, str]] = set()
 
     def get_or_create(self, kind: str, raw_value: str) -> str | None:
         """Return the stable pseudonym for ``raw_value``, creating it.
@@ -973,6 +1157,7 @@ class Pseudonymizer:
             canonical = _canonical(kind, raw_value)
             if canonical is not None:
                 pairs.append((kind, canonical))
+        self._registered.update(pairs)
         return self._ensure_many(pairs)
 
     def _ensure_many(self, items: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
@@ -1054,9 +1239,11 @@ class Pseudonymizer:
         free text are looked up too. Then every string leaf is scanned
         for the mapped raw values (this call's plus every earlier
         row, including entities from :meth:`register`), longest-first,
-        under the boundary rule from the module docstring. Mapping
-        keys are untouched and non-string leaves pass through.
-        Pydantic models are dumped first.
+        under the boundary rule from the module docstring. Dict keys
+        holding entities are replaced too (schema keys such as
+        ``hostname``/``username``/``user``/``name`` keep their
+        spelling); non-string leaves pass through. Pydantic models are
+        dumped first.
         """
         dumped = payload.model_dump() if hasattr(payload, "model_dump") else payload
         collected: list[tuple[str, str, str]] = []
@@ -1136,15 +1323,32 @@ class Pseudonymizer:
             # keeps its pseudonym.
             table.setdefault(canonical, (pseudonym, kind))
             table.setdefault(raw, (pseudonym, kind))
-        return self._replace(dumped, table)
+        # Typed fields are registered entities (see __init__); the scan
+        # stays out of the registered set.
+        self._registered.update((kind, canonical) for kind, canonical, _ in collected)
+        registered = frozenset(self._registered)
+        needles: set[str] = set()
+        for kind, canonical in registered:
+            if len(canonical) >= 2:
+                needles.add(canonical)
+            if kind == "user" and "\\" in canonical:
+                short = canonical.rsplit("\\", 1)[-1]
+                if len(short) >= 2:
+                    needles.add(short)
+        for kind, canonical, raw in collected:
+            if (kind, canonical) in registered and len(raw) >= 2:
+                needles.add(raw)
+        return self._replace(dumped, table, registered=registered, needles=needles)
 
     def _scan_strings(self, value: Any) -> list[tuple[str, str]]:
-        """Run :func:`scan_entities` over every string leaf's value."""
+        """Run :func:`scan_entities` over every string leaf and dict key."""
         found: list[tuple[str, str]] = []
         if isinstance(value, str):
             found.extend(scan_entities(value))
         elif isinstance(value, dict):
-            for item in value.values():
+            for key, item in value.items():
+                if isinstance(key, str):
+                    found.extend(scan_entities(key))
                 found.extend(self._scan_strings(item))
         elif isinstance(value, list | tuple):
             for item in value:
@@ -1174,20 +1378,39 @@ class Pseudonymizer:
             for item in value:
                 self._collect(item, out)
 
-    def _replace(self, value: Any, table: dict[str, tuple[str, str]]) -> Any:
+    def _replace(
+        self,
+        value: Any,
+        table: dict[str, tuple[str, str]],
+        *,
+        registered: frozenset[tuple[str, str]] = frozenset(),
+        needles: Collection[str] = (),
+    ) -> Any:
         if isinstance(value, str):
-            return _replace_free_text(value, table)
+            return _replace_free_text(
+                _mask_encoded_blobs(value, needles), table, registered
+            )
         if isinstance(value, dict):
             replaced: dict[Any, Any] = {}
             for key, item in value.items():
                 lowered = key.lower() if isinstance(key, str) else ""
+                out_key = (
+                    key
+                    if not isinstance(key, str)
+                    or lowered in FIELD_KINDS
+                    or lowered == "user"
+                    or lowered in USER_DICT_NAME_KEYS
+                    else _replace_free_text(key, table, registered)
+                )
                 kind = FIELD_KINDS.get(lowered)
                 if kind is not None and isinstance(item, str):
                     canonical = _canonical(kind, item)
                     if canonical is not None and canonical in table:
-                        replaced[key] = table[canonical][0]
+                        replaced[out_key] = table[canonical][0]
                     else:
-                        replaced[key] = _replace_free_text(item, table)
+                        replaced[out_key] = _replace_free_text(
+                            _mask_encoded_blobs(item, needles), table, registered
+                        )
                 elif lowered == "user" and isinstance(item, dict):
                     new_user: dict[Any, Any] = {}
                     for child_key, child_value in item.items():
@@ -1201,18 +1424,33 @@ class Pseudonymizer:
                                 new_user[child_key] = table[canonical][0]
                             else:
                                 new_user[child_key] = _replace_free_text(
-                                    child_value, table
+                                    _mask_encoded_blobs(child_value, needles),
+                                    table,
+                                    registered,
                                 )
                         else:
-                            new_user[child_key] = self._replace(child_value, table)
-                    replaced[key] = new_user
+                            new_user[child_key] = self._replace(
+                                child_value,
+                                table,
+                                registered=registered,
+                                needles=needles,
+                            )
+                    replaced[out_key] = new_user
                 else:
-                    replaced[key] = self._replace(item, table)
+                    replaced[out_key] = self._replace(
+                        item, table, registered=registered, needles=needles
+                    )
             return replaced
         if isinstance(value, list):
-            return [self._replace(item, table) for item in value]
+            return [
+                self._replace(item, table, registered=registered, needles=needles)
+                for item in value
+            ]
         if isinstance(value, tuple):
-            return tuple(self._replace(item, table) for item in value)
+            return tuple(
+                self._replace(item, table, registered=registered, needles=needles)
+                for item in value
+            )
         return value
 
     def reveal(self, text: str) -> str:
@@ -1336,8 +1574,19 @@ _SENTENCE_PUNCT = r"[.?!]+"
 _CLOSING_CHARS = r")\]}'\""
 
 
-def _replace_free_text(text: str, table: dict[str, tuple[str, str]]) -> str:
-    """Replace known raw values inside one free-text string."""
+def _replace_free_text(
+    text: str,
+    table: dict[str, tuple[str, str]],
+    registered: frozenset[tuple[str, str]] = frozenset(),
+) -> str:
+    """Replace known raw values inside one free-text string.
+
+    Percent-escapes decode for matching (``%40`` matches ``@``) and
+    the original spelling is what gets replaced. Registered values
+    additionally treat ``_`` and ``-`` as separators. IPv4 entries
+    match every spelling of their canonical quad (padded, spaced,
+    hex).
+    """
     if not text or not table:
         return text
     for raw in sorted(table, key=len, reverse=True):
@@ -1345,14 +1594,25 @@ def _replace_free_text(text: str, table: dict[str, tuple[str, str]]) -> str:
         if not raw or raw == pseudonym:
             continue
         flags = 0 if kind == "ip" else re.IGNORECASE
-        body = re.escape(raw)
+        token_chars = _TOKEN_CHARS
+        if kind == "ip":
+            variant = _ip_match_body(raw)
+            if variant is not None:
+                body = variant
+            else:
+                body = "".join(_encoded_char_pattern(char) for char in raw)
+        else:
+            entry_canonical = _canonical(kind, raw)
+            if entry_canonical is not None and (kind, entry_canonical) in registered:
+                token_chars = _REGISTERED_TOKEN_CHARS
+            body = "".join(_encoded_char_pattern(char) for char in raw)
         if kind == "host" and "." not in raw:
             # Longest-first ordering already prefers an earlier full
             # spelling; the alternation tries the suffixed form first.
-            body = f"(?:{re.escape(raw)}{_HOST_SUFFIX}|{re.escape(raw)})"
+            body = f"(?:{body}{_HOST_SUFFIX}|{body})"
         pattern = re.compile(
             r"(?<!["
-            + _TOKEN_CHARS
+            + token_chars
             + r"])"
             + body
             + r"(?:(?P<punct>"
@@ -1360,7 +1620,7 @@ def _replace_free_text(text: str, table: dict[str, tuple[str, str]]) -> str:
             + r")(?=$|\s|["
             + _CLOSING_CHARS
             + r"])|(?!["
-            + _TOKEN_CHARS
+            + token_chars
             + r"]))",
             flags,
         )
