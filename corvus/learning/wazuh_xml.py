@@ -79,11 +79,14 @@ under ``data/wazuh-ruleset/`` (never from memory):
   pinned ATT&CK dictionary; anything else is dropped, never guessed.
 
 Safety: literals are refused on control characters, NUL, newlines,
-``"]>"``, past a documented length, or past a documented pattern
-cost; ``|re`` is always refused (a user-controlled regex is never
-emitted). Title/description pass the same screen and are XML-escaped
-on output. The output is re-parsed with the standard library parser
-before it is returned.
+``"]>"``, lone surrogates (U+D800..U+DFFF), past a documented length,
+or past a documented pattern cost; ``|re`` is always refused (a
+user-controlled regex is never emitted). Title/description pass the
+same screen plus a ``$(``/``${`` refusal (Wazuh expands those in
+alert text) and are XML-escaped on output. ``<``, ``>`` and ``&`` in
+literals render as PCRE2 hex escapes (``\x3c``/``\x3e``/``\x26``) so
+the XML text node needs no XML escaping. The output is re-parsed with
+the standard library parser before it is returned.
 """
 
 from __future__ import annotations
@@ -358,11 +361,14 @@ def derive_parents(source: str, rules: Mapping[int, _ShippedRule]) -> list[int]:
 
 
 def _check_text(value: str, what: str) -> None:
-    """Refuse control characters in a literal, title or description."""
+    """Refuse control characters and lone surrogates in text fields."""
     for char in value:
-        if char in _CONTROL_CHARS or (ord(char) < 32 and char not in ("\t",)):
+        point = ord(char)
+        if 0xD800 <= point <= 0xDFFF:
+            raise _Unsupported(f"{what} holds a surrogate code point")
+        if char in _CONTROL_CHARS or (point < 32 and char not in ("\t",)):
             raise _Unsupported(f"{what} holds a control character")
-        if ord(char) == 127:
+        if point == 127:
             raise _Unsupported(f"{what} holds a control character")
     if "]]>" in value:
         raise _Unsupported(f"{what} holds ']]>'")
@@ -397,6 +403,26 @@ def _literal_len(parts: Sequence[tuple[str, str]]) -> int:
     return sum(len(text) for kind, text in parts if kind == "lit")
 
 
+def _escape_literal_for_pcre2(text: str) -> str:
+    """Escape one literal for the emitted PCRE2 patterns.
+
+    ``<``, ``>`` and ``&`` render as hex escapes (``\\x3C``,
+    ``\\x3E``, ``\\x26``) so the XML text node holds no character
+    needing XML escaping: those nodes otherwise load cleanly yet
+    never fire on the manager. Python's ``re.escape`` already emits
+    ``\\&`` for the ampersand on this runtime, so that two-character
+    sequence is replaced as a whole first; any bare ``&`` left is
+    replaced too. Descriptions keep normal XML escaping (ElementTree
+    handles them); only pattern text uses this helper.
+    """
+    escaped = re.escape(text)
+    escaped = escaped.replace("\\&", "\\x26")
+    escaped = escaped.replace("&", "\\x26")
+    escaped = escaped.replace("<", "\\x3C")
+    escaped = escaped.replace(">", "\\x3E")
+    return escaped
+
+
 def _wildcard_regex(
     parts: Sequence[tuple[str, str]],
     *,
@@ -407,7 +433,7 @@ def _wildcard_regex(
     tokens: list[str] = []
     for kind, text in parts:
         if kind == "lit":
-            tokens.append(re.escape(text))
+            tokens.append(_escape_literal_for_pcre2(text))
         elif kind == "multi":
             tokens.append(".*")
         else:
@@ -987,9 +1013,17 @@ def translate(
         if not title:
             raise _Unsupported("the rule has no title")
         _check_text(title, "title")
+        if "$(" in title or "${" in title:
+            raise _Unsupported(
+                "the title holds '$(' or '${' (Wazuh expands it in alerts)"
+            )
         description_text = str(rule.description or "").strip()
         if description_text:
             _check_text(description_text, "description")
+            if "$(" in description_text or "${" in description_text:
+                raise _Unsupported(
+                    "the description holds '$(' or '${' (Wazuh expands it in alerts)"
+                )
         try:
             uuid_module.UUID(str(rule.id))
         except ValueError:
@@ -1045,6 +1079,10 @@ def translate(
         return _refuse("translation_unsupported", str(exc))
     except _UnknownParent as exc:
         return _refuse("unknown_parent", str(exc))
+    except UnicodeError as exc:
+        # Lone surrogates (e.g. YAML "ab\ud800cd") raise here from the
+        # hex rendering; refuse instead of ever raising (never partial).
+        return _refuse("translation_unsupported", f"unencodable text: {exc}")
     return TranslationReport(
         ok=True,
         code="translated",

@@ -186,6 +186,7 @@ def test_migrate_applies_twice_idempotently() -> None:
         assert "0007_rules_native_uid.sql" in first
         assert "0008_live_poll.sql" in first
         assert "0009_rules_sigma_version.sql" in first
+        assert "0010_poll_cycle_status.sql" in first
         assert migrate(test_url) == []
         with psycopg.connect(test_url) as conn:
             with conn.cursor() as cur:
@@ -200,6 +201,7 @@ def test_migrate_applies_twice_idempotently() -> None:
                     "0007_rules_native_uid.sql",
                     "0008_live_poll.sql",
                     "0009_rules_sigma_version.sql",
+                    "0010_poll_cycle_status.sql",
                 ]
 
         # File-level idempotency: executing 0002 and 0004 directly, twice, is safe.
@@ -258,6 +260,14 @@ def test_migrate_applies_twice_idempotently() -> None:
             with conn.cursor() as cur:
                 cur.execute(version_text)
                 cur.execute(version_text)
+            conn.commit()
+        status_text = (Path(MIGRATIONS_DIR) / "0010_poll_cycle_status.sql").read_text(
+            encoding="utf-8"
+        )
+        with psycopg.connect(test_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(status_text)
+                cur.execute(status_text)
             conn.commit()
 
         with psycopg.connect(test_url) as conn:

@@ -538,3 +538,71 @@ def test_regex_metacharacters_match_literally() -> None:
     sudo = re.compile(rep.detail["pattern_sudo"])
     assert sudo.search("run foo(bar)+[baz]XaYYb now")
     assert not sudo.search("run fooXbar+bazYaYb now")
+
+
+def _pattern_text_without_hex_escapes(pattern: str) -> str:
+    """Strip the ``\\x3C``/``\\x3E``/``\\x26`` escapes (either case)."""
+    stripped = pattern
+    for escape in ("\\x3C", "\\x3c", "\\x3E", "\\x3e", "\\x26"):
+        stripped = stripped.replace(escape, "")
+    return stripped
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "aaa<bbb",
+        "aaa>bbb",
+        "aaa&bbb",
+        "a && b",
+        "run 2>&1 now",
+        "cat <<EOF",
+        "bash -i >& /dev/tcp/host",
+    ],
+)
+def test_xml_needy_characters_emit_hex_escapes(literal: str) -> None:
+    """``<``, ``>`` and ``&`` never reach the XML as escapable text.
+
+    Fails first on the old renderer (``re.escape`` leaves ``<``/``>``
+    raw and the manager then loads the rule yet never fires).
+    """
+    detection = f"  sel:\n    CommandLine|contains: '{literal}'\n"
+    rep = tr(_rule_text(detection, "sel"), 100010, "shadow")
+    assert rep.ok, rep.reason
+    assert rep.xml is not None
+    for label in ("pattern_sudo", "pattern_audit"):
+        remainder = _pattern_text_without_hex_escapes(rep.detail[label])
+        assert "<" not in remainder, label
+        assert ">" not in remainder, label
+        assert "&" not in remainder, label
+    assert "&amp;" not in rep.xml
+    assert "&lt;" not in rep.xml
+    assert "&gt;" not in rep.xml
+    sudo = re.compile(rep.detail["pattern_sudo"])
+    assert sudo.search(f"run {literal} now"), literal
+    assert not sudo.search("run a benign command now"), literal
+    audit = re.compile(rep.detail["pattern_audit"])
+    blob = f'type=EXECVE argc=3 a0="sh" a1="-c" a2="run {literal} now"'
+    assert audit.search(blob), literal
+
+
+def test_surrogate_literal_is_refused_not_raised() -> None:
+    """A lone UTF-16 surrogate returns a refusal instead of raising."""
+    doc = yaml.safe_load(GOLDEN)
+    doc["detection"]["sel_key"] = {"CommandLine|contains": "ab\ud800cd"}
+    text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+    rep = tr(text, 100010, "shadow")
+    assert not rep.ok and rep.code == "translation_unsupported" and rep.xml is None
+
+
+@pytest.mark.parametrize("field", ["title", "description"])
+@pytest.mark.parametrize("payload", ["see $(field)", "see ${field}"])
+def test_dollar_expansion_in_title_and_description_refused(
+    field: str, payload: str
+) -> None:
+    """``$(``/``${`` never reach rule text (Wazuh expands them)."""
+    doc = yaml.safe_load(GOLDEN)
+    doc[field] = payload
+    text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+    rep = tr(text, 100010, "shadow")
+    assert not rep.ok and rep.code == "translation_unsupported" and rep.xml is None

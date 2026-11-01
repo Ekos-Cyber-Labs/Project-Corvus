@@ -1058,6 +1058,7 @@ def main(argv: list[str] | None = None) -> int:
                 f" learned={cycle.learned_findings}"
                 f" shadow={cycle.shadow_findings}"
                 f" unknown={cycle.unknown_learned}"
+                f" future_dated={cycle.future_dated}"
                 f" incidents={cycle.incidents_upserted}"
                 f" (total {cycle.incidents_total})"
                 f" archives={cycle.archives_added}"

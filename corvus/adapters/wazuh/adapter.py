@@ -23,6 +23,7 @@ not silent.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -280,10 +281,51 @@ class WazuhAdapter:
         finally:
             self._client.delete_pit(pit_id)
 
+    def save_cursor(self, cursor: Cursor) -> None:
+        """Persist one cursor (best effort; polls must not fail on it)."""
+        self._save_cursor(cursor)
+
+    def load_cursor(self) -> Cursor | None:
+        """Return the persisted cursor, or None when absent/unusable."""
+        return self._load_cursor()
+
+    def build_save_cursor(
+        self,
+        base: Cursor | None,
+        emitted: Sequence[tuple[int, str]],
+        last_uid: str | None,
+    ) -> Cursor:
+        """Build the checkpoint for valid-only emissions.
+
+        The live poll streams with ``persist=False`` while skipping
+        future-dated records, then saves exactly the cursor its valid
+        records earn: the max of the base time and the valid times,
+        with the seen set pruned to the overlap window. Same window
+        math as :meth:`stream_alerts` (single source for the rule).
+        """
+        times = [time_ms for time_ms, _ in emitted]
+        if base is not None and base.last_time is not None:
+            times.append(base.last_time)
+        if not times:
+            return base if base is not None else Cursor()
+        new_last_time = max(times)
+        window_start = new_last_time - self._overlap_seconds * 1000
+        base_seen = base.seen if base is not None else ()
+        carried = [
+            (time_ms, uid) for time_ms, uid in base_seen if time_ms >= window_start
+        ]
+        kept = [(time_ms, uid) for time_ms, uid in emitted if time_ms >= window_start]
+        new_seen = (carried + kept)[-_MAX_SEEN:]
+        if last_uid is None:
+            last_uid = base.last_uid if base is not None else None
+        return Cursor(last_time=new_last_time, last_uid=last_uid, seen=tuple(new_seen))
+
     def stream_alerts(
         self,
         since: Cursor | None = None,
         page_size: int = DEFAULT_STREAM_PAGE_SIZE,
+        *,
+        persist: bool = True,
     ) -> tuple[list[OcsfEvent], Cursor]:
         """Return up to ``page_size`` unseen events and the cursor.
 
@@ -294,7 +336,10 @@ class WazuhAdapter:
         across polls: the seen set makes the cut safe in both
         directions. The returned cursor carries the new last time plus
         the ``(time, uid)`` pairs emitted from its overlap window, and
-        is persisted when a database is configured.
+        is persisted when a database is configured unless
+        ``persist`` is False (the live poll streams with
+        ``persist=False`` and saves the checkpoint only after its
+        store write and incident upsert have both succeeded).
         """
         if page_size < 1 or page_size > MAX_STREAM_PAGE_SIZE:
             raise ValueError(
@@ -363,7 +408,8 @@ class WazuhAdapter:
             last_uid=collected[-1].metadata.uid,
             seen=tuple(new_seen),
         )
-        self._save_cursor(new_cursor)
+        if persist:
+            self._save_cursor(new_cursor)
         return collected, new_cursor
 
     def _archive_query(

@@ -349,6 +349,84 @@ def test_cli_export_and_logtest_agree(
 
 
 @pytest.mark.integration
+def test_export_bundle_with_xml_needy_literal_includes_targets(
+    export_db: str, tmp_path: Path
+) -> None:
+    """A rule with ``&&`` bundles target lines carrying it (parity corpus).
+
+    Fails first on the old renderer: the emitted pattern holds a raw
+    ``&`` (XML-escaped on output) that the manager loads yet never
+    matches, so the logtest parity run disagrees. Uses the two real
+    chain sudo events, whose commands carry ``&&``.
+    """
+    import re as re_module
+    import uuid as uuid_module
+
+    literal = "chmod 700 /root/.ssh && printf"
+    doc = yaml.safe_load(GOLDEN)
+    doc["detection"]["sel_key"] = {"CommandLine|contains": literal}
+    doc["id"] = str(uuid_module.uuid4())
+    text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+    uids = ["lnx-d7bea80358fc93ab", "lnx-f749ba60b31e41e4"]
+    result = backtest(text, {"event_uids": uids})
+    assert result.accepted, result.codes
+    with psycopg.connect(export_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, event_uids,"
+                " severity_floor, severity_id)"
+                " VALUES (%s, %s::jsonb, 4, 4) RETURNING id",
+                (f"corr-amp-{uuid_module.uuid4().hex[:8]}", json.dumps(uids)),
+            )
+            row = cur.fetchone()
+            assert row is not None
+        conn.commit()
+    stored = add_candidate(
+        export_db,
+        text,
+        int(row[0]),
+        list(result.target_matched),
+        result,
+        "probe",
+        "0.1",
+    )
+    store_ids = [r["native_rule_id"] for r in list_rules(export_db)]
+    bundle = build_bundle(row=stored, store_ids=store_ids, attack=_attack())
+    expected = json.loads(bundle["expected.json"])
+    assert expected["counts"]["target"] >= 2
+    target_logs = [
+        json.loads(line)["log"]
+        for line in bundle["logtest_input.jsonl"].splitlines()
+        if json.loads(line)["key"]
+        in {line["key"] for line in expected["lines"] if line["must_fire"]}
+    ]
+    assert target_logs, "bundle holds no must-fire lines"
+    assert any("&&" in log for log in target_logs)
+    xml_text = bundle["wazuh_rule.xml"]
+    assert "&amp;" not in xml_text and "&lt;" not in xml_text and "&gt;" not in xml_text
+    from corvus.learning.export_wazuh import load_provenance as load_prov
+    from corvus.learning.export_wazuh import read_raw_doc as read_doc
+    from corvus.learning.wazuh_xml import translate as translate_rule
+
+    translated = translate_rule(
+        text,
+        stored["native_rule_id"],
+        "shadow",
+        ruleset_paths=[
+            "data/wazuh-ruleset/0020-syslog_rules.xml",
+            "data/wazuh-ruleset/0365-auditd_rules.xml",
+        ],
+    )
+    assert translated.ok, translated.reason
+    sudo_pattern = re_module.compile(translated.detail["pattern_sudo"])
+    chain_prov = load_prov("data/replay-linux-chain1")
+    real_command = read_doc("data", *chain_prov[uids[0]])["data"]["command"]
+    assert literal in real_command
+    assert sudo_pattern.search(real_command)
+    assert not sudo_pattern.search("run a benign command now")
+
+
+@pytest.mark.integration
 def test_cli_logtest_garbage_answers_fails(
     export_db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

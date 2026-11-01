@@ -638,3 +638,306 @@ def _insert_shadow_rule(test_url: str) -> int:
         conn.commit()
     assert row is not None
     return int(row[0])
+
+
+def _cycle_ledger(test_url: str) -> list[tuple[Any, ...]]:
+    """Return cycle rows oldest first with failure bookkeeping."""
+    with psycopg.connect(test_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, completed_at, status, error_class,"
+                " alerts_seen, findings_written, incidents_upserted,"
+                " future_dated"
+                " FROM wazuh_poll_cycles ORDER BY id"
+            )
+            rows = cur.fetchall() or []
+    assert rows is not None
+    return [tuple(row) for row in rows]
+
+
+def _poll_checkpoint(test_url: str) -> dict[str, Any]:
+    """Return the persisted wazuh/alerts checkpoint (possibly empty)."""
+    from corvus.state.checkpoints import load_checkpoint
+
+    return load_checkpoint(test_url, "wazuh", "alerts")
+
+
+def _live_uids(store: Path) -> tuple[set[str], set[str]]:
+    """Return (event uids, finding uids) currently in the live store."""
+    from corvus.live.store import existing_uids
+
+    return existing_uids(store, "events"), existing_uids(store, "findings")
+
+
+def _fail_once(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
+    """Patch ``target`` to raise RuntimeError exactly once, then defer."""
+    import corvus.live.poll as poll_module
+
+    names = target.split(".")
+    attribute = names[-1]
+    original = getattr(poll_module, attribute)
+    state = {"calls": 0}
+
+    def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise RuntimeError(f"injected failure in {attribute}")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(poll_module, attribute, _wrapper)
+
+
+def _failed_then_clean_cycle(
+    test_url: str,
+    store: Path,
+    fake: FakeLiveIndexer,
+    monkeypatch: pytest.MonkeyPatch,
+    patched: str,
+    expect_retry_writes: int,
+    expect_retry_upserted: int | None = None,
+    **cycle_kwargs: Any,
+) -> None:
+    """Fail one cycle at ``patched``, then prove exact-once recovery.
+
+    ``expect_retry_writes`` is 2 when the failure lands before the
+    store write (nothing persisted, so the retry writes both
+    findings) and 0 when the store write already succeeded (the
+    idempotent store writes nothing twice, while the retry still
+    counts both alerts and upserts the missing incidents).
+    ``expect_retry_upserted`` defaults to >= 1; the archive stage
+    passes 0 because the failed cycle already upserted before the
+    archive step raised.
+    """
+    from corvus.correlate.replay import load_replay_findings
+
+    _fail_once(monkeypatch, patched)
+    with pytest.raises(RuntimeError, match="injected failure"):
+        _poll_cycle_for(test_url, store, fake, **cycle_kwargs)
+    rows = _cycle_ledger(test_url)
+    assert rows, "the failed cycle must leave a ledger row"
+    _, completed_at, status, error_class, *_ = rows[-1]
+    assert completed_at is not None, "the failed row must be closed"
+    assert status == "failed"
+    assert error_class == "RuntimeError"
+    # The checkpoint must not have advanced past the failed cycle:
+    # a clean retry over the same window still sees everything.
+    retry = _poll_cycle_for(test_url, store, fake, **cycle_kwargs)
+    assert retry.findings_written == expect_retry_writes, retry
+    assert retry.alerts_seen == 2, retry
+    if expect_retry_upserted is None:
+        assert retry.incidents_upserted >= 1, retry
+    else:
+        assert retry.incidents_upserted == expect_retry_upserted, retry
+    events, findings = _live_uids(store)
+    assert findings == {"1793494032.114155", "1793494033.116168"}
+    assert len(events) == 2
+    assert len({f.metadata.uid for f in load_replay_findings(store)}) == 2
+    with psycopg.connect(test_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM incidents")
+            incident_count = cur.fetchone()
+    assert incident_count is not None
+    third = _poll_cycle_for(test_url, store, fake, **cycle_kwargs)
+    assert third.findings_written == 0
+    assert third.events_written == 0
+    assert third.incidents_upserted == 0
+    with psycopg.connect(test_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM incidents")
+            again = cur.fetchone()
+    assert again is not None and again[0] == incident_count[0]
+    events_after, findings_after = _live_uids(store)
+    assert (events_after, findings_after) == (events, findings)
+    assert _cycle_ledger(test_url)[-1][2] == "ok"
+
+
+def test_poll_failure_after_streaming_recovers_without_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A store-write failure loses nothing: the retry delivers all once."""
+    import tempfile
+
+    admin_url, name, test_url = _with_test_db()
+    try:
+        _insert_shadow_rule(test_url)
+        with tempfile.TemporaryDirectory(prefix="live-store") as store:
+            fake = FakeLiveIndexer(alerts=_real_shadow_hits())
+            _failed_then_clean_cycle(
+                test_url, Path(store), fake, monkeypatch, "append_live_records", 2
+            )
+            assert _poll_checkpoint(test_url).get("last_time") is not None
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_poll_failure_after_store_write_recovers_without_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failure after the store write still recovers with no duplicates."""
+    import tempfile
+
+    admin_url, name, test_url = _with_test_db()
+    try:
+        _insert_shadow_rule(test_url)
+        with tempfile.TemporaryDirectory(prefix="live-store") as store:
+            fake = FakeLiveIndexer(alerts=_real_shadow_hits())
+            _failed_then_clean_cycle(
+                test_url, Path(store), fake, monkeypatch, "correlate_findings", 0
+            )
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_poll_failure_between_correlation_and_upsert_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failure between correlation and upsert recovers with no duplicates."""
+    import tempfile
+
+    admin_url, name, test_url = _with_test_db()
+    try:
+        _insert_shadow_rule(test_url)
+        with tempfile.TemporaryDirectory(prefix="live-store") as store:
+            fake = FakeLiveIndexer(alerts=_real_shadow_hits())
+            _failed_then_clean_cycle(
+                test_url,
+                Path(store),
+                fake,
+                monkeypatch,
+                "stored_correlation_keys",
+                0,
+            )
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_poll_failure_during_upsert_recovers_without_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An upsert failure closes its row and the retry upserts exactly once."""
+    import tempfile
+
+    admin_url, name, test_url = _with_test_db()
+    try:
+        _insert_shadow_rule(test_url)
+        with tempfile.TemporaryDirectory(prefix="live-store") as store:
+            fake = FakeLiveIndexer(alerts=_real_shadow_hits())
+            _failed_then_clean_cycle(
+                test_url, Path(store), fake, monkeypatch, "upsert_incidents", 0
+            )
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_poll_failure_during_archive_context_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An archive-stage failure still closes its row and recovers cleanly."""
+    import tempfile
+
+    admin_url, name, test_url = _with_test_db()
+    try:
+        _insert_shadow_rule(test_url)
+        with tempfile.TemporaryDirectory(prefix="live-store") as store:
+            fake = FakeLiveIndexer(alerts=_real_shadow_hits())
+            _failed_then_clean_cycle(
+                test_url,
+                Path(store),
+                fake,
+                monkeypatch,
+                "_fetch_archive_context",
+                0,
+                0,
+                with_archives=True,
+            )
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_poll_empty_page_repairs_unreferenced_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty new page still re-correlates a store orphaned by failure."""
+    import tempfile
+
+    admin_url, name, test_url = _with_test_db()
+    try:
+        _insert_shadow_rule(test_url)
+        with tempfile.TemporaryDirectory(prefix="live-store") as store:
+            fake = FakeLiveIndexer(alerts=_real_shadow_hits())
+            _fail_once(monkeypatch, "upsert_incidents")
+            with pytest.raises(RuntimeError, match="injected failure"):
+                _poll_cycle_for(test_url, Path(store), fake)
+            _, findings = _live_uids(Path(store))
+            assert findings == {"1793494032.114155", "1793494033.116168"}
+            # The indexer no longer returns the failed window, yet the
+            # next cycle must still build incidents from the live store.
+            drained = FakeLiveIndexer(alerts=[])
+            repaired = _poll_cycle_for(test_url, Path(store), drained)
+            assert repaired.incidents_upserted >= 1, repaired
+            assert repaired.incidents_total >= 1, repaired
+            rows = _cycle_ledger(test_url)
+            assert rows[-2][2] == "failed" and rows[-2][1] is not None
+            assert rows[-1][2] == "ok"
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_poll_stream_without_persist_leaves_checkpoint() -> None:
+    """``persist=False`` returns the cursor without storing it."""
+    admin_url, name, test_url = _with_test_db()
+    try:
+        fake = FakeLiveIndexer(alerts=_real_shadow_hits())
+        adapter = fake.adapter(database_url=test_url)
+        _, cursor = adapter.stream_alerts(page_size=10, persist=False)
+        assert cursor.last_time is not None
+        assert _poll_checkpoint(test_url) == {}
+        adapter.save_cursor(cursor)
+        assert _poll_checkpoint(test_url).get("last_time") == cursor.last_time
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_poll_future_dated_alerts_skipped_without_moving_cursor() -> None:
+    """Year-2999 alerts count as future_dated and never move the cursor."""
+    import copy
+    import tempfile
+
+    admin_url, name, test_url = _with_test_db()
+    try:
+        _insert_shadow_rule(test_url)
+        with tempfile.TemporaryDirectory(prefix="live-store") as store:
+            real_time = parse_wazuh_time(_doc("shadow_sudo_100000")["timestamp"])
+            future_doc = copy.deepcopy(_doc("shadow_sudo_100000"))
+            future_doc["timestamp"] = "2999-01-01T00:00:00.000+0000"
+            future_doc["id"] = "1793494032.199999"
+            hits = [
+                _hit(_doc("shadow_sudo_100000"), "alert-doc-sudo"),
+                _hit(_doc("shadow_auditd_100003"), "alert-doc-auditd"),
+                _hit(future_doc, "alert-doc-future"),
+            ]
+            fake = FakeLiveIndexer(alerts=hits)
+            report = _poll_cycle_for(test_url, Path(store), fake, now_ms=real_time)
+            # One future alert doc maps to a finding plus its event.
+            assert report.future_dated == 2, report
+            assert report.alerts_seen == 2, report
+            assert report.findings_written == 2, report
+            _, findings = _live_uids(Path(store))
+            assert findings == {"1793494032.114155", "1793494033.116168"}
+            assert "1793494032.199999" not in findings
+            stored = _poll_checkpoint(test_url)
+            assert stored.get("last_time") is not None
+            far_future = parse_wazuh_time("2999-01-01T00:00:00.000+0000")
+            assert int(stored["last_time"]) < far_future
+            rows = _cycle_ledger(test_url)
+            assert rows[-1][2] == "ok"
+            assert rows[-1][7] == 2
+            # Re-reading the same window counts future again but adds nothing.
+            again = _poll_cycle_for(test_url, Path(store), fake, now_ms=real_time)
+            assert again.future_dated == 2, again
+            assert again.findings_written == 0
+            assert again.events_written == 0
+            _, findings_after = _live_uids(Path(store))
+            assert findings_after == findings
+    finally:
+        _drop_database(admin_url, name)

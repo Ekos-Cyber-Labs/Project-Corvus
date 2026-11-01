@@ -18,6 +18,7 @@ the poll never requires unrelated model settings to run.
 from __future__ import annotations
 
 import os
+import time as time_module
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -48,6 +49,7 @@ from corvus.state.incidents import stored_correlation_keys, upsert_incidents
 from corvus.state.migrate import migrate
 
 __all__ = [
+    "FUTURE_SKEW_MS",
     "PollCycleReport",
     "load_stored_rules",
     "resolve_windows",
@@ -69,7 +71,14 @@ class PollCycleReport:
     archives_added: int = 0
     archives_empty: bool = False
     incidents_total: int = 0
+    future_dated: int = 0
     learned_refs: list[dict[str, Any]] = field(default_factory=list)
+
+
+#: Alerts more than this far ahead of the poll clock are counted and
+#: skipped: honouring their timestamps would push the checkpoint past
+#: real time and blind every later poll.
+FUTURE_SKEW_MS = 10 * 60 * 1000
 
 
 def resolve_windows() -> tuple[timedelta, timedelta, int]:
@@ -154,15 +163,17 @@ def _record_cycle_start(database_url: str) -> int:
 def _record_cycle_end(
     database_url: str, cycle_id: int, report: PollCycleReport
 ) -> None:
-    """Close the cycle row with the final counts."""
+    """Close the cycle row with the final counts (success)."""
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE wazuh_poll_cycles SET completed_at = NOW(),"
+                " status = 'ok', error_class = '',"
                 " alerts_seen = %s, events_written = %s,"
                 " findings_written = %s, learned_findings = %s,"
                 " shadow_findings = %s, unknown_learned = %s,"
-                " incidents_upserted = %s, archives_added = %s"
+                " incidents_upserted = %s, archives_added = %s,"
+                " future_dated = %s"
                 " WHERE id = %s",
                 (
                     report.alerts_seen,
@@ -173,10 +184,72 @@ def _record_cycle_end(
                     report.unknown_learned,
                     report.incidents_upserted,
                     report.archives_added,
+                    report.future_dated,
                     cycle_id,
                 ),
             )
         conn.commit()
+
+
+def _record_cycle_failed(
+    database_url: str,
+    cycle_id: int,
+    report: PollCycleReport,
+    error_class: str,
+) -> None:
+    """Close the cycle row after a failure (never leaves it open)."""
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE wazuh_poll_cycles SET completed_at = NOW(),"
+                " status = 'failed', error_class = %s,"
+                " alerts_seen = %s, events_written = %s,"
+                " findings_written = %s, learned_findings = %s,"
+                " shadow_findings = %s, unknown_learned = %s,"
+                " incidents_upserted = %s, archives_added = %s,"
+                " future_dated = %s"
+                " WHERE id = %s",
+                (
+                    error_class,
+                    report.alerts_seen,
+                    report.events_written,
+                    report.findings_written,
+                    report.learned_findings,
+                    report.shadow_findings,
+                    report.unknown_learned,
+                    report.incidents_upserted,
+                    report.archives_added,
+                    report.future_dated,
+                    cycle_id,
+                ),
+            )
+        conn.commit()
+
+
+def _store_has_unreferenced_findings(store_dir: str | Path, database_url: str) -> bool:
+    """True when the live store holds findings no incident references.
+
+    A previous cycle that failed after the store write leaves exactly
+    this shape behind; the next cycle must re-correlate even when its
+    new page is empty instead of taking the empty-page early return.
+    """
+    from corvus.live.store import existing_uids
+
+    stored = existing_uids(store_dir, "findings")
+    if not stored:
+        return False
+    referenced: set[str] = set()
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT event_uids FROM incidents")
+            rows = cur.fetchall() or []
+    for row in rows:
+        uids = row[0] if row else None
+        if isinstance(uids, list):
+            for uid in uids:
+                if isinstance(uid, str) and uid:
+                    referenced.add(uid)
+    return bool(stored - referenced)
 
 
 def run_poll_cycle(
@@ -190,6 +263,7 @@ def run_poll_cycle(
     since_ms: int | None = None,
     with_archives: bool = False,
     archives_limit: int = 200,
+    now_ms: int | None = None,
 ) -> PollCycleReport:
     """Run one bounded poll cycle; return the counts.
 
@@ -197,6 +271,16 @@ def run_poll_cycle(
     (a stored checkpoint always wins, so restarts resume). Archive
     context is fetched for new incidents only. No model is called:
     findings come from each alert's own rule block.
+
+    The checkpoint is streamed with ``persist=False`` and saved only
+    after the store write and the incident upsert have both
+    succeeded, in the same success path that closes the cycle row, so
+    a failure never loses alerts: the retry re-reads the same window
+    and the idempotent store/upsert deliver every alert exactly once.
+    A failure closes its cycle row with status ``failed`` and the
+    exception class, then re-raises. Alerts more than 10 minutes ahead
+    of the poll clock are counted as ``future_dated`` and skipped;
+    they never advance the checkpoint.
     """
     if page_size < 1 or page_size > 1000:
         raise ValueError(f"page_size must be 1..1000, got {page_size}")
@@ -209,24 +293,82 @@ def run_poll_cycle(
     by_native, by_sigma = load_stored_rules(database_url)
     cycle_id = _record_cycle_start(database_url)
     report = PollCycleReport()
+    try:
+        return _run_poll_cycle_body(
+            adapter=adapter,
+            database_url=database_url,
+            store_dir=store_dir,
+            attack_path=attack_path,
+            page_size=page_size,
+            max_docs=max_docs,
+            since_ms=since_ms,
+            with_archives=with_archives,
+            archives_limit=archives_limit,
+            now_ms=now_ms,
+            cycle_id=cycle_id,
+            report=report,
+            session_gap=session_gap,
+            max_span=max_span,
+            auth_threshold=auth_threshold,
+            by_native=by_native,
+            by_sigma=by_sigma,
+        )
+    except Exception as exc:
+        try:
+            _record_cycle_failed(database_url, cycle_id, report, type(exc).__name__)
+        except Exception:
+            pass
+        raise
 
+
+def _run_poll_cycle_body(
+    *,
+    adapter: WazuhAdapter,
+    database_url: str,
+    store_dir: str | Path,
+    attack_path: str | Path,
+    page_size: int,
+    max_docs: int,
+    since_ms: int | None,
+    with_archives: bool,
+    archives_limit: int,
+    now_ms: int | None,
+    cycle_id: int,
+    report: PollCycleReport,
+    session_gap: timedelta,
+    max_span: timedelta,
+    auth_threshold: int,
+    by_native: dict[int, dict[str, Any]],
+    by_sigma: dict[str, dict[str, Any]],
+) -> PollCycleReport:
+    """Stream, store, correlate and upsert; save checkpoint on success."""
+    now = now_ms if now_ms is not None else int(time_module.time() * 1000)
+    horizon = now + FUTURE_SKEW_MS
     cursor: Cursor | None = None
     if since_ms is not None and not load_checkpoint(database_url, "wazuh", "alerts"):
         cursor = Cursor(last_time=since_ms)
+    base_cursor = cursor if cursor is not None else adapter.load_cursor()
     new_findings: list[DetectionFinding] = []
     new_events: list[Any] = []
     provenance: dict[str, tuple[str, str]] = {}
+    # Valid-only emissions for the save cursor: future-dated records
+    # never earn checkpoint progress (they would blind later polls).
+    valid_emitted: list[tuple[int, str]] = []
+    last_valid_uid: str | None = None
     docs = 0
     while docs < max_docs:
         page, cursor = adapter.stream_alerts(
-            since=cursor, page_size=min(page_size, max_docs - docs)
+            since=cursor,
+            page_size=min(page_size, max_docs - docs),
+            persist=False,
         )
         if not page:
             break
-        provenance.update(adapter.last_provenance)
         for record in page:
             docs += 1
-            if record.class_uid == 2004:
+            if record.time > horizon:
+                report.future_dated += 1
+            elif record.class_uid == 2004:
                 assert isinstance(record, DetectionFinding)
                 stamp = attribution_for_finding(record, by_native, by_sigma)
                 report.alerts_seen += 1
@@ -237,15 +379,36 @@ def run_poll_cycle(
                 if stamp.get("unknown_learned_rule"):
                     report.unknown_learned += 1
                 new_findings.append(record)
+                provenance[record.metadata.uid or ""] = adapter.last_provenance.get(
+                    record.metadata.uid or "", ("wazuh-alerts", "")
+                )
+                valid_emitted.append((record.time, record.metadata.uid or ""))
+                last_valid_uid = record.metadata.uid
             else:
                 new_events.append(record)
+                provenance[record.metadata.uid or ""] = adapter.last_provenance.get(
+                    record.metadata.uid or "", ("wazuh-alerts", "")
+                )
+                valid_emitted.append((record.time, record.metadata.uid or ""))
+                last_valid_uid = record.metadata.uid
             if docs >= max_docs:
                 break
-    if not new_findings and docs == 0:
-        if with_archives:
-            report.archives_empty = True
-        _record_cycle_end(database_url, cycle_id, report)
-        return report
+        if docs >= max_docs:
+            break
+    if not new_findings and not new_events:
+        if not _store_has_unreferenced_findings(store_dir, database_url):
+            if with_archives:
+                report.archives_empty = True
+            if valid_emitted or (
+                base_cursor is not None and base_cursor.last_time is not None
+            ):
+                adapter.save_cursor(
+                    adapter.build_save_cursor(
+                        base_cursor, valid_emitted, last_valid_uid
+                    )
+                )
+            _record_cycle_end(database_url, cycle_id, report)
+            return report
 
     events = new_events
     finding_rows = [
@@ -323,6 +486,9 @@ def run_poll_cycle(
         report.archives_empty = report.archives_added == 0
     elif with_archives:
         report.archives_empty = True
+    adapter.save_cursor(
+        adapter.build_save_cursor(base_cursor, valid_emitted, last_valid_uid)
+    )
     _record_cycle_end(database_url, cycle_id, report)
     return report
 
