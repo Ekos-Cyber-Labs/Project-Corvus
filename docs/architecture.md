@@ -399,7 +399,17 @@ or model inputs. Details: `datasets/README.md`.
   Detection Finding 2004 plus the decoded event (sshd, sudo, auditd
   SYSCALL only, `syscheck_new_entry` / `syscheck_integrity_changed` /
   `syscheck_deleted`; the rest counted per decoder and rule id;
-  `auid` 4294967295 falls back to `uid`). Rule translation, backtest
+  `auid` 4294967295 falls back to `uid`). Source authority when
+  `data` and `full_log` disagree: the log line wins wherever the
+  Wazuh decode could be forged from attacker-controlled text --
+  sshd user/peer (patterns anchor at the message start and parse
+  right to left; differing decoded values are kept in
+  `unmapped["linux.decoder_conflict"]`), the auditd EXECVE command
+  line, file paths and `USER_CMD` user/command. Decoded `data` wins
+  where the value is kernel-attributed (auditd auid/uid) and for
+  sudo, whose mapper reads only the decoded fields (invoking user,
+  target user, command come from the pre-command header, ahead of
+  the attacker-controlled COMMAND text). Rule translation, backtest
   and deployment stay `NotImplementedError` for the shadow-deployment
   milestone; server API with a limited role for logtest, rule files,
   CDB lists, config validation and manager restart.

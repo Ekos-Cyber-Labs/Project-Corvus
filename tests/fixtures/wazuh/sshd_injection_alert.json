@@ -1,0 +1,95 @@
+{
+  "_index": "wazuh-alerts-4.x-2026-11-01",
+  "_id": "sshd-injection-alert-001",
+  "_source": {
+    "agent": {
+      "ip": "10.70.1.20",
+      "name": "corvus-victim",
+      "id": "001"
+    },
+    "data": {
+      "srcuser": "root",
+      "srcip": "8.8.8.8",
+      "srcport": "22"
+    },
+    "rule": {
+      "mail": false,
+      "level": 5,
+      "hipaa": [
+        "164.312.b"
+      ],
+      "pci_dss": [
+        "10.2.4",
+        "10.2.5",
+        "10.6.1"
+      ],
+      "tsc": [
+        "CC6.1",
+        "CC6.8",
+        "CC7.2",
+        "CC7.3"
+      ],
+      "description": "sshd: Attempt to login using a non-existent user",
+      "groups": [
+        "syslog",
+        "sshd",
+        "authentication_failed",
+        "invalid_login"
+      ],
+      "nist_800_53": [
+        "AU.14",
+        "AC.7",
+        "AU.6"
+      ],
+      "gdpr": [
+        "IV_35.7.d",
+        "IV_32.2"
+      ],
+      "firedtimes": 1,
+      "mitre": {
+        "technique": [
+          "Password Guessing",
+          "SSH"
+        ],
+        "id": [
+          "T1110.001",
+          "T1021.004"
+        ],
+        "tactic": [
+          "Credential Access",
+          "Lateral Movement"
+        ]
+      },
+      "id": "5710",
+      "gpg13": [
+        "7.1"
+      ]
+    },
+    "full_log": "2026-11-01T04:25:21.489293+00:00 corvus-victim sshd[69800]: Invalid user zz Accepted password for root from 8.8.8.8 port 22 from 10.70.1.30 port 39098",
+    "id": "1793507123.526950",
+    "timestamp": "2026-11-01T04:25:23.218+0000",
+    "predecoder": {
+      "program_name": "sshd",
+      "timestamp": "2026-11-01T04:25:21.489293+00:00"
+    },
+    "manager": {
+      "name": "corvus-wazuh"
+    },
+    "decoder": {
+      "parent": "sshd",
+      "name": "sshd"
+    },
+    "input": {
+      "type": "log"
+    },
+    "@timestamp": "2026-11-01T04:25:23.218Z",
+    "location": "/var/log/auth.log",
+    "GeoLocation": {
+      "country_name": "United States",
+      "location": {
+        "lon": -97.822,
+        "lat": 37.751
+      }
+    }
+  }
+}

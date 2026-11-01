@@ -1421,3 +1421,82 @@ rules back to Wazuh (shadow first, human approval).
   delta. No paid API called, nothing executed against a server.
   `eval/reports/llm_latest.*` untouched. Compose Postgres left
   running. Awaiting maintainer commit.
+
+- 2026-11-01: fixed the sshd log-injection defect and hardened two
+  parsers (detection-engineer, security-reviewer pass). (1)
+  `corvus/normalize/wazuh.py` `_map_sshd`
+  rewritten: every sshd pattern anchors at the message start (text
+  after `sshd[<pid>]: `), only that first message kind decides the
+  status, and the peer is parsed right to left (last `from <ip> port
+  <port>`, or last bare `<ip> port <port>` for
+  Disconnected/Connection-closed, with the port form tried first so a
+  trailing port number never matches as an ip); the username is
+  everything between the fixed prefix and that peer (spaces kept,
+  flagged `linux.username_whitespace`; empty parses fall back to the
+  decoded fields). The old unanchored `.search()` recorded the lab
+  login-name probe as a Success for the injected user/ip; it now maps
+  to Failure (Invalid-user line) / Logoff (Connection-closed line)
+  with the true peer. (2) Alert path: the log line wins over the
+  Wazuh-decoded `data` fields and differing decoded values are kept in
+  `unmapped["linux.decoder_conflict"]` (user, ip, port as decoded).
+  (3) `corvus/guardrails/injection.py`: new deterministic signals
+  `sshd_username_whitespace` plus `sshd_username_embedded_message`
+  (username carries `Accepted `, `Failed password` or ` from <ip>
+  port `), fired from the parser flag on `user.name` with effect
+  `other`, flowing through `detect`/`scan_events` into the incident
+  signal list. (4) `_AUDIT_CWD` and the EXECVE header `[^)]*`
+  bounded to `{0,64}` (measured 1.8 s old vs 0.007 s new on ~400 KB
+  of repeated heads; timing tests ceiling 1.0 s). (5)
+  `docs/architecture.md` states the source-authority rule (log line
+  wins for sshd/auditd command/path/`USER_CMD` user; decoded `data`
+  wins for kernel-attributed auid/uid and for sudo, whose mapper
+  reads only decoded fields); `tests/test_log_source_authority.py`
+  (9 tests) pins each disagree case with no behavior change. Tests
+  failing-first: `tests/test_sshd_injection.py` (34 tests: two real
+  lab archive lines and one real alert copied verbatim into
+  `tests/fixtures/linux/sshd_injection_*.json` and
+  `tests/fixtures/wazuh/sshd_injection_alert.json`, every message
+  kind with ordinary/spaced/spoof/non-ASCII usernames, both signals,
+  both timing tests). Corpus regression via `eval/linux_census.py`:
+  lab-archives identical before/after (mapped 56829, same classes);
+  lab-chain1 3706 to 3708, both new rows the auth.log/journald
+  copies of one `Connection closed by invalid user <token>` line the
+  old translator dropped for the unknown marker (now correctly
+  typed). Verified with `make lint` (green: ruff check, format
+  check, mypy), the full `make test` (1152 passed with Postgres),
+  and focused 43 passed; gitleaks unavailable in this sandbox (no
+  binary; pre-commit hook fails building its Go env), manual review
+  found no secrets in the diff. Normalizer change, so eval delta
+  reported above; no prompt or model changes. No paid API called,
+  nothing executed against a server. `eval/reports/llm_latest.*`
+  untouched. Compose Postgres left running. Awaiting maintainer
+  commit.
+- 2026-11-01: fixed the `Disconnected from ... [preauth]` sshd
+  regression (detection-engineer). The peer is now parsed right to
+  left for every sshd message kind with one shared shape (last `<ip>
+  port <port>` with or without `from` before an optional `ssh2`
+  plus key info or `[preauth]` suffix; IPv4/IPv6), the address must
+  validate with the `ipaddress` module or the source stays unset
+  with `unmapped["linux.sshd_peer_unparsed"]` (decoded fields are
+  not consulted for it), and usernames keep their trailing-space
+  strip on every branch. New `tests/fixtures/linux/
+  sshd_real_corpus.jsonl` (9 verbatim lab lines, one per message
+  kind, from the chain archive and the archives bundle) plus 16
+  tests in `tests/test_sshd_injection.py` (corpus user/peer/status/
+  activity, both task injection lines resolving to the last peer,
+  bare/`[preauth]`/IPv6 peers, non-address peers leaving src unset;
+  failing-first: 5 failed before the fix). Old-vs-new corpus check
+  (`git show HEAD:` parser vs working tree over all sshd lines in
+  both lab stores, 3270 docs): 4 diffs, all on lab-injection lines
+  (bare pseudo-address now the real peer; two previously unmapped
+  `invalid user` closed lines now typed from the real peer), zero
+  other changes and no new flags anywhere. Eval delta: main
+  harness to throwaway reports (all +0 vs committed baseline, both
+  gates pass, 240 s wall) and `eval/linux_census.py` identical
+  before/after (mapped 56829 of n=157451). Verified with `make
+  lint` (green: ruff check, format check, mypy), the full `make
+  test` (1168 passed with Postgres), and the gitleaks hook
+  (Passed). No prompt or model changes. No paid API called,
+  nothing executed against a server. `eval/reports/llm_latest.*`
+  untouched. Compose Postgres left running. Awaiting maintainer
+  commit.

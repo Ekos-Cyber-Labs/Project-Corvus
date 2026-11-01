@@ -396,6 +396,75 @@ PATTERNS: tuple[Pattern, ...] = (
 )
 
 
+#: Second sshd message shapes that must never appear inside the
+#: username the hardened sshd parser produced: when the username
+#: itself carries one, the line was a log-injection attempt like the
+#: lab ``ssh -l 'zz Accepted password for root ...'`` probe. Matched
+#: case-sensitively against the raw username.
+_SSHD_EMBEDDED_MESSAGE = re.compile(r" from \S+ port ")
+
+
+def _sshd_username_signals(
+    event_uid: str, data: Mapping[str, Any]
+) -> list[InjectionSignal]:
+    """Emit structural signals for a spoofed sshd username.
+
+    The hardened sshd parser sets
+    ``unmapped["linux.username_whitespace"]`` exactly when the parsed
+    username contains whitespace (real login names never do): that
+    flag raises ``sshd_username_whitespace`` on ``user.name``. When the
+    username additionally carries a substring shaped like a second
+    sshd message (``Accepted ``, ``Failed password`` or
+    ``from <ip> port ``), ``sshd_username_embedded_message`` fires too.
+    Both carry ``requested_effect="other"`` and flow through
+    :func:`detect` into ``incident_signals`` like the phrase signals.
+    """
+    unmapped = data.get("unmapped")
+    if not isinstance(unmapped, Mapping):
+        return []
+    if unmapped.get("linux.username_whitespace") is not True:
+        return []
+    user = data.get("user")
+    name = user.get("name") if isinstance(user, Mapping) else None
+    if not isinstance(name, str) or not name:
+        actor = data.get("actor")
+        actor_user = actor.get("user") if isinstance(actor, Mapping) else None
+        name = actor_user.get("name") if isinstance(actor_user, Mapping) else None
+    if not isinstance(name, str) or not name:
+        return []
+    try:
+        spaced = normalize_text(name).spaced
+    except Exception:
+        return []
+    if not spaced:
+        return []
+    span = (0, len(spaced))
+    signals = [
+        InjectionSignal(
+            event_uid=event_uid,
+            field="user.name",
+            pattern_id="sshd_username_whitespace",
+            span=span,
+            requested_effect="other",
+        )
+    ]
+    if (
+        "Accepted " in name
+        or "Failed password" in name
+        or _SSHD_EMBEDDED_MESSAGE.search(name) is not None
+    ):
+        signals.append(
+            InjectionSignal(
+                event_uid=event_uid,
+                field="user.name",
+                pattern_id="sshd_username_embedded_message",
+                span=span,
+                requested_effect="other",
+            )
+        )
+    return signals
+
+
 class InjectionSignal(NamedTuple):
     """One pattern match in one attacker-controlled field.
 
@@ -575,7 +644,8 @@ def detect(event: Any) -> list[InjectionSignal]:
     reports collapsed-text spans only. Flat matches must be
     token-aligned (see :func:`_flat_span_to_spaced`); ``raw_data``
     JSON envelopes are scanned leaf by leaf with mapped-field text
-    deduplicated (see :func:`_iter_fields`).
+    deduplicated (see :func:`_iter_fields`). Structural sshd spoof
+    signals (see :func:`_sshd_username_signals`) follow the phrase scan.
     """
     event_uid, data = _event_uid_and_mapping(event)
     if not data:
@@ -627,6 +697,7 @@ def detect(event: Any) -> list[InjectionSignal]:
                             requested_effect=pattern.effect,
                         )
                     )
+    signals.extend(_sshd_username_signals(event_uid, data))
     return signals
 
 

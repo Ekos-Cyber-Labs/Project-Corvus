@@ -42,6 +42,7 @@ reaches the indexer; a level outside 0-15 clamps to the nearest end.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 from datetime import UTC, datetime
@@ -341,31 +342,86 @@ def _linux_user(name: Any) -> tuple[str | None, dict[str, Any]]:
     return username, {}
 
 
-#: sshd message shapes, from the lab archives and the OpenSSH wording
-#: they carry (``Accepted``, ``Failed``, ``Invalid user``,
-#: ``Disconnected from``, ``Received disconnect``, ``Connection
-#: closed by``). Each pattern names the user, source ip and port the
-#: line carries; lines without a user stay unmapped (the pinned schema
-#: requires the authentication subject).
-_SSHD_ACCEPTED = re.compile(
-    r"Accepted (?:password|publickey) for (?P<user>\S+) "
-    r"from (?P<ip>\S+) port (?P<port>\d+)"
+#: sshd message parsing (log-injection hardened). Every pattern anchors
+#: to the message start (the text after ``sshd[<pid>]: ``), so text
+#: inside the attacker-controlled username can never match another
+#: message shape. The peer is parsed right to left for every message
+#: kind -- the LAST ``<ip> port <port>`` (with or without a preceding
+#: ``from``) before the optional ``ssh2`` (plus ``: <key info>``) or
+#: ``[preauth]`` suffix -- and the username is everything between the
+#: fixed prefix and that peer, spaces included. The address must
+#: validate with the :mod:`ipaddress` module; otherwise the source
+#: stays unset with ``unmapped["linux.sshd_peer_unparsed"]``.
+_SSHD_TAG = re.compile(r"sshd\[\d+\]: ")
+
+#: Message kind at the message start. Only this decides the status;
+#: text inside the username never does. ``Received disconnect`` names
+#: no user, so it stays unmapped.
+_SSHD_KIND = re.compile(
+    r"^(?:"
+    r"Accepted (?P<accepted_method>password|publickey) for "
+    r"|Failed (?P<failed_method>password|publickey) for "
+    r"(?P<failed_invalid>invalid user )?"
+    r"|Invalid user "
+    r"|Disconnected from "
+    r"|Connection closed by "
+    r"|Received disconnect from "
+    r")"
 )
-_SSHD_FAILED = re.compile(
-    r"Failed (?:password|publickey) for (?:invalid user )?(?P<user>\S+) "
-    r"from (?P<ip>\S+) port (?P<port>\d+)"
-)
-_SSHD_INVALID = re.compile(
-    r"Invalid user (?P<user>\S+) from (?P<ip>\S+)(?: port (?P<port>\d+))?"
-)
-_SSHD_DISCONNECTED = re.compile(
-    r"Disconnected from (?:(user|authenticating user) (?P<user>\S+) )?"
-    r"(?P<ip>\S+)(?: port (?P<port>\d+))?"
-)
-_SSHD_CLOSED = re.compile(
-    r"Connection closed by (?:(authenticating user) (?P<user>\S+) )?"
-    r"(?P<ip>\S+)(?: port (?P<port>\d+))?"
-)
+
+#: ``user `` / ``authenticating user `` / ``invalid user `` markers
+#: that prefix the username in ``Disconnected`` / ``Connection
+#: closed`` lines (OpenSSH wording, not part of the username).
+_SSHD_PEER_MARKER = re.compile(r"^(?:user |authenticating user |invalid user )")
+
+#: Peer shape for every sshd message kind, matched right to left
+#: (the last valid one wins): ``<ip> port <port>`` with an optional
+#: preceding ``from``. ``Accepted``/``Failed``/``Invalid user`` carry
+#: the explicit ``from``; ``Disconnected``/``Connection closed`` carry
+#: a bare ``<ip> port <port>`` (also on the real attack line:
+#: ``... port 22 10.70.1.30 port 39098``). The ``from`` needs a word
+#: boundary (``(?<!\S)``): without it the ``from`` inside a username
+#: ending in ``from`` (``gfrom 1.2.3.4 port 5``) would be eaten and
+#: the username truncated to ``g``.
+_SSHD_PEER = re.compile(r"(?:(?<!\S)from )?(?P<ip>\S+) port (?P<port>\d+)")
+
+#: ``Invalid user`` lines without a port (``Invalid user mallory from
+#: 203.0.113.9``): the address still needs its ``from`` and must
+#: validate as an IP address.
+_SSHD_FROM_IP = re.compile(r" from (?P<ip>\S+)(?: port (?P<port>\d+))?")
+
+#: Allowed tails after the peer, shared by every message kind:
+#: ``ssh2`` with optional key info (``Accepted``/``Failed``),
+#: ``[preauth]`` (``Disconnected``/``Connection closed``), or nothing.
+_SSHD_PEER_TAIL = re.compile(r"(?:\s+ssh2(?::.*)?|\s+\[preauth\])?\s*$")
+
+
+def _sshd_message(full_log: str) -> str:
+    """Return the sshd message (text after ``sshd[<pid>]: ``)."""
+    match = _SSHD_TAG.search(full_log)
+    if match is None:
+        return full_log
+    return full_log[match.end() :]
+
+
+def _sshd_last_peer(
+    text: str, pattern: re.Pattern[str], tail: re.Pattern[str]
+) -> re.Match[str] | None:
+    """Return the last ``pattern`` match with a valid ``tail``.
+
+    The captured ``ip`` must parse with the :mod:`ipaddress` module
+    (IPv4 or IPv6); a non-address such as ``[preauth]`` never wins,
+    no matter where it sits in the line.
+    """
+    for match in reversed(list(pattern.finditer(text))):
+        if tail.match(text[match.end() :]) is None:
+            continue
+        try:
+            ipaddress.ip_address(match.group("ip"))
+        except ValueError:
+            continue
+        return match
+    return None
 
 
 def _map_sshd(
@@ -383,78 +439,116 @@ def _map_sshd(
     ``Failed`` and ``Invalid user`` are activity 1 Logon Failure;
     ``Disconnected from`` and ``Connection closed by`` are activity 2
     Logoff Success (the session existed and terminated). ``Received
-    disconnect`` names no user, so it stays unmapped. The user comes
-    from the log line first (verbatim up to
-    :data:`LINUX_USERNAME_CAP`), falling back to the decoded
-    ``srcuser``/``dstuser`` fields; the auth method (password vs
-    publickey) has no typed slot in the pinned 1.9.0
+    disconnect`` names no user, so it stays unmapped. Only the message
+    kind at the message start (after ``sshd[<pid>]: ``) decides the
+    status; the peer is the last ``<ip> port <port>`` (with or without
+    a preceding ``from``) before the optional ``ssh2`` / ``[preauth]``
+    suffix, and the username is everything between the fixed prefix
+    and that peer (it may contain spaces, flagged in
+    ``unmapped["linux.username_whitespace"]``). A peer that does not
+    validate as an IP address is never used: the source stays unset
+    with ``unmapped["linux.sshd_peer_unparsed"]`` and the decoded
+    ``data`` fields are not consulted for it. The log line wins over
+    the Wazuh-decoded ``data`` fields; differing decoded values are
+    kept in ``unmapped["linux.decoder_conflict"]``. The auth method
+    (password vs publickey) has no typed slot in the pinned 1.9.0
     ``authentication`` event, so it lands in
     ``unmapped["linux.auth_method"]``.
     """
     rule = source.get("rule")
     groups = _groups(rule) if isinstance(rule, dict) else []
     full_log = _str(source.get("full_log")) or ""
+    message = _sshd_message(full_log)
+    kind_match = _SSHD_KIND.match(message)
+    kind: str | None = None
+    method: str | None = None
+    rest = ""
+    if kind_match is not None:
+        rest = message[kind_match.end() :]
+        if kind_match.group("accepted_method") is not None:
+            kind, method = "accepted", kind_match.group("accepted_method")
+        elif kind_match.group("failed_method") is not None:
+            kind, method = "failed", kind_match.group("failed_method")
+        elif message.startswith("Invalid user "):
+            kind = "invalid"
+        elif message.startswith("Disconnected from "):
+            kind = "disconnected"
+        elif message.startswith("Connection closed by "):
+            kind = "closed"
+        else:
+            kind = "received"
     username: str | None = None
     ip: str | None = None
     port: int | None = None
     unmapped: dict[str, Any] = {}
     activity_id = 1
     status, status_id = "Unknown", 0
-    if _SUCCESS_GROUPS in groups or "Accepted" in full_log:
+    if kind == "accepted":
         status, status_id = "Success", 1
-    elif _FAILURE_GROUPS in groups or "Failed" in full_log:
+    elif kind in ("failed", "invalid"):
         status, status_id = "Failure", 2
-    match = _SSHD_ACCEPTED.search(full_log)
-    if match is not None:
+    elif kind in ("disconnected", "closed"):
+        activity_id = 2
         status, status_id = "Success", 1
-        username, ip, port = (
-            match.group("user"),
-            match.group("ip"),
-            _int(match.group("port")),
-        )
-        unmapped["linux.auth_method"] = (
-            "publickey" if "publickey" in full_log else "password"
-        )
-    else:
-        match = _SSHD_FAILED.search(full_log)
-        if match is not None:
-            status, status_id = "Failure", 2
-            username, ip, port = (
-                match.group("user"),
-                match.group("ip"),
-                _int(match.group("port")),
-            )
-            if "invalid user" in full_log:
+    elif _SUCCESS_GROUPS in groups:
+        status, status_id = "Success", 1
+    elif _FAILURE_GROUPS in groups:
+        status, status_id = "Failure", 2
+    peer: re.Match[str] | None = None
+    if kind in ("accepted", "failed"):
+        peer = _sshd_last_peer(rest, _SSHD_PEER, _SSHD_PEER_TAIL)
+        if peer is not None:
+            # The peer match eats ``from `` but not the space before
+            # it, so the username slice keeps a trailing space.
+            username = rest[: peer.start()].rstrip() or None
+        if method is not None:
+            unmapped["linux.auth_method"] = method
+        if kind == "failed" and kind_match is not None:
+            if kind_match.group("failed_invalid") is not None:
                 unmapped["linux.invalid_user"] = True
-            unmapped["linux.auth_method"] = (
-                "publickey" if "publickey" in full_log else "password"
-            )
-        else:
-            match = _SSHD_INVALID.search(full_log)
-            if match is not None:
-                status, status_id = "Failure", 2
-                username, ip, port = (
-                    match.group("user"),
-                    match.group("ip"),
-                    _int(match.group("port")),
-                )
-                unmapped["linux.invalid_user"] = True
-            else:
-                for pattern in (_SSHD_DISCONNECTED, _SSHD_CLOSED):
-                    match = pattern.search(full_log)
-                    if match is not None:
-                        break
-                if match is not None:
-                    activity_id = 2
-                    status, status_id = "Success", 1
-                    username = match.group("user")
-                    ip, port = match.group("ip"), _int(match.group("port"))
+    elif kind == "invalid":
+        peer = _sshd_last_peer(rest, _SSHD_PEER, _SSHD_PEER_TAIL)
+        if peer is None:
+            peer = _sshd_last_peer(rest, _SSHD_FROM_IP, _SSHD_PEER_TAIL)
+        if peer is not None:
+            username = rest[: peer.start()].rstrip() or None
+        unmapped["linux.invalid_user"] = True
+    elif kind in ("disconnected", "closed"):
+        body = _SSHD_PEER_MARKER.sub("", rest, count=1)
+        peer = _sshd_last_peer(body, _SSHD_PEER, _SSHD_PEER_TAIL)
+        if peer is not None:
+            username = body[: peer.start()].rstrip() or None
+    if peer is not None:
+        ip = peer.group("ip")
+        port = _int(peer.group("port"))
+    elif kind in ("accepted", "failed", "invalid", "disconnected", "closed"):
+        # No ``<ip> port <port>`` in the line validates as an address:
+        # leave the source unset instead of guessing from the text.
+        unmapped["linux.sshd_peer_unparsed"] = True
+    if username is not None and any(char.isspace() for char in username):
+        unmapped["linux.username_whitespace"] = True
+    conflict: dict[str, str] = {}
+    if username is not None:
+        decoded_user = _str(fields.get("srcuser")) or _str(fields.get("dstuser"))
+        if decoded_user is not None and decoded_user != username:
+            conflict["user"] = decoded_user
+    if ip is not None:
+        decoded_ip = _str(fields.get("srcip"))
+        if decoded_ip is not None and decoded_ip != ip:
+            conflict["ip"] = decoded_ip
+    if port is not None:
+        decoded_port = _str(fields.get("srcport"))
+        if decoded_port is not None and _int(decoded_port) != port:
+            conflict["port"] = decoded_port
+    if conflict:
+        unmapped["linux.decoder_conflict"] = conflict
     if username is None:
         username = _str(fields.get("srcuser")) or _str(fields.get("dstuser"))
-    if ip is None:
-        ip = _str(fields.get("srcip"))
-    if port is None:
-        port = _int(fields.get("srcport"))
+    if "linux.sshd_peer_unparsed" not in unmapped:
+        if ip is None:
+            ip = _str(fields.get("srcip"))
+        if port is None:
+            port = _int(fields.get("srcport"))
     username, capped = _linux_user(username)
     unmapped.update(capped)
     if username is None:
@@ -572,8 +666,11 @@ _AUDIT_PROCTITLE = re.compile(r"proctitle=([0-9A-Fa-f]*)")
 #: ``type=PATH ... item=<n> name="<path>"`` in encounter order.
 _AUDIT_PATH = re.compile(r'item=(\d+)\s+name="([^"]*)"')
 
-#: ``type=CWD ... cwd="<dir>"``.
-_AUDIT_CWD = re.compile(r'type=CWD msg=audit\([^)]*\):\s*cwd="([^"]*)"')
+#: ``type=CWD ... cwd="<dir>"``. The head group is bounded (a real
+#: kernel stamp is ~22 chars): an unbounded ``[^)]*`` here scans to
+#: the end of the blob from every ``msg=audit(`` occurrence, which is
+#: quadratic on hostile input.
+_AUDIT_CWD = re.compile(r'type=CWD msg=audit\([^)]{0,64}\):\s*cwd="([^"]*)"')
 
 #: PAM session lines (``pam_unix(<service>:session)``).
 _PAM_SESSION = re.compile(
@@ -748,8 +845,10 @@ def _parse_audit_blob(full_log: str) -> dict[str, Any]:
     head_types = [match.group(1) for match in heads]
     if "SYSCALL" in head_types:
         blob["syscall"] = {"name": syscall_name, "fields": fields}
+    # The head group is bounded like :data:`_AUDIT_CWD` (same
+    # quadratic-input reason); a real kernel stamp is ~22 chars.
     execve_match = re.search(
-        r"type=EXECVE msg=audit\([^)]*\):\s*argc=(\d+)((?:\s+a\d+=\S+)*)",
+        r"type=EXECVE msg=audit\([^)]{0,64}\):\s*argc=(\d+)((?:\s+a\d+=\S+)*)",
         full_log,
     )
     if execve_match is not None:
