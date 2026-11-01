@@ -144,6 +144,34 @@ store while the detection adds zero `llm_attempts`/`spend` rows, and
 shows the rolled-back rule silent. There is no fine-tuning anywhere:
 what is learned is a verified, versioned rule.
 
+Gate 2 (`corvus eval gate2`, `eval/gate2.py`) is the live-run
+counterpart: two Wazuh exports of the unseen variant chain (rule
+present vs rule absent) are loaded into temporary stores with the
+existing Linux loader, and the report refuses to flatter. Anti-leak
+checks come first (rule created before the first variant step, cited
+events inside training windows and outside every variant window and
+export, no variant-declared value in the detection text, recorded
+model attempts all predating the variant — any failure is INVALID).
+Cited-event timestamps resolve from the training replay store
+(`--train-dir`, via the real evidence loader
+`load_replay_events_by_uid`): neither the rule lineage nor the
+incident row carries per-event times. A cited event outside every
+`--train-gt` window is `lineage_outside_training_windows`; an
+unresolvable cited uid is `lineage_event_unresolved`.
+The positive export must show the rule's own `corvus_<sigma id>`
+alerts on every `expected: detect` step and nowhere else (misses are
+failures, expected-miss hits are surprises, out-of-window hits are
+false positives); the negative export must show zero of them (a hit
+there is contamination, hits only there mean swapped inputs); the
+same rule must match zero baseline events through the same engine;
+and the detection window (first variant step to last learned
+finding, inclusive) must hold zero `llm_attempts`/`spend` rows while
+later rows stay reported, never hidden. Ground-truth lines carry
+`expected` (`detect` by default, `miss` where the rule should stay
+silent — anything else refuses) and optional `variant_specific`
+values. Output is `eval/reports/gate2.md` plus `gate2.json`, every
+number with window, n, producing command and git commit.
+
 Sigma is the source format. A stored rule's Sigma id is assigned by
 Corvus (fresh uuid4 rewritten into the stored text at store time;
 the model's id is ignored so it can never collide) and its Sigma

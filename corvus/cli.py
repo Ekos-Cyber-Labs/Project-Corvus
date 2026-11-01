@@ -589,6 +589,48 @@ def build_parser() -> argparse.ArgumentParser:
             "for in-repo paths; default: eval/reports/latest.json)."
         ),
     )
+    eval_gate2 = eval_sub.add_parser(
+        "gate2",
+        help="Gate-2 learning evidence: a stored rule fires on an unseen "
+        "variant run (positive) and stays silent on the rule-absent "
+        "control (negative), with anti-leak checks first.",
+    )
+    eval_gate2.add_argument("--rule", type=int, required=True, help="Stored rule id.")
+    eval_gate2.add_argument(
+        "--train-gt", required=True, help="Training-run ground truth file."
+    )
+    eval_gate2.add_argument(
+        "--positive", required=True, help="Variant export directory (rule present)."
+    )
+    eval_gate2.add_argument(
+        "--positive-gt", required=True, help="Variant ground truth for --positive."
+    )
+    eval_gate2.add_argument(
+        "--negative", required=True, help="Variant export directory (rule absent)."
+    )
+    eval_gate2.add_argument(
+        "--negative-gt", required=True, help="Variant ground truth for --negative."
+    )
+    eval_gate2.add_argument(
+        "--baseline-dir",
+        default="data/replay-linux-baseline",
+        help="Benign baseline store or export (default: %(default)s).",
+    )
+    eval_gate2.add_argument(
+        "--train-dir",
+        default="data/replay-linux-chain1",
+        help="Training replay store holding the cited events (default: %(default)s).",
+    )
+    eval_gate2.add_argument(
+        "--out",
+        default="eval/reports/gate2.md",
+        help="Markdown report path (default: %(default)s).",
+    )
+    eval_gate2.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
     eval_llm = eval_sub.add_parser(
         "llm",
         help="Run the paid model-path eval (Glimmer triage + Spark analysis) "
@@ -1047,6 +1089,33 @@ def main(argv: list[str] | None = None) -> int:
                 args.report_md,
                 "--report-json",
                 args.report_json,
+                "--database-url",
+                args.database_url or "",
+            ]
+        )
+    if args.command == "eval" and args.eval_command == "gate2":
+        from eval.gate2 import main as gate2_main
+
+        return gate2_main(
+            [
+                "--rule",
+                str(args.rule),
+                "--train-gt",
+                args.train_gt,
+                "--positive",
+                args.positive,
+                "--positive-gt",
+                args.positive_gt,
+                "--negative",
+                args.negative,
+                "--negative-gt",
+                args.negative_gt,
+                "--baseline-dir",
+                args.baseline_dir,
+                "--train-dir",
+                args.train_dir,
+                "--out",
+                args.out,
                 "--database-url",
                 args.database_url or "",
             ]

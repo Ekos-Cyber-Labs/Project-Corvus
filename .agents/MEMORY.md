@@ -1261,3 +1261,61 @@ rules back to Wazuh (shadow first, human approval).
   gitleaks over every changed file (no leaks). No paid API called,
   nothing executed against a server. Compose Postgres left running.
   Awaiting maintainer commit.
+- 2026-10-31: shipped gate 2, the live-run learning evidence command
+  (detection-engineer). New `eval/gate2.py` plus `corvus eval gate2
+  --rule ID --train-gt FILE --positive DIR --positive-gt FILE
+  --negative DIR --negative-gt FILE [--baseline-dir DIR] [--out
+  eval/reports/gate2.md]`: variant exports load through the existing
+  Linux loader into temporary stores, Wazuh alert files are read as
+  the SIEM's own verdicts, and the report starts with four anti-leak
+  checks (rule created before the first variant step, cited events in
+  the recorded accepted backtest and absent from both variant
+  exports, no variant-declared value in the detection text, recorded
+  model attempts all predating the variant). Any failure is INVALID
+  (exit 1); malformed inputs refuse (exit 2). Positive needs the
+  rule's own `corvus_<sigma id>` alerts on every `expected: detect`
+  step and nowhere else (misses fail, expected-miss hits are
+  surprises, out-of-window hits are false positives); negative must
+  show zero (hits there contaminate, hits only there mean swapped
+  inputs); the same rule must match zero baseline events via the
+  same engine; the inclusive detection window must hold zero ledger
+  rows while later rows stay reported. Limits, ledger, baseline and
+  per-step tables are all generated from the data (ground-truth
+  `expected` defaults to `detect`, unknown values refuse; no wall
+  clock in any number). `tests/test_gate2.py` (25 tests) builds
+  small synthetic stores from real auditd/alert shapes with fixed
+  epochs: each anti-leak failure, negative firing, swap, surprise,
+  miss, false positive, baseline hit, in-window spend (pinned
+  inclusive at the last finding), empty export, unknown expected,
+  and a 3-second clock-skew creation. Failures found first: 1 test
+  expectation (distinct-rule double count, fixed in product) and 2
+  CLI tests needing cwd-relative data roots. Verified with `make
+  lint` (green: ruff check, format check, mypy), the full `make
+  test` (1022 passed with Postgres), and gitleaks (Passed). No
+  normalizer, correlation, prompt or model changes, so no eval
+  delta. No paid API called, nothing executed against a server.
+  Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-31: fixed gate-2 check `b-lineage-in-training-windows`
+  (detection-engineer): it compared cited uids against the recorded
+  backtest but never against the `--train-gt` windows, so passing
+  the variant ground truth as `--train-gt` still read VALID.
+  Verified against the repo's own functions that neither the rule
+  lineage (uids plus backtest counts) nor the incident row (uids
+  plus first/last seen) carries per-event times, so cited-event
+  timestamps now resolve from an explicit training replay store
+  (`--train-dir`, default `data/replay-linux-chain1`) through the
+  real evidence loader `load_replay_events_by_uid`. Out-of-window
+  cited events are INVALID (`lineage_outside_training_windows`),
+  unresolvable ones too (`lineage_event_unresolved`, never a silent
+  pass); the backtest attestation and the absent-from-variant-exports
+  checks stay. `tests/test_gate2.py` grew 4 failing-first tests on
+  the same synthetic stores (variant file as train ground truth, one
+  cited event outside among inside ones, unresolved uid via a
+  pruned train store, edge-inclusive boundaries; the clean world
+  stays VALID). Verified with `make lint` (green: ruff check,
+  format check, mypy), the full `make test` (1026 passed with
+  Postgres), and gitleaks (Passed). No normalizer, correlation,
+  prompt or model changes, so no eval delta. No paid API called,
+  nothing executed against a server.
+  `eval/reports/llm_latest.*` untouched. Compose Postgres left
+  running. Awaiting maintainer commit.
