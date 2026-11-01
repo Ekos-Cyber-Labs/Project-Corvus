@@ -120,14 +120,21 @@ then deployed in shadow to the live Wazuh. The loop
    Selectors holding a registry pseudonym are rejected
    (`pseudonym_in_rule`); selectors keyed on attacker-controlled strings
    from the incident's injection signals are rejected
-   (`attacker_literal`). A final output echoing injected content ends
+   (`attacker_literal`), including rules that depend on such a string
+   without naming it contiguously (the verifier re-evaluates the rule
+   with the token neutralized and rejects when the match disappears).
+   A final output echoing injected content ends
    `rejected_unsafe` without retry and stores nothing.
 3. An accepted rule is stored as `candidate` with lineage (source
-   incident, cited uids, accepted backtest, rounds used, model, prompt
-   version `rule_proposal/v1`, ledger ids, creation time). Outcomes:
+   incident, cited uids — every one matched by the accepted backtest,
+   accepted backtest with the SHA-256 of the exact evaluated text,
+   rounds used, model, prompt version `rule_proposal/v1`, ledger ids,
+   creation time). Outcomes:
    `accepted`, `exhausted`, `rejected_unsafe`, `budget_stopped`.
 4. Shadow (`corvus rules approve ID --to shadow --approver NAME --reason
-   TEXT`, `corvus/learning/shadow.py`): the rule runs through the same
+   TEXT`, `corvus/learning/shadow.py`, approver restricted to
+   `CORVUS_RULE_APPROVERS` when that comma-separated list is set):
+   the rule runs through the same
    loader, engine and mapping as the shipped rules; matches become
    findings marked shadow (rule id, version, Sigma id) that are
    returned, never persisted to the findings store, so no notification
@@ -177,13 +184,16 @@ Corvus (fresh uuid4 rewritten into the stored text at store time;
 the model's id is ignored so it can never collide) and its Sigma
 status is always `experimental`; deployment lifecycle lives in the
 row's `status` column (`candidate`/`shadow`/`active`), never in the
-text.
+text. A first store is always version 1; a revision passes the
+superseded rule id, reuses its Sigma id at version previous + 1, and
+records the superseded id in lineage while the old row is kept.
 
 Wazuh XML is generated from it (`corvus/learning/wazuh_xml.py`,
 local rule id range 100000-120000) and validated with
 `wazuh-logtest`. Shadow-mode flow:
 
-1. `candidate -> approved to shadow` (human approver + reason).
+1. `candidate -> approved to shadow` (human approver + reason;
+   the approver must be listed in `CORVUS_RULE_APPROVERS` when set).
 2. `corvus rules export-wazuh ID --out DIR` writes the `<group>`
    block for `local_rules.xml` (one rule per source: sudo matching
    the decoded `command` field, auditd matching `full_log`), the RAW
@@ -218,7 +228,8 @@ Translator limits (anything else is a typed refusal, never partial
 output): `linux/process_creation` only; fields `CommandLine` and
 `Image` only; modifiers `contains`/`startswith`/`endswith`/`all`
 and plain equality (`|re` is always refused); selections joined by
-`and`/`or` with at most one negation; auditd `CommandLine` only as
+`and`/`or` with at most one narrow negation (exactly one literal of
+4+ effective characters, never `|re`); auditd `CommandLine` only as
 `contains` (prefix/suffix/equality have no `full_log` form);
 literals need 4+ effective characters, no control characters, and a
 bounded pattern cost. Auditd hex-encoded arguments match only in

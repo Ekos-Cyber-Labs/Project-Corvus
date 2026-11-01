@@ -827,11 +827,19 @@ def _passing_verdict() -> Any:
     return result
 
 
+#: The golden control matches two of the three chain events; only
+#: those two may be cited once the store binds verdicts to matches.
+GOLDEN_MATCHED = [
+    "lnx-d7bea80358fc93ab",
+    "lnx-f749ba60b31e41e4",
+]
+
+
 def _store_shadow_candidate(db: str) -> int:
     from corvus.learning.rules import add_candidate, transition_rule
 
     row = add_candidate(
-        db, GOLDEN, None, GOLDEN_UIDS, _passing_verdict(), "probe", "0.1"
+        db, GOLDEN, None, GOLDEN_MATCHED, _passing_verdict(), "probe", "0.1"
     )
     shadow = transition_rule(
         db, row["id"], "shadow", approver="ana", reason="proof control"
@@ -874,7 +882,7 @@ def test_shadow_promotion_and_storage_guards(proposal_db: str) -> None:
     from corvus.learning.rules import add_candidate, transition_rule
 
     row = add_candidate(
-        proposal_db, GOLDEN, None, GOLDEN_UIDS, _passing_verdict(), "probe", "0.1"
+        proposal_db, GOLDEN, None, GOLDEN_MATCHED, _passing_verdict(), "probe", "0.1"
     )
     with pytest.raises(ValueError):
         transition_rule(
@@ -993,7 +1001,7 @@ def test_cli_approve_and_rollback(
 
     monkeypatch.setenv("DATABASE_URL", proposal_db)
     row = add_candidate(
-        proposal_db, GOLDEN, None, GOLDEN_UIDS, _passing_verdict(), "probe", "0.1"
+        proposal_db, GOLDEN, None, GOLDEN_MATCHED, _passing_verdict(), "probe", "0.1"
     )
     assert (
         main(

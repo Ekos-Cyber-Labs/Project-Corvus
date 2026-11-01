@@ -339,7 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["shadow", "active", "archived"],
         help="Target status (allowed moves only).",
     )
-    approve.add_argument("--approver", required=True, help="Approver name.")
+    approve.add_argument(
+        "--approver",
+        required=True,
+        help="Approver name (must be in $CORVUS_RULE_APPROVERS when set).",
+    )
     approve.add_argument("--reason", required=True, help="Approval reason.")
     approve.add_argument(
         "--database-url",
@@ -350,7 +354,11 @@ def build_parser() -> argparse.ArgumentParser:
         "rollback", help="Roll a shadow or active rule back instantly."
     )
     rollback.add_argument("rule_id", type=int, help="Stored rule id.")
-    rollback.add_argument("--approver", required=True, help="Approver name.")
+    rollback.add_argument(
+        "--approver",
+        required=True,
+        help="Approver name (must be in $CORVUS_RULE_APPROVERS when set).",
+    )
     rollback.add_argument("--reason", required=True, help="Rollback reason.")
     rollback.add_argument(
         "--database-url",

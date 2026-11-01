@@ -37,6 +37,7 @@ stored) or ``budget_stopped`` (a cap hit mid-loop, nothing stored).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -316,7 +317,8 @@ def build_proposal_system_message(language: str) -> str:
         "attacker-controlled string from the evidence (user names, file "
         "names or header values the attacker chose): the verifier "
         "rejects those too. Prefer no NOT exclusion at all; at most one "
-        "narrow carve-out is tolerated and never one that hides "
+        "narrow carve-out — a single literal of 4+ characters, never "
+        "a regex — is tolerated and never one that hides "
         "attacker activity.\n"
         "\nChoose the target events yourself: cite event uids you found "
         "through get_events that no shipped rule covers. Every cited "
@@ -1220,6 +1222,7 @@ def propose_rule(
         accepted_round = next(
             record for record in reversed(rounds) if list(record.codes) == ["accepted"]
         )
+        assert accepted_yaml is not None
         verdict = {
             "accepted": True,
             "codes": ["accepted"],
@@ -1229,11 +1232,11 @@ def propose_rule(
             "target_matched": list(accepted_round.target_matched),
             "target_total": accepted_round.target_total,
             "baseline_count": accepted_round.baseline_count,
+            "sigma_sha256": hashlib.sha256(accepted_yaml.encode("utf-8")).hexdigest(),
         }
         # Store the accepted round's exact text (the verified one),
         # never the model's reformatted text: validation proved both
         # describe the same rule.
-        assert accepted_yaml is not None
         try:
             stored = add_candidate(
                 database_url,

@@ -54,7 +54,13 @@ def _store_golden(database_url: str) -> dict[str, Any]:
     result = backtest(GOLDEN, {"event_uids": GOLDEN_UIDS})
     assert result.accepted, result.codes
     return add_candidate(
-        database_url, GOLDEN, None, GOLDEN_UIDS, result, "probe", "0.1"
+        database_url,
+        GOLDEN,
+        None,
+        list(result.target_matched),
+        result,
+        "probe",
+        "0.1",
     )
 
 

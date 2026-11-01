@@ -1319,3 +1319,33 @@ rules back to Wazuh (shadow first, human approval).
   nothing executed against a server.
   `eval/reports/llm_latest.*` untouched. Compose Postgres left
   running. Awaiting maintainer commit.
+- 2026-10-31: closed six rule-store integrity gaps in
+  `corvus/learning/backtest.py` and `corvus/learning/rules.py`
+  (detection-engineer, security-reviewer pass). (1) Verdicts are
+  hash-bound: `BacktestResult` carries the SHA-256 of the exact
+  evaluated text, `add_candidate` recomputes it and requires
+  equality, `accepted` True with `codes == ["accepted"]`, and every
+  cited uid inside `target_matched`; the hash is stored in lineage.
+  (2) Versioning via explicit `supersedes` rule id: first store is
+  version 1 with a fresh id, a superseding store reuses the id at
+  previous version + 1 and records it (dead per-id MAX query
+  removed). (3) `transition_rule` reads `FOR UPDATE` in the writing
+  transaction and accepts optional `from_status` (stale callers fail
+  instead of chaining); two-thread barrier test asserts exactly one
+  wins. (4) Semantic `attacker_literal`: for each forbidden token in
+  the target events the rule is re-evaluated with every occurrence
+  blanked to same-length X's; a lost match rejects (lexical check
+  stays as fast path). (5) Exclusion narrowed: one NOT scope holds
+  exactly one literal of 4+ chars, never `|re`. (6) Optional
+  `CORVUS_RULE_APPROVERS` allow-list for transitions, unset means
+  unchanged. Proposal loop sends the text hash with its verdict.
+  Tests failing-first (fabricated dict, swapped text, split/regex/
+  charclass bypasses against the chain-1 injection event, 30-value
+  and or-wrap negations, concurrent movers, unlisted approver);
+  existing suites updated to cite only matched uids. Verified with
+  `make lint` (green: ruff check, format check, mypy), the full
+  `make test` (1046 passed with Postgres), and gitleaks (Passed).
+  No normalizer, correlation, prompt or model changes, so no eval
+  delta. No paid API called, nothing executed against a server.
+  `eval/reports/llm_latest.*` untouched. Compose Postgres left
+  running. Awaiting maintainer commit.

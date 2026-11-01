@@ -30,8 +30,10 @@ Deterministic acceptance, each reason a stable code:
   evaluated against null);
 - ``unsupported_construct`` — conversion failed (legacy conditions,
   rejected regex, correlation rules);
-- ``exclusion`` — more than ``MAX_EXCLUSIONS`` negations: an exclusion
-  can hide an attacker, so only one narrow carve-out is tolerated;
+- ``exclusion`` — more than ``MAX_EXCLUSIONS`` negations, or a
+  negated filter holding anything but one literal of at least
+  ``MIN_LITERAL_LEN`` characters with no ``|re``: an exclusion can
+  hide an attacker, so only one narrow carve-out is tolerated;
 - ``over_broad_literal`` — a ``contains``/``startswith``/``endswith``
   (or wildcard) literal shorter than ``MIN_LITERAL_LEN`` characters;
 - ``leading_wildcard_regex`` — a ``|re`` pattern anchored nowhere;
@@ -44,8 +46,10 @@ Deterministic acceptance, each reason a stable code:
   data, since the model only ever sees pseudonyms;
 - ``attacker_literal`` — a selector holds another ``forbidden_tokens``
   entry (an attacker-controlled string from the incident's injection
-  signals): a rule keyed on attacker-chosen text hides nothing and
-  travels with the attacker;
+  signals), or the rule's target match depends on such a token
+  without naming it contiguously (split across a list, spelled with
+  ``|re`` wildcards, hidden in a character class): a rule keyed on
+  attacker-chosen text hides nothing and travels with the attacker;
 - ``empty_target`` — the target names no resolvable event;
 - ``unknown_target_uid`` — none of the cited uids exist in either store;
 - ``no_target_match`` — the rule matches no target event;
@@ -61,7 +65,9 @@ Documented limits (chosen for the Linux lab data, fixed here):
   hostile submission cannot hang the caller. DuckDB itself runs RE2
   (linear time, no backtracking), and nested-quantifier patterns are
   rejected before they ever reach it.
-- ``MAX_EXCLUSIONS`` 1: at most one ``NOT`` in the executed SQL.
+- ``MAX_EXCLUSIONS`` 1: at most one ``NOT`` scope, and that scope
+  holds exactly one literal of at least ``MIN_LITERAL_LEN``
+  characters with no ``|re``.
 - ``MIN_LITERAL_LEN`` 4: substring/wildcard literals need at least 4
   effective characters (``curl`` passes, ``sh`` does not); forbidden
   tokens shorter than this are ignored by the same floor.
@@ -74,6 +80,8 @@ Documented limits (chosen for the Linux lab data, fixed here):
 from __future__ import annotations
 
 import glob
+import hashlib
+import json
 import re
 import tempfile
 import threading
@@ -116,7 +124,10 @@ MAX_INDENT_DEPTH = 40
 PARSE_TIMEOUT_S = 15.0
 EVAL_TIMEOUT_S = 60.0
 
-#: At most one NOT in the executed SQL (counted outside literals).
+#: At most one NOT scope; that scope holds exactly one literal of at
+#: least ``MIN_LITERAL_LEN`` characters and no ``|re`` (checked on the
+#: Sigma condition tree; the executed-SQL NOT count is kept as a
+#: backstop for backend-generated negations).
 MAX_EXCLUSIONS = 1
 
 #: Substring/wildcard literals need this many effective characters.
@@ -170,7 +181,14 @@ ALL_CODES = frozenset(
 
 @dataclass
 class BacktestResult:
-    """The structured verdict for one candidate rule."""
+    """The structured verdict for one candidate rule.
+
+    ``sigma_sha256`` is the SHA-256 of the exact ``sigma_text`` that
+    was evaluated, set by :func:`backtest` on every result (including
+    rejections). The rule store recomputes it over the submitted text
+    and requires equality, so a verdict can never be reused for a
+    different detection.
+    """
 
     accepted: bool
     codes: list[str] = field(default_factory=list)
@@ -185,6 +203,7 @@ class BacktestResult:
     baseline_sample_uids: list[str] = field(default_factory=list)
     scope: dict[str, Any] = field(default_factory=dict)
     cost: dict[str, Any] = field(default_factory=dict)
+    sigma_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable verdict."""
@@ -202,6 +221,7 @@ class BacktestResult:
             "baseline_sample_uids": list(self.baseline_sample_uids),
             "scope": dict(self.scope),
             "cost": dict(self.cost),
+            "sigma_sha256": self.sigma_sha256,
         }
 
 
@@ -383,6 +403,105 @@ def _check_regexes(rule: Any) -> str | None:
     return None
 
 
+def _raw_condition_trees(rule: Any) -> Any:
+    """Yield raw (unpostprocessed) condition trees of one rule.
+
+    Trees whose condition string does not parse are skipped here;
+    the compile stage refuses them with a stable code instead, so a
+    malformed condition is never masked as an exclusion.
+    """
+    conditions = getattr(getattr(rule, "detection", None), "parsed_condition", [])
+    for condition in conditions or []:
+        parse = getattr(condition, "parse", None)
+        if parse is None:
+            continue
+        try:
+            yield parse(False)
+        except Exception:
+            continue
+
+
+def _walk_condition(node: Any) -> Any:
+    """Yield a condition-tree node and every node below it."""
+    yield node
+    args = getattr(node, "args", None)
+    if isinstance(args, list):
+        for child in args:
+            yield from _walk_condition(child)
+    single = getattr(node, "arg", None)
+    if single is not None and not isinstance(single, list):
+        yield from _walk_condition(single)
+
+
+def _negated_scope_reason(names: list[str], detections: dict[str, Any]) -> str | None:
+    """Return why one negated scope is too broad; None when narrow.
+
+    A tolerable carve-out is exactly one literal of at least
+    ``MIN_LITERAL_LEN`` effective characters and no ``|re``: anything
+    else (many values, an ``or`` wrap, a regex, a short literal, an
+    unknown reference, a double negation) hides too much.
+    """
+    literals: list[str] = []
+    for name in names:
+        detection = detections.get(name)
+        if detection is None:
+            return f"negated {name!r} is not a known selection"
+        for item in _iter_leaf_items(detection):
+            if getattr(item, "negated", False):
+                return "double negation in the excluded filter"
+            if "SigmaRegularExpressionModifier" in _modifier_names(item.modifiers):
+                return "negated filter uses |re"
+            values = item.value if isinstance(item.value, list) else [item.value]
+            for value in values:
+                if hasattr(value, "regexp"):
+                    return "negated filter uses |re"
+                literals.append(_sigma_text_parts(value))
+    if len(literals) != 1:
+        return f"negated filter holds {len(literals)} literals, at most one allowed"
+    if len(literals[0]) < MIN_LITERAL_LEN:
+        return f"negated literal {literals[0]!r} shorter than {MIN_LITERAL_LEN}"
+    return None
+
+
+def _check_exclusion_narrowness(rule: Any) -> str | None:
+    """Reject broad negations; None when the carve-out is narrow.
+
+    Every ``NOT`` scope in the raw condition tree (plus any
+    item-level negation) must hold exactly one literal of at least
+    ``MIN_LITERAL_LEN`` characters and no ``|re``. More than
+    ``MAX_EXCLUSIONS`` scopes is rejected the same way.
+    """
+    from sigma.conditions import ConditionIdentifier, ConditionNOT
+
+    detections: dict[str, Any] = (
+        getattr(getattr(rule, "detection", None), "detections", {}) or {}
+    )
+    scopes: list[list[str]] = []
+    for tree in _raw_condition_trees(rule):
+        for node in _walk_condition(tree):
+            if isinstance(node, ConditionNOT):
+                scopes.append(
+                    [
+                        str(child.identifier)
+                        for child in _walk_condition(node)
+                        if isinstance(child, ConditionIdentifier)
+                        and isinstance(child.identifier, str)
+                    ]
+                )
+    for name, detection in detections.items():
+        for item in _iter_leaf_items(detection):
+            if getattr(item, "negated", False):
+                scopes.append([name])
+                break
+    if len(scopes) > MAX_EXCLUSIONS:
+        return f"more than {MAX_EXCLUSIONS} negation in the condition"
+    for names in scopes:
+        reason = _negated_scope_reason(names, detections)
+        if reason is not None:
+            return reason
+    return None
+
+
 def _parse_moment(value: Any) -> int | None:
     """Parse an ISO-8601 instant or epoch milliseconds; None when bad."""
     if isinstance(value, bool):
@@ -510,6 +629,175 @@ def _check_forbidden(
     return None
 
 
+#: Neutral replacement for a forbidden token in semantic re-evaluation
+#: (same length, matches nothing a rule would legitimately key on).
+_NEUTRAL_CHAR = "X"
+
+
+def _neutralize_value(value: Any, pattern: re.Pattern[str]) -> Any:
+    """Copy ``value`` with every match of ``pattern`` blanked to X's.
+
+    Keys are never touched; each occurrence is replaced with as many
+    X's as the occurrence held, so positions and lengths are kept
+    while the attacker text is gone.
+    """
+    if isinstance(value, str):
+        return pattern.sub(lambda match: _NEUTRAL_CHAR * len(match.group(0)), value)
+    if isinstance(value, list):
+        return [_neutralize_value(item, pattern) for item in value]
+    if isinstance(value, dict):
+        return {key: _neutralize_value(item, pattern) for key, item in value.items()}
+    return value
+
+
+def _load_target_texts(
+    chain_dir: str | Path, baseline_dir: str | Path, uids: list[str]
+) -> dict[str, tuple[Any, str]]:
+    """Map wanted uids to ``(time, event_json)`` across both stores.
+
+    Only the ``uid`` column is scanned until the files holding wanted
+    uids are known; ``event_json`` is read solely for those rows, so
+    the baseline is never loaded in full.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    wanted = set(uids)
+    found: dict[str, tuple[Any, str]] = {}
+    for replay_dir in (chain_dir, baseline_dir):
+        for path in sorted(glob.glob(str(Path(replay_dir) / "events" / "*.parquet"))):
+            if len(found) >= len(wanted):
+                break
+            try:
+                uid_column = pq.read_table(path, columns=["uid"]).column("uid")
+            except Exception:
+                continue
+            indices = [
+                index
+                for index, uid in enumerate(uid_column.to_pylist())
+                if uid in wanted and uid not in found
+            ]
+            if not indices:
+                continue
+            try:
+                detail = pq.read_table(
+                    path, columns=["uid", "time", "event_json"]
+                ).take(pa.array(indices, type=pa.int64()))
+            except Exception:
+                continue
+            for record in detail.to_pylist():
+                uid = record.get("uid")
+                payload = record.get("event_json")
+                if (
+                    isinstance(uid, str)
+                    and uid in wanted
+                    and uid not in found
+                    and isinstance(payload, str)
+                ):
+                    found[uid] = (record.get("time"), payload)
+    return found
+
+
+def _check_attacker_semantic(
+    item: Any,
+    chain_dir: str | Path,
+    baseline_dir: str | Path,
+    wanted: list[str],
+    matched: list[str],
+    forbidden: frozenset[str] | None,
+) -> BacktestResult | None:
+    """Reject rules whose target match depends on a forbidden token.
+
+    The lexical screen is only a fast path: a token split across a
+    ``contains|all`` list, spelled with ``|re`` wildcards, or hidden
+    in a character class never appears contiguously in the rule. For
+    each attacker token present in the target events, the rule is
+    therefore re-evaluated over copies of those events with every
+    occurrence replaced by a neutral string of the same length. When
+    a target event that matched stops matching, the rule keys on
+    attacker-chosen text and is rejected with ``attacker_literal``.
+    Pseudonym-shaped tokens are skipped here (a rule depending on
+    one matches no real data and already fails as ``no_target_match``).
+    Returns None when the rule does not depend on any token.
+    """
+    tokens = sorted(
+        {
+            token
+            for token in (forbidden or frozenset())
+            if isinstance(token, str)
+            and len(token) >= MIN_LITERAL_LEN
+            and not _PSEUDONYM_TOKEN.fullmatch(token.strip())
+        }
+    )
+    if not tokens or not matched:
+        return None
+    texts = _load_target_texts(chain_dir, baseline_dir, wanted)
+    if not texts:
+        return None
+    lowered = {uid: payload.lower() for uid, (_, payload) in texts.items()}
+    present = [
+        token
+        for token in tokens
+        if any(token.lower() in payload for payload in lowered.values())
+    ]
+    if not present:
+        return None
+    import duckdb
+
+    from corvus.detect.backend import FULLTEXT_COLUMN
+    from corvus.detect.engine import _load_slice, _run_rule
+    from corvus.detect.mapping import GROUPS, extract_row
+
+    group = GROUPS[item.group]
+    need_fulltext = FULLTEXT_COLUMN in item.sql
+    matched_set = set(matched)
+    for token in present:
+        pattern = re.compile(re.escape(token), re.IGNORECASE)
+        rows: list[dict[str, Any]] = []
+        usable = True
+        for uid in wanted:
+            entry = texts.get(uid)
+            if entry is None:
+                continue
+            moment, payload = entry
+            try:
+                event = json.loads(payload)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            try:
+                row = extract_row(
+                    _neutralize_value(event, pattern),
+                    group,
+                    need_fulltext=need_fulltext,
+                    raw_fallback=True,
+                )
+            except Exception:
+                usable = False
+                break
+            row["uid"] = uid
+            if isinstance(moment, int):
+                row["time"] = moment
+            rows.append(row)
+        if not usable or not rows:
+            continue
+        try:
+            with duckdb.connect() as connection:
+                _load_slice(connection, group, rows)
+                still = _run_rule(connection, item)
+        except Exception:
+            continue
+        neutralized = {uid for uid in matched_set if uid in texts}
+        if any(uid not in still for uid in neutralized):
+            return _fail(
+                "attacker_literal",
+                "detection depends on a forbidden attacker literal: "
+                "a matched target event stops matching without it",
+            )
+    return None
+
+
 def backtest(
     sigma_text: Any,
     target: Any,
@@ -523,10 +811,20 @@ def backtest(
     ``forbidden_tokens`` (None by default, skipping the screen) holds
     registry pseudonyms plus attacker-controlled strings; any
     selector containing one is rejected with ``pseudonym_in_rule``
-    (pseudonym-shaped) or ``attacker_literal`` (anything else).
+    (pseudonym-shaped) or ``attacker_literal`` (anything else), and a
+    rule whose target match depends on an attacker token without
+    naming it contiguously is rejected semantically with
+    ``attacker_literal`` (see :func:`_check_attacker_semantic`).
+    Every result carries ``sigma_sha256``, the SHA-256 of the exact
+    ``sigma_text`` evaluated, so the verdict is bound to the text.
     """
+    text_hash = (
+        hashlib.sha256(sigma_text.encode("utf-8")).hexdigest()
+        if isinstance(sigma_text, str)
+        else None
+    )
     try:
-        return _backtest_inner(
+        result = _backtest_inner(
             sigma_text,
             target,
             baseline_dir=baseline_dir,
@@ -534,11 +832,13 @@ def backtest(
             forbidden_tokens=forbidden_tokens,
         )
     except Exception as exc:  # never raises on bad input
-        return BacktestResult(
+        result = BacktestResult(
             accepted=False,
             codes=["bad_input"],
             detail={"note": f"{type(exc).__name__}: {str(exc)[:ERROR_CAP]}"},
         )
+    result.sigma_sha256 = text_hash
+    return result
 
 
 def _backtest_inner(
@@ -598,6 +898,10 @@ def _backtest_inner(
     if regex_hit is not None:
         code, _, note = regex_hit.partition(":")
         return _fail(code, note)
+
+    narrow_note = _check_exclusion_narrowness(rule)
+    if narrow_note is not None:
+        return _fail("exclusion", narrow_note)
 
     forbidden_hit = _check_forbidden(rule, forbidden_tokens)
     if forbidden_hit is not None:
@@ -669,6 +973,12 @@ def _backtest_inner(
     target_set = set(wanted)
     target_matched = sorted((matched_chain | matched_base) & target_set)
     baseline_hits = sorted(matched_base - target_set)
+
+    semantic_hit = _check_attacker_semantic(
+        item, chain_dir, baseline_dir, wanted, target_matched, forbidden_tokens
+    )
+    if semantic_hit is not None:
+        return semantic_hit
 
     from corvus.detect.mapping import GROUPS
 
