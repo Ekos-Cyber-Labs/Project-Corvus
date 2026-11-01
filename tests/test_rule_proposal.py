@@ -483,6 +483,15 @@ def _matched_from_seen(seen: list[Any]) -> list[str]:
     raise AssertionError("no accepted backtest observed")
 
 
+def stored_sigma_id(db: str, rule_db_id: int) -> str:
+    """Return the Corvus-assigned Sigma id of one stored rule row."""
+    from corvus.learning.rules import get_rule
+
+    stored = get_rule(db, rule_db_id)
+    assert stored is not None
+    return str(stored["lineage"]["sigma_rule_id"])
+
+
 REFORMATTED_GOLDEN = """\
 # reformatted by the model: comments, reordered keys, double quotes
 title: Sudo Find Writing SSH Authorized Keys
@@ -560,7 +569,9 @@ def test_propose_accepts_golden_and_stores_lineage(proposal_db: str) -> None:
     )
     assert outcome.status == "accepted", outcome.errors
     assert outcome.rule_db_id is not None
-    assert outcome.sigma_rule_id == "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d"
+    # The outcome reports the Corvus-assigned id, never the model's.
+    assert outcome.sigma_rule_id != "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d"
+    assert outcome.sigma_rule_id == stored_sigma_id(proposal_db, outcome.rule_db_id)
     assert len(outcome.rounds) == 1
     assert list(outcome.rounds[0].codes) == ["accepted"]
     stored = get_rule(proposal_db, outcome.rule_db_id)
@@ -1384,7 +1395,17 @@ def test_reformatted_equivalent_yaml_accepted(proposal_db: str) -> None:
     assert outcome.rule_db_id is not None
     stored = get_rule(proposal_db, outcome.rule_db_id)
     assert stored is not None
-    assert stored["sigma_text"] == GOLDEN
+    # The verified (accepted-round) detection is stored, not the
+    # model's reformatted text; Corvus assigns the id and status.
+    import yaml as yaml_lib
+
+    stored_doc = yaml_lib.safe_load(stored["sigma_text"])
+    golden_doc = yaml_lib.safe_load(GOLDEN)
+    assert stored_doc["id"] == stored["lineage"]["sigma_rule_id"] != golden_doc["id"]
+    assert stored_doc["status"] == "experimental"
+    stripped_stored = {k: v for k, v in stored_doc.items() if k not in ("id", "status")}
+    stripped_golden = {k: v for k, v in golden_doc.items() if k not in ("id", "status")}
+    assert stripped_stored == stripped_golden
 
 
 @pytest.mark.integration

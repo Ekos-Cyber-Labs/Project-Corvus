@@ -144,8 +144,63 @@ store while the detection adds zero `llm_attempts`/`spend` rows, and
 shows the rolled-back rule silent. There is no fine-tuning anywhere:
 what is learned is a verified, versioned rule.
 
-Sigma is the source format. Wazuh XML is generated from it (local rule id
-range 100000-120000) and validated with `wazuh-logtest`. `[ROADMAP]`
+Sigma is the source format. A stored rule's Sigma id is assigned by
+Corvus (fresh uuid4 rewritten into the stored text at store time;
+the model's id is ignored so it can never collide) and its Sigma
+status is always `experimental`; deployment lifecycle lives in the
+row's `status` column (`candidate`/`shadow`/`active`), never in the
+text.
+
+Wazuh XML is generated from it (`corvus/learning/wazuh_xml.py`,
+local rule id range 100000-120000) and validated with
+`wazuh-logtest`. Shadow-mode flow:
+
+1. `candidate -> approved to shadow` (human approver + reason).
+2. `corvus rules export-wazuh ID --out DIR` writes the `<group>`
+   block for `local_rules.xml` (one rule per source: sudo matching
+   the decoded `command` field, auditd matching `full_log`), the RAW
+   `full_log` lines of the backtest target events plus a documented
+   baseline sample (every plausible-match same-decoder line plus a
+   capped context sample, resolved through replay provenance),
+   `expected.json` with the Sigma engine's own must-fire flags, and
+   a plain-text deploy plan.
+3. The operator pastes the group into `local_rules.xml`, runs
+   `wazuh-analysisd -t`, restarts the manager. Sibling precedence:
+   the first matching sibling under a decoder group wins, so each
+   rule hangs under the group root and every stock sibling that
+   could match first (computed from the shipped ruleset, e.g. sudo
+   under 5400/5401/5402/5407/5403/5405/5406). A matching child
+   replaces its parent's alert, so each shadow rule sits at the
+   highest level among the parents it replaces (never below an
+   existing alert; floored below `log_alert_level` for level-0-only
+   chains, which stay archives-only). The shadow check: alerts for
+   these events are unchanged in count and level, now carrying the
+   `corvus_shadow` group.
+4. `corvus rules logtest ID --bundle DIR` feeds the lines through
+   `wazuh-logtest` (bridge contract: one JSON line per event in,
+   one out with the `decoder` and `rule` blocks; the command to
+   reach the manager comes only from `CORVUS_WAZUH_LOGTEST_CMD`,
+   never from code or the bundle) and writes the per-line
+   Sigma-vs-Wazuh parity report with every disagreement listed.
+5. Promotion raises both rules to level 7 (`active`, replacing the
+   parent's alert with its own at the higher level); rollback
+   removes the group, re-tests, restarts.
+
+Translator limits (anything else is a typed refusal, never partial
+output): `linux/process_creation` only; fields `CommandLine` and
+`Image` only; modifiers `contains`/`startswith`/`endswith`/`all`
+and plain equality (`|re` is always refused); selections joined by
+`and`/`or` with at most one negation; auditd `CommandLine` only as
+`contains` (prefix/suffix/equality have no `full_log` form);
+literals need 4+ effective characters, no control characters, and a
+bounded pattern cost. Auditd hex-encoded arguments match only in
+`full_log`, so every literal matches as plain text or uppercase hex
+(case-insensitively); `Image` matches the decoded `exe`. Two native
+ids per stored rule (the stored id plus the next free id above it).
+The logtest parser relies only on the `decoder`/`rule` JSON blocks
+(the archive/alert shape) and fails closed on anything else.
+
+`[ROADMAP]`
 Automatic promotion by deterministic gates, automatic rollback on alert-rate
 misbehavior, rule dedup, per-technique/global quotas, usage-based TTL with
 archiving, periodic consolidation, "modify the near-miss rule" flow, CDB

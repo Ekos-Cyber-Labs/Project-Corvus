@@ -1158,3 +1158,71 @@ rules back to Wazuh (shadow first, human approval).
   lint` (green), the full `make test` (915 passed with Postgres),
   `pre-commit run gitleaks --all-files` (Passed). No paid API
   called. Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-31: shipped the learned-Sigma to Wazuh XML shadow path
+  (detection-engineer). Fixed two live-review defects in
+  `corvus/learning/rules.py`: Corvus assigns the Sigma id (fresh
+  uuid4 via `prepare_candidate_text`, rewritten into the stored
+  text; the model's id is ignored so it can never bump another
+  rule's version) and the stored text is forced to `experimental`
+  while deployment lifecycle stays in the row status column; the
+  propose loop reports the stored id. New `corvus/learning/
+  wazuh_xml.py` (pure Sigma linux/process_creation to Wazuh XML:
+  sudo rule under parent 5400 on the decoded `command` field,
+  auditd rule under parent 80700 as one PCRE2 `(?i)` regex over
+  `full_log` with a plain-or-uppercase-hex alternation per literal
+  plus an EXECVE/USER_CMD guard; shadow level 2 below the lab alert
+  threshold 3, active 7; group `corvus_<sigma id>`; mitre ids only
+  from the pinned dictionary; typed `translation_unsupported`
+  refusals, never partial output; second native id is the next free
+  id above the stored one). New `corvus/learning/export_wazuh.py`
+  (`rules export-wazuh`: XML, raw `full_log` logtest inputs with
+  location/agent, `expected.json` from fresh Sigma matches over
+  both stores, plain-text deploy plan; refusals write nothing) and
+  `corvus/learning/logtest.py` (`LogtestRunner` Protocol,
+  env-command subprocess runner, archive/alert-shaped output
+  parser failing closed, per-line Sigma-vs-Wazuh parity report;
+  `rules logtest`; tests use stand-ins). Real-data parity: the
+  control rule's 3 Sigma chain hits (2 sudo plain, 1 hex-only
+  EXECVE arg) all fire on their Wazuh patterns. `tests/
+  test_wazuh_xml.py` (29 tests) and `tests/test_export_wazuh.py`
+  (22 tests) cover the subset, refusals (markup/NUL/newline/1MB
+  literals, `|re`, bad logsource/field/level of negation, id
+  collision/range, edited-in-DB text, runner garbage/timeout) and
+  the CLI pair end to end. Architecture notes gained the
+  shadow-mode flow and translator limits. Security pass: no model
+  input reaches the XML (literals are escaped/screened, `|re`
+  refused, patterns re-compiled plus empty-match guarded, XML
+  rebuilt with ElementTree and re-parsed); runner command from env
+  only; bundle carries no manager address. Verified with `make
+  lint` (ruff check, format check, mypy green), the full `make
+  test` (968 passed with Postgres), and gitleaks (Passed). No
+  normalizer, correlation, prompt or model changes, so no eval
+  delta. No paid API called, nothing executed against a server.
+  Compose Postgres left running. Awaiting maintainer commit.
+- 2026-10-31: fixed the shadow rule reaching its records
+  (detection-engineer follow-up to a lab-manager 4.14.9 finding:
+  parity was 324/326 because first-matching-sibling wins left the
+  sudo rule under bare 5400 dead). `corvus/learning/wazuh_xml.py`
+  now parses the shipped ruleset files (fragments wrapped for the
+  stock parser; `*_rules.xml` only, decoders and local excluded)
+  and derives each `if_sid` chain as the decoder-group root plus
+  every direct child that could match first (children gated on
+  `audit.type` outside SYSCALL/USER_CMD are dropped, which also
+  removes the high-level anomaly rules; grandchildren are covered
+  transitively): sudo under 5400/5401/5402/5407/5403/5405/5406,
+  auditd under 80700/80780/80783/80786/80789/80792. Shadow level is
+  per source at the highest replaced-parent level (sudo 5, auditd
+  3; floored below log_alert_level for level-0-only chains), so a
+  shadow child never hides or downgrades an existing alert; active
+  stays 7. `parent_ids` override validated against the passed
+  files (`unknown_parent` refusal). Deploy plan and parity report
+  carry the exact logtest bridge contract (one JSON line in/out
+  with decoder and rule blocks, command only via
+  CORVUS_WAZUH_LOGTEST_CMD) plus the unchanged-count-and-level
+  shadow check and the active-replaces-parent note. Tests:
+  stand-in ruleset sibling shadowing, override refusals, level
+  matrix 0/3/mixed/5, real sudo lines with real parent levels, and
+  plan/report text. Verified with `make lint` (green), the full
+  `make test` (979 passed with Postgres), and gitleaks (Passed).
+  No paid API called, nothing executed against a server. Compose
+  Postgres left running. Awaiting maintainer commit.

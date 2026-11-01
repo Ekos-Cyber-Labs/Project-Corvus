@@ -371,6 +371,65 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("DATABASE_URL"),
         help="Postgres URL (default: $DATABASE_URL).",
     )
+    export_wazuh = rules_sub.add_parser(
+        "export-wazuh",
+        help="Translate a stored rule to Wazuh XML plus an offline parity bundle.",
+    )
+    export_wazuh.add_argument("rule_id", type=int, help="Stored rule id.")
+    export_wazuh.add_argument("--out", required=True, help="Bundle directory to write.")
+    export_wazuh.add_argument(
+        "--mode",
+        default="shadow",
+        choices=["shadow", "active"],
+        help="Wazuh rule mode (default: %(default)s).",
+    )
+    export_wazuh.add_argument(
+        "--chain-dir",
+        default="data/replay-linux-chain1",
+        help="Attack-chain store (default: %(default)s).",
+    )
+    export_wazuh.add_argument(
+        "--baseline-dir",
+        default="data/replay-linux-baseline",
+        help="Benign baseline store (default: %(default)s).",
+    )
+    export_wazuh.add_argument(
+        "--data-dir",
+        default="data",
+        help="Dataset root for provenance files (default: %(default)s).",
+    )
+    export_wazuh.add_argument(
+        "--ruleset-dir",
+        default="data/wazuh-ruleset",
+        help="Wazuh ruleset directory (default: %(default)s).",
+    )
+    export_wazuh.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    logtest = rules_sub.add_parser(
+        "logtest",
+        help="Run bundle lines through wazuh-logtest and write a parity report.",
+    )
+    logtest.add_argument("rule_id", type=int, help="Stored rule id.")
+    logtest.add_argument("--bundle", required=True, help="Bundle directory.")
+    logtest.add_argument(
+        "--out",
+        default=None,
+        help="Parity report path (default: <bundle>/parity_report.json).",
+    )
+    logtest.add_argument(
+        "--timeout",
+        type=float,
+        default=120.0,
+        help="Logtest wall-clock budget in seconds (default: %(default)s).",
+    )
+    logtest.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
     prove = rules_sub.add_parser(
         "prove",
         help="Learning proof: stored rule fires on the control store, "
@@ -1022,6 +1081,133 @@ def main(argv: list[str] | None = None) -> int:
         if shadow_report.skipped:
             print(f"  skipped: {shadow_report.skipped}")
         return 0
+    if args.command == "rules" and args.rules_command == "export-wazuh":
+        import json
+
+        from corvus.learning.export_wazuh import (
+            EXPECTED_NAME,
+            ExportError,
+            build_bundle,
+            write_bundle,
+        )
+        from corvus.learning.rules import get_rule, list_rules
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        migrate(args.database_url)
+        stored = get_rule(args.database_url, args.rule_id)
+        if stored is None:
+            parser.error(f"unknown rule id {args.rule_id}")
+        assert stored is not None
+        store_ids = [
+            row["native_rule_id"]
+            for row in list_rules(args.database_url)
+            if isinstance(row["native_rule_id"], int)
+        ]
+        try:
+            from corvus.attack import load_dictionary
+
+            attack_dict = load_dictionary()
+        except Exception:
+            attack_dict = None
+        try:
+            wazuh_bundle = build_bundle(
+                row=stored,
+                mode=args.mode,
+                chain_dir=args.chain_dir,
+                baseline_dir=args.baseline_dir,
+                data_dir=args.data_dir,
+                ruleset_dir=args.ruleset_dir,
+                store_ids=store_ids,
+                attack=attack_dict,
+            )
+        except ExportError as exc:
+            print(f"export refused: {exc}")
+            return 1
+        try:
+            out = write_bundle(wazuh_bundle, args.out)
+        except ExportError as exc:
+            print(f"export refused: {exc}")
+            return 1
+        expected = json.loads(wazuh_bundle[EXPECTED_NAME])
+        print(f"bundle written to {out}")
+        for name in sorted(wazuh_bundle):
+            print(f"  {name}")
+        print(
+            f"inputs={expected['counts']['inputs']}"
+            f" target={expected['counts']['target']}"
+            f" baseline={expected['counts']['baseline']}"
+            f" must_fire={expected['counts']['must_fire']}"
+        )
+        return 0
+    if args.command == "rules" and args.rules_command == "logtest":
+        import json
+        from pathlib import Path as _Path
+
+        from corvus.learning.export_wazuh import EXPECTED_NAME, INPUTS_NAME
+        from corvus.learning.logtest import (
+            LogtestError,
+            SubprocessLogtestRunner,
+            compare_parity,
+            parse_logtest_result,
+        )
+        from corvus.learning.rules import get_rule
+        from corvus.state.migrate import migrate
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        migrate(args.database_url)
+        stored = get_rule(args.database_url, args.rule_id)
+        if stored is None:
+            parser.error(f"unknown rule id {args.rule_id}")
+        assert stored is not None
+        bundle_dir = _Path(args.bundle)
+        try:
+            expected = json.loads((bundle_dir / EXPECTED_NAME).read_text())
+            inputs = [
+                json.loads(line)
+                for line in (bundle_dir / INPUTS_NAME).read_text().splitlines()
+                if line.strip()
+            ]
+        except OSError as exc:
+            parser.error(f"cannot read bundle: {exc}")
+        if expected.get("sigma_rule_id") != stored["lineage"].get("sigma_rule_id"):
+            parser.error("bundle is for a different stored rule (sigma id mismatch)")
+        if not expected.get("native_rule_ids", [stored["native_rule_id"]])[:1] == [
+            stored["native_rule_id"]
+        ]:
+            parser.error("bundle is for a different stored rule (native id mismatch)")
+        try:
+            runner = SubprocessLogtestRunner()
+            answers = runner.run(inputs, timeout_s=args.timeout)
+            verdicts = [
+                parse_logtest_result(answer, rule_ids=set(expected["native_rule_ids"]))
+                for answer in answers
+            ]
+            report = compare_parity(expected["lines"], verdicts)
+        except LogtestError as exc:
+            print(f"logtest failed: {exc}")
+            return 1
+        out_path = _Path(args.out) if args.out else bundle_dir / "parity_report.json"
+        payload = {
+            "rule_db_id": stored["id"],
+            "sigma_rule_id": stored["lineage"].get("sigma_rule_id"),
+            "native_rule_ids": expected["native_rule_ids"],
+            "bundle": str(bundle_dir),
+            **report.to_dict(),
+        }
+        try:
+            out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        except OSError as exc:
+            parser.error(f"cannot write parity report: {exc}")
+        print(f"parity: {report.agreement}/{len(report.lines)} agree")
+        for line in report.disagreements:
+            print(
+                f"  disagree key={line.key} uid={line.event_uid}"
+                f" must_fire={line.must_fire} fired={line.fired}"
+            )
+        return 0 if not report.disagreements else 1
     if args.command == "rules" and args.rules_command == "prove":
         import json
 

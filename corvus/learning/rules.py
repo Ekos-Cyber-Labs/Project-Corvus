@@ -2,24 +2,36 @@
 
 A rule that fails the :mod:`corvus.learning.backtest` verifier cannot
 be stored as a candidate: :func:`add_candidate` requires a passing
-backtest result for the same Sigma id. The stored copy is always
-``experimental``; the backtest level ceiling is enforced again here.
+backtest result for the submitted text. The model's Sigma id is then
+ignored: Corvus assigns a fresh uuid4
+(:func:`prepare_candidate_text`) and rewrites it into the stored
+text, so a model-chosen id can never collide with a shipped or
+stored rule and bump the wrong rule's version. The stored copy is
+always ``experimental`` (rewritten the same way); deployment
+lifecycle lives in the row's ``status`` column (``candidate``,
+``shadow``, ``active``, ``rolled_back``, ``archived``), never in the
+Sigma text. The backtest level ceiling is enforced again here.
 Status moves only through :func:`transition_rule`, which requires a
 non-empty approver string and a recorded reason for every move
 (``candidate -> shadow -> active``, plus ``rolled_back`` and
-``archived``), appended to ``lineage.history``. A new version of the
-same Sigma id inserts a fresh row with an incremented version and
-keeps the old row untouched. ``native_rule_id`` allocates inside
-100000-120000 and is never reused (partial unique index from
-migration 0007 refuses the second writer).
+``archived``), appended to ``lineage.history``. Storing the same
+submission twice yields two rows with distinct Sigma ids (each
+version 1); the per-id version counter increments only when the same
+Corvus-assigned id is stored again, and the old row is always kept
+untouched. ``native_rule_id`` allocates inside 100000-120000 and is
+never reused (partial unique index from migration 0007 refuses the
+second writer).
 """
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
+import yaml
 from psycopg.types.json import Jsonb
 
 __all__ = [
@@ -30,6 +42,7 @@ __all__ = [
     "archive_rule",
     "get_rule",
     "list_rules",
+    "prepare_candidate_text",
     "roll_back_rule",
     "transition_rule",
 ]
@@ -84,6 +97,46 @@ def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
 
 
+def prepare_candidate_text(sigma_text: str) -> tuple[str, str]:
+    """Assign a fresh Corvus Sigma id; return ``(stored_text, sigma_id)``.
+
+    The model's ``id`` is ignored (it may be a fabricated look-alike
+    UUID colliding with a shipped or stored rule) and replaced with a
+    fresh uuid4, rewritten into the stored text; ``status`` is forced
+    to ``experimental`` however the model labelled it. Only those two
+    top-level keys change: the rewritten text must describe the same
+    detection (compared by parsed structure minus ``id``/``status``),
+    otherwise ``ValueError`` is raised and nothing is stored. Raises
+    ``ValueError`` for anything that is not exactly one Sigma rule.
+    """
+    rule = _parse_sigma(sigma_text)
+    try:
+        doc = yaml.safe_load(sigma_text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"sigma YAML does not parse: {exc}") from None
+    if not isinstance(doc, Mapping):
+        raise ValueError("sigma YAML must be a mapping with one rule")
+    before = dict(doc)
+    assigned = str(uuid.uuid4())
+    stored_doc = dict(before)
+    stored_doc["id"] = assigned
+    stored_doc["status"] = "experimental"
+    try:
+        stored_text = yaml.safe_dump(stored_doc, sort_keys=False, allow_unicode=True)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"sigma YAML does not serialize: {exc}") from None
+    rewritten = _parse_sigma(stored_text)
+    if str(rewritten.title) != str(rule.title) or str(rewritten.id) != assigned:
+        raise ValueError("id/status rewrite changed the rule")
+    after = yaml.safe_load(stored_text)
+    assert isinstance(after, Mapping)
+    stripped_before = {k: v for k, v in before.items() if k not in ("id", "status")}
+    stripped_after = {k: v for k, v in after.items() if k not in ("id", "status")}
+    if stripped_before != stripped_after:
+        raise ValueError("id/status rewrite changed the rule detection")
+    return stored_text, assigned
+
+
 def _allocate_native_id(cur: Any) -> int:
     """Return the next free native id (max + 1 from 100000)."""
     cur.execute(
@@ -111,11 +164,15 @@ def add_candidate(
 ) -> dict[str, Any]:
     """Store a verified candidate rule; return the stored row.
 
-    ``backtest_result`` is the passing verdict for this exact Sigma
-    id (a :class:`BacktestResult` or its ``to_dict()`` mapping); any
-    other value raises ``ValueError`` and stores nothing. The stored
-    status is forced to ``experimental`` and the version increments
-    per Sigma id while older rows are kept. ``native_rule_id`` is
+    ``backtest_result`` is the passing verdict for the submitted text
+    (a :class:`BacktestResult` or its ``to_dict()`` mapping); any
+    other value raises ``ValueError`` and stores nothing. The verdict
+    must name the submitted text's own Sigma id, binding it to that
+    detection; the stored row then carries a fresh Corvus-assigned
+    id and ``experimental`` status text (see
+    :func:`prepare_candidate_text`), so the model's id is ignored and
+    can never bump another rule's version. The version increments per
+    stored Sigma id while older rows are kept. ``native_rule_id`` is
     allocated automatically unless the caller passes one explicitly
     (out-of-range values raise; collisions raise the database's
     unique violation, so a racer never overwrites). ``extra_lineage``
@@ -136,9 +193,9 @@ def add_candidate(
             f"a rule that fails the verifier cannot be stored: {verdict.get('codes')}"
         )
     rule = _parse_sigma(sigma_text)
-    sigma_id = str(rule.id)
-    if verdict.get("rule_id") != sigma_id:
+    if verdict.get("rule_id") != str(rule.id):
         raise ValueError("backtest result is for a different rule id")
+    stored_text, sigma_id = prepare_candidate_text(sigma_text)
     if not producer.strip() or not producer_version.strip():
         raise ValueError("producer and producer_version are required")
     if any(not isinstance(uid, str) or not uid for uid in cited_uids):
@@ -200,7 +257,7 @@ def add_candidate(
                 "RETURNING " + _RULE_COLUMNS,
                 (
                     title,
-                    sigma_text,
+                    stored_text,
                     allocated,
                     version,
                     Jsonb(lineage),

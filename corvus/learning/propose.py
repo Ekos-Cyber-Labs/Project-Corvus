@@ -1307,7 +1307,11 @@ def propose_rule(
         ledger_ids.append(attempt_id)
         if conversion is not None:
             spend_usd += conversion.usd
-        return _finish("accepted", int(stored["id"]), str(accepted_round.rule_id), [])
+        # The stored row carries the Corvus-assigned id (the model's
+        # id is rewritten at store time), so the outcome reports the
+        # stored id, never the model's.
+        stored_sigma_id = str(stored["lineage"]["sigma_rule_id"])
+        return _finish("accepted", int(stored["id"]), stored_sigma_id, [])
 
 
 def spark_model_fn(

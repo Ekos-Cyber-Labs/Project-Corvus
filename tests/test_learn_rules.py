@@ -79,13 +79,26 @@ def rule_count(test_url: str) -> int:
 
 @pytest.mark.integration
 def test_add_candidate_forces_experimental(rules_db: str) -> None:
+    import uuid as uuid_module
+
+    import yaml
+
     row = add_candidate(
         rules_db, GOLDEN, None, GOLDEN_UIDS, passing_verdict(), "probe", "0.1", T0
     )
     assert row["status"] == "candidate"
     assert row["lineage"]["version"] == 1
     assert row["native_rule_id"] == 100000
-    assert row["lineage"]["sigma_rule_id"] == "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d"
+    stored_id = row["lineage"]["sigma_rule_id"]
+    # The model's id is ignored: Corvus assigns a fresh uuid4, so the
+    # stored id is a valid UUID that is not the model's look-alike.
+    assert stored_id != "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d"
+    assert uuid_module.UUID(stored_id).version == 4
+    stored_doc = yaml.safe_load(row["sigma_text"])
+    assert stored_doc["id"] == stored_id
+    # The stored text agrees with the pre-promotion lifecycle: the
+    # Sigma status is experimental while the row status is candidate.
+    assert stored_doc["status"] == "experimental"
     assert row["lineage"]["producer"] == "probe"
     assert row["lineage"]["cited_uids"] == GOLDEN_UIDS
     assert row["lineage"]["backtest"]["codes"] == ["accepted"]
@@ -94,17 +107,50 @@ def test_add_candidate_forces_experimental(rules_db: str) -> None:
 
 
 @pytest.mark.integration
-def test_new_version_keeps_old_row(rules_db: str) -> None:
+def test_same_submission_twice_gets_distinct_ids(rules_db: str) -> None:
     first = add_candidate(
         rules_db, GOLDEN, None, GOLDEN_UIDS, passing_verdict(), "probe", "0.1", T0
     )
     second = add_candidate(
         rules_db, GOLDEN, None, GOLDEN_UIDS, passing_verdict(), "probe", "0.2", T0
     )
-    assert second["version"] == 2
+    # Each store assigns a fresh id, so re-storing one submission can
+    # never bump another rule's version: two rows, distinct Sigma
+    # ids, each version 1, the old row untouched.
+    assert first["lineage"]["sigma_rule_id"] != second["lineage"]["sigma_rule_id"]
+    assert first["version"] == 1
+    assert second["version"] == 1
     assert second["native_rule_id"] == 100001
     assert get_rule(rules_db, first["id"])["status"] == "candidate"
     assert get_rule(rules_db, first["id"])["lineage"]["version"] == 1
+
+
+@pytest.mark.integration
+def test_proposal_reusing_stored_id_gets_fresh_id(rules_db: str) -> None:
+    import yaml
+
+    from corvus.learning.backtest import backtest
+
+    first = add_candidate(
+        rules_db, GOLDEN, None, GOLDEN_UIDS, passing_verdict(), "probe", "0.1", T0
+    )
+    stored_id = first["lineage"]["sigma_rule_id"]
+    # A proposal reusing the stored rule's id (the collision the live
+    # review found): same accepted detection shape would still pass,
+    # so forge the id onto an equivalent submission and backtest it.
+    forged = yaml.safe_load(GOLDEN)
+    forged["id"] = stored_id
+    forged_text = yaml.safe_dump(forged, sort_keys=False, allow_unicode=True)
+    verdict = backtest(forged_text, {"event_uids": GOLDEN_UIDS})
+    assert verdict.accepted, verdict.codes
+    second = add_candidate(
+        rules_db, forged_text, None, GOLDEN_UIDS, verdict, "probe", "0.2", T0
+    )
+    assert second["lineage"]["sigma_rule_id"] != stored_id
+    assert second["version"] == 1
+    # The rule whose id was reused keeps its version: no wrong bump.
+    assert get_rule(rules_db, first["id"])["lineage"]["version"] == 1
+    assert get_rule(rules_db, first["id"])["lineage"]["sigma_rule_id"] == stored_id
 
 
 @pytest.mark.integration
@@ -123,6 +169,23 @@ def test_mismatched_backtest_result_rejected(rules_db: str) -> None:
     with pytest.raises(ValueError):
         add_candidate(rules_db, GOLDEN, None, GOLDEN_UIDS, verdict, "probe", "0.1", T0)
     assert rule_count(rules_db) == 0
+
+
+@pytest.mark.integration
+def test_experimental_text_still_evaluates_in_shadow(rules_db: str) -> None:
+    import yaml
+
+    from corvus.learning.shadow import compile_shadow_rules, shadow_rules
+
+    row = add_candidate(
+        rules_db, GOLDEN, None, GOLDEN_UIDS, passing_verdict(), "probe", "0.1", T0
+    )
+    assert yaml.safe_load(row["sigma_text"])["status"] == "experimental"
+    transition_rule(rules_db, row["id"], "shadow", approver="ana", reason="shadow soak")
+    pairs, skipped = compile_shadow_rules(shadow_rules(rules_db))
+    assert skipped == {}
+    assert len(pairs) == 1
+    assert pairs[0][0].rule_id == row["lineage"]["sigma_rule_id"]
 
 
 @pytest.mark.integration
@@ -297,7 +360,11 @@ def test_cli_add_list_show(
     )
     assert "stored candidate id=" in capsys.readouterr().out
     assert main(["rules", "list"]) == 0
-    assert "candidate" in capsys.readouterr().out
+    listed = capsys.readouterr().out
+    assert "candidate" in listed
+    # The model's id never reaches the store: list shows the assigned one.
+    assert "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d" not in listed
     assert main(["rules", "show", "1"]) == 0
     shown = capsys.readouterr().out
-    assert "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d" in shown
+    assert "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d" not in shown
+    assert "experimental" in shown
