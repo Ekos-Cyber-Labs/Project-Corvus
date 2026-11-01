@@ -129,8 +129,11 @@ then deployed in shadow to the live Wazuh. The loop
    incident, cited uids — every one matched by the accepted backtest,
    accepted backtest with the SHA-256 of the exact evaluated text,
    rounds used, model, prompt version `rule_proposal/v1`, ledger ids,
-   creation time). Outcomes:
+   creation time). The store re-runs the backtest itself and never trusts
+   a caller verdict. Outcomes:
    `accepted`, `exhausted`, `rejected_unsafe`, `budget_stopped`.
+   Accepted residual: a single `NOT` of one literal of 4+ characters (for
+   example a command name) is allowed by design; the reviewer sees it in the rule text.
 4. Shadow (`corvus rules approve ID --to shadow --approver NAME --reason
    TEXT`, `corvus/learning/shadow.py`, approver restricted to
    `CORVUS_RULE_APPROVERS` when that comma-separated list is set):

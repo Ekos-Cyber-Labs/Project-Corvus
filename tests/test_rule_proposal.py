@@ -838,8 +838,9 @@ GOLDEN_MATCHED = [
 def _store_shadow_candidate(db: str) -> int:
     from corvus.learning.rules import add_candidate, transition_rule
 
+    incident_id = _seed_incident(db, list(GOLDEN_UIDS))
     row = add_candidate(
-        db, GOLDEN, None, GOLDEN_MATCHED, _passing_verdict(), "probe", "0.1"
+        db, GOLDEN, incident_id, GOLDEN_MATCHED, _passing_verdict(), "probe", "0.1"
     )
     shadow = transition_rule(
         db, row["id"], "shadow", approver="ana", reason="proof control"
@@ -881,8 +882,15 @@ def test_shadow_rule_fires_with_marked_findings(proposal_db: str) -> None:
 def test_shadow_promotion_and_storage_guards(proposal_db: str) -> None:
     from corvus.learning.rules import add_candidate, transition_rule
 
+    incident_id = _seed_incident(proposal_db, list(GOLDEN_UIDS))
     row = add_candidate(
-        proposal_db, GOLDEN, None, GOLDEN_MATCHED, _passing_verdict(), "probe", "0.1"
+        proposal_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        _passing_verdict(),
+        "probe",
+        "0.1",
     )
     with pytest.raises(ValueError):
         transition_rule(
@@ -896,7 +904,7 @@ def test_shadow_promotion_and_storage_guards(proposal_db: str) -> None:
         add_candidate(
             proposal_db,
             BROAD,
-            None,
+            incident_id,
             GOLDEN_UIDS,
             backtest(BROAD, {"event_uids": GOLDEN_UIDS}),
             "probe",
@@ -1000,8 +1008,15 @@ def test_cli_approve_and_rollback(
     from corvus.learning.rules import add_candidate
 
     monkeypatch.setenv("DATABASE_URL", proposal_db)
+    incident_id = _seed_incident(proposal_db, list(GOLDEN_UIDS))
     row = add_candidate(
-        proposal_db, GOLDEN, None, GOLDEN_MATCHED, _passing_verdict(), "probe", "0.1"
+        proposal_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        _passing_verdict(),
+        "probe",
+        "0.1",
     )
     assert (
         main(

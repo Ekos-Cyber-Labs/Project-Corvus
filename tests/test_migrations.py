@@ -160,6 +160,7 @@ EXPECTED_INDEXES = {
     "idx_incidents_status_list",
     "idx_incidents_ai_status_list",
     "idx_spend_created_at",
+    "idx_rules_sigma_id_version",
 }
 
 
@@ -184,6 +185,7 @@ def test_migrate_applies_twice_idempotently() -> None:
         assert "0006_agent_step_scope.sql" in first
         assert "0007_rules_native_uid.sql" in first
         assert "0008_live_poll.sql" in first
+        assert "0009_rules_sigma_version.sql" in first
         assert migrate(test_url) == []
         with psycopg.connect(test_url) as conn:
             with conn.cursor() as cur:
@@ -197,6 +199,7 @@ def test_migrate_applies_twice_idempotently() -> None:
                     "0006_agent_step_scope.sql",
                     "0007_rules_native_uid.sql",
                     "0008_live_poll.sql",
+                    "0009_rules_sigma_version.sql",
                 ]
 
         # File-level idempotency: executing 0002 and 0004 directly, twice, is safe.
@@ -247,6 +250,14 @@ def test_migrate_applies_twice_idempotently() -> None:
             with conn.cursor() as cur:
                 cur.execute(live_text)
                 cur.execute(live_text)
+            conn.commit()
+        version_text = (
+            Path(MIGRATIONS_DIR) / "0009_rules_sigma_version.sql"
+        ).read_text(encoding="utf-8")
+        with psycopg.connect(test_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(version_text)
+                cur.execute(version_text)
             conn.commit()
 
         with psycopg.connect(test_url) as conn:

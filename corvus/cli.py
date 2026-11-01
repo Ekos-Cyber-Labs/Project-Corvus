@@ -266,8 +266,9 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument(
         "--incident",
         type=int,
-        default=None,
-        help="Incident id the rule was learned from (optional).",
+        required=True,
+        help="Incident id the rule was learned from (required: the store "
+        "re-runs the backtest against this incident's stored events).",
     )
     add.add_argument("--producer", required=True, help="Producer name (free field).")
     add.add_argument(
@@ -1183,7 +1184,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "rules" and args.rules_command == "add":
         from pathlib import Path
 
-        from corvus.learning.backtest import backtest
         from corvus.learning.rules import add_candidate
         from corvus.state.migrate import migrate
 
@@ -1195,28 +1195,25 @@ def main(argv: list[str] | None = None) -> int:
             sigma_text = Path(args.file).read_text(encoding="utf-8")
         except OSError as exc:
             parser.error(f"cannot read rule file: {exc}")
-        result = backtest(
-            sigma_text,
-            {"event_uids": list(args.event_uid)},
-            baseline_dir=args.baseline_dir,
-            chain_dir=args.chain_dir,
-        )
-        if not result.accepted:
-            print(f"rejected: {result.codes}")
-            return 1
         migrate(args.database_url)
+        # No caller-side backtest here: the store re-runs the verifier
+        # itself against the incident's stored events and refuses when
+        # the fresh result is not accepted.
         try:
             row = add_candidate(
                 args.database_url,
                 sigma_text,
                 args.incident,
                 list(args.event_uid),
-                result,
+                None,
                 args.producer,
                 args.producer_version,
+                chain_dir=args.chain_dir,
+                baseline_dir=args.baseline_dir,
             )
         except ValueError as exc:
-            parser.error(str(exc))
+            print(f"rejected: {exc}")
+            return 1
         print(
             f"stored candidate id={row['id']} "
             f"native_rule_id={row['native_rule_id']} version={row['version']}"

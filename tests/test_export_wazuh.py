@@ -51,12 +51,28 @@ def export_db() -> Any:
 
 
 def _store_golden(database_url: str) -> dict[str, Any]:
+    import time as time_module
+
     result = backtest(GOLDEN, {"event_uids": GOLDEN_UIDS})
     assert result.accepted, result.codes
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, event_uids,"
+                " severity_floor, severity_id)"
+                " VALUES (%s, %s::jsonb, 4, 4) RETURNING id",
+                (
+                    f"corr-export-{time_module.time_ns()}",
+                    json.dumps(list(GOLDEN_UIDS)),
+                ),
+            )
+            row = cur.fetchone()
+            assert row is not None
+        conn.commit()
     return add_candidate(
         database_url,
         GOLDEN,
-        None,
+        int(row[0]),
         list(result.target_matched),
         result,
         "probe",

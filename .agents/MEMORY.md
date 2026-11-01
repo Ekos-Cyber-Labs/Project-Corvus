@@ -1349,3 +1349,41 @@ rules back to Wazuh (shadow first, human approval).
   delta. No paid API called, nothing executed against a server.
   `eval/reports/llm_latest.*` untouched. Compose Postgres left
   running. Awaiting maintainer commit.
+- 2026-10-31: closed the three remaining rule-store defects from the
+  independent review (detection-engineer, security-reviewer pass).
+  (1) The store no longer trusts caller verdicts:
+  `add_candidate` in `corvus/learning/rules.py` re-runs `backtest`
+  itself on the exact text against the source incident's stored
+  events plus the baseline (new keyword-only `chain_dir` /
+  `baseline_dir`) and refuses unless the fresh result is accepted
+  with `codes == ["accepted"]`; the caller verdict
+  (`BacktestResult`/dict/None) is informational only and the fresh
+  verdict is what lands in lineage; a missing or unknown incident
+  is refused. `propose.py` passes text plus incident only (its
+  hand-computed hash dict is gone), `rules add` takes required
+  `--incident` with no caller-side backtest, and `proof.py` owns a
+  fixed-key incident. (2) Versioning: new migration
+  `0009_rules_sigma_version.sql` (unique index on the lineage Sigma
+  id plus version); supersede locks the parent `FOR UPDATE` and, in
+  the same transaction, requires it to be the latest non-archived
+  revision and stores MAX(version)+1, so a double supersede
+  (sequential or threaded) fails with `ValueError` and the index
+  backs any residual racer; `load_stored_rules` in
+  `corvus/live/poll.py` orders by version DESC and skips archived
+  rows, so attribution keeps the latest active revision. (3)
+  `transition_rule` strips the approver once and records the same
+  string the allow-list compares. Architecture section 4 gained the
+  two-line residual (one NOT of a single 4+ char literal stays
+  allowed by design, visible in the rule text). Tests failing-first
+  (forged self-hashed dict stored pre-fix, unordered attribution
+  picking v1 pre-fix, raw `" ana "` recorded pre-fix, plus
+  no-incident, cross-text, double/concurrent/stale/archived
+  supersede pins); three obsolete caller-binding tests removed and
+  their facets re-pinned as ignored-verdict tests; `gate2` valid
+  world now reports one training incident. Verified with `make
+  lint` (green: ruff check, format check, mypy), the full `make
+  test` (1052 passed with Postgres), and gitleaks (Passed). No
+  normalizer, correlation, prompt or model changes, so no eval
+  delta. No paid API called, nothing executed against a server.
+  `eval/reports/llm_latest.*` untouched. Compose Postgres left
+  running. Awaiting maintainer commit.

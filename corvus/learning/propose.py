@@ -37,7 +37,6 @@ stored) or ``budget_stopped`` (a cap hit mid-loop, nothing stored).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 import uuid
@@ -1219,31 +1218,19 @@ def propose_rule(
 
         from corvus.learning.rules import add_candidate
 
-        accepted_round = next(
-            record for record in reversed(rounds) if list(record.codes) == ["accepted"]
-        )
         assert accepted_yaml is not None
-        verdict = {
-            "accepted": True,
-            "codes": ["accepted"],
-            "rule_id": accepted_round.rule_id,
-            "title": accepted_round.title,
-            "group": accepted_round.group,
-            "target_matched": list(accepted_round.target_matched),
-            "target_total": accepted_round.target_total,
-            "baseline_count": accepted_round.baseline_count,
-            "sigma_sha256": hashlib.sha256(accepted_yaml.encode("utf-8")).hexdigest(),
-        }
         # Store the accepted round's exact text (the verified one),
         # never the model's reformatted text: validation proved both
-        # describe the same rule.
+        # describe the same rule. Only the text and the incident go
+        # to the store — it re-runs the backtest itself and the fresh
+        # verdict is what gets stored, never a caller-computed one.
         try:
             stored = add_candidate(
                 database_url,
                 accepted_yaml,
                 incident_id,
                 list(proposal.cited_event_uids),
-                verdict,
+                None,
                 "spark-rule-proposal",
                 PROMPT_VERSION,
                 extra_lineage={
@@ -1252,6 +1239,8 @@ def propose_rule(
                     "prompt_version": PROMPT_VERSION,
                     "ledger_ids": list(ledger_ids),
                 },
+                chain_dir=chain_dir,
+                baseline_dir=baseline_dir,
             )
         except ValueError as exc:
             attempt_id, conversion = record_attempt(

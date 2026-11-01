@@ -13,6 +13,7 @@ it does not fire. Every figure carries its n and window.
 from __future__ import annotations
 
 import glob
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,14 +140,36 @@ def run_proof(
     matched = sorted(verdict.target_matched)
     if not matched:
         raise ValueError("golden stand-in matched no target event")
+    # The proof's incident only exists to give the store the stored
+    # events it re-runs the backtest against; the verdict above stays
+    # informational (which uids to cite), never the stored verdict.
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, title, event_uids,"
+                " severity_floor, severity_id)"
+                " VALUES ('learning-proof-golden', 'learning proof',"
+                " %s::jsonb, 4, 4)"
+                " ON CONFLICT (correlation_key) DO NOTHING",
+                (json.dumps(list(GOLDEN_UIDS)),),
+            )
+            cur.execute(
+                "SELECT id FROM incidents WHERE correlation_key = %s",
+                ("learning-proof-golden",),
+            )
+            incident_row = cur.fetchone()
+        conn.commit()
+    assert incident_row is not None
     stored = add_candidate(
         database_url,
         sigma_text,
-        None,
+        int(incident_row[0]),
         matched,
-        verdict,
+        None,
         "learning-proof",
         "v1",
+        chain_dir=chain_dir,
+        baseline_dir=baseline_dir,
     )
     rule_db_id = int(stored["id"])
     sigma_rule_id = str(stored["lineage"]["sigma_rule_id"])

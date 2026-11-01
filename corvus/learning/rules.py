@@ -1,37 +1,43 @@
-"""Learned-rule lifecycle over the existing ``rules`` table (0002/0007).
+"""Learned-rule lifecycle over the existing ``rules`` table.
 
-A rule that fails the :mod:`corvus.learning.backtest` verifier cannot
-be stored as a candidate: :func:`add_candidate` requires the passing
-backtest verdict for the exact submitted text. The verdict carries
-the SHA-256 of the text it evaluated; the store recomputes it and
-requires equality, ``accepted`` True with ``codes == ["accepted"]``,
-and every cited uid inside ``target_matched`` — a fabricated mapping
-or a verdict reused for a different detection is refused and stores
-nothing, and the hash is kept in ``lineage.backtest``. The model's
-Sigma id is then ignored: Corvus assigns a fresh uuid4
-(:func:`prepare_candidate_text`) and rewrites it into the stored
-text, so a model-chosen id can never collide with a shipped or
-stored rule. The stored copy is always ``experimental`` (rewritten
-the same way); deployment lifecycle lives in the row's ``status``
-column (``candidate``, ``shadow``, ``active``, ``rolled_back``,
-``archived``), never in the Sigma text. The backtest level ceiling
-is enforced again here. A first store is always version 1; a new
-revision of a stored rule passes ``supersedes=<rule id>``, reuses
-that rule's Sigma id at version previous + 1, and records the
-superseded id in lineage (the old row is always kept untouched).
-Storing without ``supersedes`` always yields a fresh Sigma id at
-version 1. Status moves only through :func:`transition_rule`, which
-requires a non-empty approver string (restricted to
-:envvar:`CORVUS_RULE_APPROVERS` when that comma-separated list is
-set) and a recorded reason for every move (``candidate -> shadow ->
-active``, plus ``rolled_back`` and ``archived``), appended to
-``lineage.history``. The move reads the row ``FOR UPDATE`` in the
-same transaction that writes it, so concurrent movers serialize and
-no history entry is lost; callers that observed a stale state pass
-``from_status`` and fail instead of moving a rule that already left
-it. ``native_rule_id`` allocates inside 100000-120000 and is never
-reused (partial unique index from migration 0007 refuses the second
-writer).
+The store never trusts a caller-supplied verdict: :func:`add_candidate`
+re-runs :mod:`corvus.learning.backtest` itself on the exact submitted
+text against the source incident's stored events and the baseline, and
+refuses (``ValueError``, nothing stored) unless the fresh result is
+``accepted`` with ``codes == ["accepted"]``. A caller verdict may be
+passed for information only; it is never the source of the stored
+verdict — the fresh one is stored in ``lineage.backtest`` together
+with the SHA-256 of the exact evaluated text. Without an incident the
+re-run is impossible, so an unknown or missing incident is refused,
+never waved through. The model's Sigma id is then ignored: Corvus
+assigns a fresh uuid4 (:func:`prepare_candidate_text`) and rewrites
+it into the stored text, so a model-chosen id can never collide with
+a shipped or stored rule. The stored copy is always ``experimental``
+(rewritten the same way); deployment lifecycle lives in the row's
+``status`` column (``candidate``, ``shadow``, ``active``,
+``rolled_back``, ``archived``), never in the Sigma text. The backtest
+level ceiling is enforced again here. A first store is always version
+1; a new revision of a stored rule passes ``supersedes=<rule id>``,
+which must name the LATEST non-archived revision of that Sigma id
+(anything else — an older or an archived revision — is refused),
+reuses that Sigma id at version MAX(version) + 1, and records the
+superseded id in lineage (the old row is always kept untouched); the
+lock, the version computation and the insert happen in one
+transaction, and the unique ``(sigma id, version)`` index from
+migration 0009 refuses a second writer. Storing without
+``supersedes`` always yields a fresh Sigma id at version 1. Status
+moves only through :func:`transition_rule`, which requires a
+non-empty approver string (stripped before it is checked or recorded;
+restricted to :envvar:`CORVUS_RULE_APPROVERS` when that
+comma-separated list is set) and a recorded reason for every move
+(``candidate -> shadow -> active``, plus ``rolled_back`` and
+``archived``), appended to ``lineage.history``. The move reads the
+row ``FOR UPDATE`` in the same transaction that writes it, so
+concurrent movers serialize and no history entry is lost; callers
+that observed a stale state pass ``from_status`` and fail instead of
+moving a rule that already left it. ``native_rule_id`` allocates
+inside 100000-120000 and is never reused (partial unique index from
+migration 0007 refuses the second writer).
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ import os
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -179,63 +186,63 @@ def add_candidate(
     sigma_text: str,
     incident_id: int | None,
     cited_uids: list[str],
-    backtest_result: Any,
-    producer: str,
-    producer_version: str,
+    backtest_result: Any = None,
+    producer: str = "",
+    producer_version: str = "",
     created: datetime | None = None,
     native_rule_id: int | None = None,
     extra_lineage: dict[str, Any] | None = None,
     supersedes: int | None = None,
+    *,
+    chain_dir: str | Path = "data/replay-linux-chain1",
+    baseline_dir: str | Path = "data/replay-linux-baseline",
 ) -> dict[str, Any]:
     """Store a verified candidate rule; return the stored row.
 
-    ``backtest_result`` is the passing verdict for the exact
-    submitted text (a :class:`BacktestResult` or its ``to_dict()``
-    mapping, hash included; a mapping without the hash is refused);
-    any other value raises ``ValueError`` and stores nothing. The
-    verdict must be ``accepted`` with ``codes == ["accepted"]``,
-    carry the SHA-256 of the submitted text, name the submitted
-    text's own Sigma id, and match every cited uid — otherwise the
-    verdict is for another detection and nothing is stored. The
-    stored row then carries a fresh Corvus-assigned id and
-    ``experimental`` status text (see
+    The store never trusts ``backtest_result``: it may be a
+    :class:`BacktestResult`, its ``to_dict()`` mapping, or None, and
+    is informational only — anything else raises ``ValueError`` and
+    stores nothing, but even a well-formed verdict is never the
+    source of the stored verdict. Instead the store re-runs
+    :func:`corvus.learning.backtest.backtest` itself on the exact
+    submitted text against the source incident's stored events and
+    the baseline (``chain_dir`` / ``baseline_dir``), and refuses
+    unless the fresh result is ``accepted`` with
+    ``codes == ["accepted"]``; every cited uid must be inside the
+    fresh ``target_matched``. Without an incident the re-run is
+    impossible, so a missing or unknown incident id raises
+    ``ValueError`` and stores nothing. The fresh verdict — not the
+    caller's — is stored in ``lineage.backtest`` with the SHA-256 of
+    the exact evaluated text. The stored row then carries a fresh
+    Corvus-assigned id and ``experimental`` status text (see
     :func:`prepare_candidate_text`), so the model's id is ignored
     and can never collide with another rule. A first store is
     version 1; ``supersedes=<rule id>`` stores a new revision of
-    that rule, reusing its Sigma id at version previous + 1 and
-    recording the superseded id in lineage (the old row is kept
-    untouched; an unknown id raises). ``native_rule_id`` is
-    allocated automatically unless the caller passes one explicitly
-    (out-of-range values raise; collisions raise the database's
-    unique violation, so a racer never overwrites). ``extra_lineage``
-    merges additional keys into the stored lineage (the proposal
-    loop records rounds used, model, prompt version and ledger ids
-    there); colliding keys raise and store nothing.
+    that rule only when the named row is the LATEST non-archived
+    revision of its Sigma id (an unknown id, a stale revision, or an
+    archived revision raises), reusing that Sigma id at version
+    MAX(version) + 1 for the Sigma id and recording the superseded
+    id in lineage (the old row is kept untouched). The parent lock,
+    the latest-revision check, the version computation and the
+    insert run in one transaction, so two concurrent supersedes of
+    the same parent serialize and exactly one wins; the unique
+    ``(sigma id, version)`` index refuses any residual double
+    writer. ``native_rule_id`` is allocated automatically unless the
+    caller passes one explicitly (out-of-range values raise;
+    collisions raise the database's unique violation, so a racer
+    never overwrites). ``extra_lineage`` merges additional keys into
+    the stored lineage (the proposal loop records rounds used,
+    model, prompt version and ledger ids there); colliding keys
+    raise and store nothing.
     """
-    from corvus.learning.backtest import BacktestResult
+    from corvus.learning.backtest import BacktestResult, backtest
 
-    if isinstance(backtest_result, BacktestResult):
-        verdict = backtest_result.to_dict()
-    elif isinstance(backtest_result, dict):
-        verdict = dict(backtest_result)
-    else:
-        raise ValueError("backtest_result must be a BacktestResult or its mapping")
-    if verdict.get("accepted") is not True or list(verdict.get("codes") or []) != [
-        "accepted"
-    ]:
+    if backtest_result is not None and not isinstance(
+        backtest_result, (BacktestResult, dict)
+    ):
         raise ValueError(
-            f"a rule that fails the verifier cannot be stored: {verdict.get('codes')}"
+            "backtest_result must be a BacktestResult, its mapping, or None"
         )
-    text_hash = hashlib.sha256(sigma_text.encode("utf-8")).hexdigest()
-    if verdict.get("sigma_sha256") != text_hash:
-        raise ValueError("backtest result is for a different sigma text")
-    rule = _parse_sigma(sigma_text)
-    if verdict.get("rule_id") != str(rule.id):
-        raise ValueError("backtest result is for a different rule id")
-    matched = verdict.get("target_matched") or []
-    missing = [uid for uid in cited_uids if uid not in set(matched)]
-    if missing:
-        raise ValueError(f"{len(missing)} cited uids are not in the backtest match")
     if not producer.strip() or not producer_version.strip():
         raise ValueError("producer and producer_version are required")
     if any(not isinstance(uid, str) or not uid for uid in cited_uids):
@@ -244,24 +251,82 @@ def add_candidate(
         NATIVE_ID_MIN <= native_rule_id <= NATIVE_ID_MAX
     ):
         raise ValueError("native_rule_id must be inside 100000-120000")
-    if supersedes is None:
-        reuse_id: str | None = None
-        version = 1
-    else:
-        previous = get_rule(database_url, supersedes)
-        if previous is None:
-            raise ValueError(f"unknown superseded rule id {supersedes}")
-        reuse_id = str((previous["lineage"] or {}).get("sigma_rule_id") or "")
-        if not reuse_id:
-            raise ValueError(f"superseded rule {supersedes} has no sigma id")
-        version = int(previous["version"]) + 1
-    stored_text, sigma_id = prepare_candidate_text(sigma_text, sigma_id=reuse_id)
+    if incident_id is None:
+        raise ValueError(
+            "an incident id is required: the store re-runs the backtest "
+            "against the incident's stored events and cannot verify a rule "
+            "without one"
+        )
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT event_uids FROM incidents WHERE id = %s", (incident_id,)
+            )
+            found = cur.fetchone()
+    if found is None:
+        raise ValueError(f"unknown incident id {incident_id}")
+    raw_uids = found[0] or []
+    incident_uids = [uid for uid in raw_uids if isinstance(uid, str) and uid]
+    fresh = backtest(
+        sigma_text,
+        {"event_uids": incident_uids},
+        baseline_dir=baseline_dir,
+        chain_dir=chain_dir,
+    )
+    if fresh.accepted is not True or list(fresh.codes) != ["accepted"]:
+        raise ValueError(
+            "the store's backtest refused this text "
+            f"(codes={fresh.codes}); nothing was stored"
+        )
+    matched = list(fresh.target_matched)
+    missing = [uid for uid in cited_uids if uid not in set(matched)]
+    if missing:
+        raise ValueError(f"{len(missing)} cited uids are not in the backtest match")
+    rule = _parse_sigma(sigma_text)
+    text_hash = hashlib.sha256(sigma_text.encode("utf-8")).hexdigest()
     title = rule.title or ""
     moment = created if created is not None else _utcnow()
     if moment.tzinfo is None:
         raise ValueError("created must be timezone-aware")
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
+            if supersedes is None:
+                reuse_id: str | None = None
+                version = 1
+            else:
+                cur.execute(
+                    "SELECT lineage FROM rules WHERE id = %s FOR UPDATE",
+                    (supersedes,),
+                )
+                parent = cur.fetchone()
+                if parent is None:
+                    raise ValueError(f"unknown superseded rule id {supersedes}")
+                reuse_id = str((parent[0] or {}).get("sigma_rule_id") or "")
+                if not reuse_id:
+                    raise ValueError(f"superseded rule {supersedes} has no sigma id")
+                cur.execute(
+                    "SELECT id FROM rules "
+                    "WHERE lineage->>'sigma_rule_id' = %s AND status <> 'archived' "
+                    "ORDER BY version DESC LIMIT 1 FOR UPDATE",
+                    (reuse_id,),
+                )
+                latest = cur.fetchone()
+                if latest is None or int(latest[0]) != supersedes:
+                    raise ValueError(
+                        f"rule {supersedes} is not the latest non-archived "
+                        "revision of its Sigma id; supersede that revision instead"
+                    )
+                cur.execute(
+                    "SELECT MAX(version) FROM rules "
+                    "WHERE lineage->>'sigma_rule_id' = %s",
+                    (reuse_id,),
+                )
+                top = cur.fetchone()
+                assert top is not None
+                version = int(top[0]) + 1
+            stored_text, sigma_id = prepare_candidate_text(
+                sigma_text, sigma_id=reuse_id
+            )
             allocated = native_rule_id
             if allocated is None:
                 allocated = _allocate_native_id(cur)
@@ -274,11 +339,11 @@ def add_candidate(
                 "source_incident": incident_id,
                 "cited_uids": list(cited_uids),
                 "backtest": {
-                    "codes": verdict.get("codes"),
-                    "target_matched": verdict.get("target_matched"),
-                    "target_total": verdict.get("target_total"),
-                    "baseline_count": verdict.get("baseline_count"),
-                    "group": verdict.get("group"),
+                    "codes": list(fresh.codes),
+                    "target_matched": matched,
+                    "target_total": fresh.target_total,
+                    "baseline_count": fresh.baseline_count,
+                    "group": fresh.group,
                     "sigma_sha256": text_hash,
                 },
                 "history": [
@@ -382,23 +447,26 @@ def transition_rule(
 
     Every move requires a non-empty ``approver`` string and a recorded
     ``reason`` (no move to ``shadow`` or ``active`` without an
-    approver); when :envvar:`CORVUS_RULE_APPROVERS` is set, the
-    approver must also be listed there. Anything else raises
-    ``ValueError`` and changes nothing. ``from_status``, when given,
-    is the state the caller observed: the move fails when the row has
-    already left it, so a concurrent mover is told it lost instead
-    of silently chaining onto the winner's state. The move appends
-    to ``lineage.history``. The row is read ``FOR UPDATE`` in the
-    same transaction that writes it, so concurrent movers serialize
-    and no history entry is ever lost.
+    approver); the approver is stripped first, so the recorded value
+    is exactly the string the allow-list check compares. When
+    :envvar:`CORVUS_RULE_APPROVERS` is set, the approver must also be
+    listed there. Anything else raises ``ValueError`` and changes
+    nothing. ``from_status``, when given, is the state the caller
+    observed: the move fails when the row has already left it, so a
+    concurrent mover is told it lost instead of silently chaining
+    onto the winner's state. The move appends to ``lineage.history``.
+    The row is read ``FOR UPDATE`` in the same transaction that
+    writes it, so concurrent movers serialize and no history entry
+    is ever lost.
     """
-    if not approver.strip():
+    clean_approver = approver.strip()
+    if not clean_approver:
         raise ValueError("an approver is required for every transition")
     if not reason.strip():
         raise ValueError("a reason is required for every transition")
     allowed_names = _allowed_approvers()
-    if allowed_names is not None and approver.strip() not in allowed_names:
-        raise ValueError(f"approver {approver.strip()!r} is not in {APPROVERS_ENV_VAR}")
+    if allowed_names is not None and clean_approver not in allowed_names:
+        raise ValueError(f"approver {clean_approver!r} is not in {APPROVERS_ENV_VAR}")
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -425,7 +493,7 @@ def transition_rule(
                 {
                     "from": from_status,
                     "to": to_status,
-                    "approver": approver,
+                    "approver": clean_approver,
                     "reason": reason,
                     "at": _utcnow().isoformat(),
                 }

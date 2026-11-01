@@ -338,16 +338,33 @@ def build_world(
             "ledger_ids": lineage_ids,
         }
     created = datetime.fromtimestamp(rule_created_ms / 1000, tz=UTC)
+    with psycopg.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, event_uids,"
+                " severity_floor, severity_id)"
+                " VALUES ('gate2-train', %s::jsonb, 4, 4)"
+                " ON CONFLICT (correlation_key) DO NOTHING",
+                (json.dumps(list(targets)),),
+            )
+            cur.execute(
+                "SELECT id FROM incidents WHERE correlation_key = 'gate2-train'"
+            )
+            incident_row = cur.fetchone()
+        conn.commit()
+    assert incident_row is not None
     rule = add_candidate(
         db_url,
         RULE_TEXT,
-        None,
+        int(incident_row[0]),
         targets,
         verdict,
         "gate2-tests",
         "v1",
         created,
         extra_lineage=extra,
+        chain_dir=train_store,
+        baseline_dir=base_store,
     )
     sigma_id = rule["lineage"]["sigma_rule_id"]
 
@@ -597,7 +614,7 @@ def test_valid_world_reports_valid(gate_db: str, tmp_path: Path) -> None:
     assert limits["expected_detect_missed"] == []
     assert limits["uncovered_by_any_rule"] == []
     assert limits["distinct_learned_rules"]["n"] == 1
-    assert limits["training_set"]["incidents_n"] == 0
+    assert limits["training_set"]["incidents_n"] == 1
     assert limits["training_set"]["cited_events_n"] == 2
     assert limits["behavior_same_as_training"] is True
     assert limits["variant_specific_declared_n"] == 2

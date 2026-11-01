@@ -102,11 +102,19 @@ def resolve_windows() -> tuple[timedelta, timedelta, int]:
 def load_stored_rules(
     database_url: str,
 ) -> tuple[dict[int, dict[str, Any]], dict[str, dict[str, Any]]]:
-    """Return stored rules keyed by native id and by Sigma id."""
+    """Return stored rules keyed by native id and by Sigma id.
+
+    Archived rows are skipped: they never attribute. Rows arrive
+    newest-revision first, so when one Sigma id has several active
+    revisions the map keeps the latest one (``setdefault`` over an
+    unordered scan used to keep whichever row the database returned
+    first, attributing alerts to an old or archived revision).
+    """
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, native_rule_id, version, status, lineage FROM rules"
+                " ORDER BY version DESC, id DESC"
             )
             rows = cur.fetchall()
     assert rows is not None
@@ -120,6 +128,8 @@ def load_stored_rules(
             "status": str(row[3]),
             "lineage": dict(row[4] or {}),
         }
+        if record["status"] == "archived":
+            continue
         if isinstance(record["native_rule_id"], int):
             by_native.setdefault(record["native_rule_id"], record)
         sigma_id = record["lineage"].get("sigma_rule_id")

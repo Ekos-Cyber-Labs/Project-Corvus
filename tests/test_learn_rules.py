@@ -83,8 +83,16 @@ def test_add_candidate_forces_experimental(rules_db: str) -> None:
 
     import yaml
 
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     row = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     assert row["status"] == "candidate"
     assert row["lineage"]["version"] == 1
@@ -108,11 +116,26 @@ def test_add_candidate_forces_experimental(rules_db: str) -> None:
 
 @pytest.mark.integration
 def test_same_submission_twice_gets_distinct_ids(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     first = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     second = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.2", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.2",
+        T0,
     )
     # Each store assigns a fresh id, so re-storing one submission can
     # never bump another rule's version: two rows, distinct Sigma
@@ -131,8 +154,16 @@ def test_proposal_reusing_stored_id_gets_fresh_id(rules_db: str) -> None:
 
     from corvus.learning.backtest import backtest
 
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     first = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     stored_id = first["lineage"]["sigma_rule_id"]
     # A proposal reusing the stored rule's id (the collision the live
@@ -144,7 +175,14 @@ def test_proposal_reusing_stored_id_gets_fresh_id(rules_db: str) -> None:
     verdict = backtest(forged_text, {"event_uids": GOLDEN_UIDS})
     assert verdict.accepted, verdict.codes
     second = add_candidate(
-        rules_db, forged_text, None, GOLDEN_MATCHED, verdict, "probe", "0.2", T0
+        rules_db,
+        forged_text,
+        incident_id,
+        GOLDEN_MATCHED,
+        verdict,
+        "probe",
+        "0.2",
+        T0,
     )
     assert second["lineage"]["sigma_rule_id"] != stored_id
     assert second["version"] == 1
@@ -155,20 +193,34 @@ def test_proposal_reusing_stored_id_gets_fresh_id(rules_db: str) -> None:
 
 @pytest.mark.integration
 def test_failed_verifier_cannot_be_stored(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     with pytest.raises(ValueError):
         add_candidate(
-            rules_db, BROAD, None, GOLDEN_UIDS, failing_verdict(), "probe", "0.1", T0
+            rules_db,
+            BROAD,
+            incident_id,
+            GOLDEN_UIDS,
+            failing_verdict(),
+            "probe",
+            "0.1",
+            T0,
         )
     assert rule_count(rules_db) == 0
 
 
 @pytest.mark.integration
-def test_mismatched_backtest_result_rejected(rules_db: str) -> None:
-    verdict = passing_verdict().to_dict()
-    verdict["rule_id"] = "00000000-0000-4000-8000-000000000000"
-    with pytest.raises(ValueError):
-        add_candidate(rules_db, GOLDEN, None, GOLDEN_UIDS, verdict, "probe", "0.1", T0)
-    assert rule_count(rules_db) == 0
+def test_mismatched_caller_verdict_is_ignored(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+    garbage = passing_verdict().to_dict()
+    garbage["rule_id"] = "00000000-0000-4000-8000-000000000000"
+    garbage["codes"] = ["baseline_match"]
+    garbage["accepted"] = False
+    garbage.pop("sigma_sha256", None)
+    row = add_candidate(
+        rules_db, GOLDEN, incident_id, GOLDEN_MATCHED, garbage, "probe", "0.1", T0
+    )
+    assert row["lineage"]["backtest"]["codes"] == ["accepted"]
+    assert row["lineage"]["backtest"]["target_matched"] == sorted(GOLDEN_MATCHED)
 
 
 @pytest.mark.integration
@@ -177,8 +229,16 @@ def test_experimental_text_still_evaluates_in_shadow(rules_db: str) -> None:
 
     from corvus.learning.shadow import compile_shadow_rules, shadow_rules
 
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     row = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     assert yaml.safe_load(row["sigma_text"])["status"] == "experimental"
     transition_rule(rules_db, row["id"], "shadow", approver="ana", reason="shadow soak")
@@ -190,8 +250,16 @@ def test_experimental_text_still_evaluates_in_shadow(rules_db: str) -> None:
 
 @pytest.mark.integration
 def test_transitions_need_approver_and_reason(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     row = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     with pytest.raises(ValueError):
         transition_rule(rules_db, row["id"], "shadow", approver="", reason="ok")
@@ -225,11 +293,26 @@ def test_transitions_need_approver_and_reason(rules_db: str) -> None:
 
 @pytest.mark.integration
 def test_list_orders_newest_first(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     first = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     second = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.2", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.2",
+        T0,
     )
     assert [row["id"] for row in list_rules(rules_db)] == [second["id"], first["id"]]
     assert [row["id"] for row in list_rules(rules_db, status="candidate")] == [
@@ -242,11 +325,12 @@ def test_list_orders_newest_first(rules_db: str) -> None:
 
 @pytest.mark.integration
 def test_native_id_range_and_race_refusal(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     with pytest.raises(ValueError):
         add_candidate(
             rules_db,
             GOLDEN,
-            None,
+            incident_id,
             GOLDEN_MATCHED,
             passing_verdict(),
             "probe",
@@ -257,7 +341,7 @@ def test_native_id_range_and_race_refusal(rules_db: str) -> None:
     first = add_candidate(
         rules_db,
         GOLDEN,
-        None,
+        incident_id,
         GOLDEN_MATCHED,
         passing_verdict(),
         "probe",
@@ -270,7 +354,7 @@ def test_native_id_range_and_race_refusal(rules_db: str) -> None:
         add_candidate(
             rules_db,
             GOLDEN,
-            None,
+            incident_id,
             GOLDEN_MATCHED,
             passing_verdict(),
             "probe",
@@ -297,66 +381,32 @@ GOLDEN_MATCHED = [
 
 
 @pytest.mark.integration
-def test_fabricated_dict_verdict_rejected(rules_db: str) -> None:
-    forged = {
-        "accepted": True,
-        "rule_id": "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d",
-        "codes": ["accepted"],
-        "target_matched": ["fake-uid"],
-    }
-    with pytest.raises(ValueError):
-        add_candidate(
-            rules_db, GOLDEN, None, GOLDEN_MATCHED, forged, "probe", "0.1", T0
-        )
-    assert rule_count(rules_db) == 0
-
-
-@pytest.mark.integration
-def test_dict_verdict_without_hash_rejected(rules_db: str) -> None:
-    verdict = passing_verdict().to_dict()
-    verdict.pop("sigma_sha256", None)
-    with pytest.raises(ValueError):
-        add_candidate(
-            rules_db, GOLDEN, None, GOLDEN_MATCHED, verdict, "probe", "0.1", T0
-        )
-    assert rule_count(rules_db) == 0
-
-
-@pytest.mark.integration
-def test_accepted_codes_mismatch_rejected(rules_db: str) -> None:
-    failure_codes = passing_verdict().to_dict()
-    failure_codes["codes"] = ["baseline_match"]
-    with pytest.raises(ValueError):
-        add_candidate(
-            rules_db, GOLDEN, None, GOLDEN_MATCHED, failure_codes, "probe", "0.1", T0
-        )
-    failure_flag = passing_verdict().to_dict()
-    failure_flag["accepted"] = False
-    with pytest.raises(ValueError):
-        add_candidate(
-            rules_db, GOLDEN, None, GOLDEN_MATCHED, failure_flag, "probe", "0.1", T0
-        )
-    assert rule_count(rules_db) == 0
-
-
-@pytest.mark.integration
 def test_swapped_detection_text_rejected(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     verdict = passing_verdict()
     other = GOLDEN.replace("authorized_keys", "authorized_keys2")
     with pytest.raises(ValueError):
         add_candidate(
-            rules_db, other, None, GOLDEN_MATCHED, verdict, "probe", "0.1", T0
+            rules_db,
+            other,
+            incident_id,
+            GOLDEN_MATCHED,
+            verdict,
+            "probe",
+            "0.1",
+            T0,
         )
     assert rule_count(rules_db) == 0
 
 
 @pytest.mark.integration
 def test_cited_uid_outside_match_rejected(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     with pytest.raises(ValueError):
         add_candidate(
             rules_db,
             GOLDEN,
-            None,
+            incident_id,
             GOLDEN_MATCHED + ["lnx-22e99900825434c9"],
             passing_verdict(),
             "probe",
@@ -370,8 +420,16 @@ def test_cited_uid_outside_match_rejected(rules_db: str) -> None:
 def test_lineage_records_sigma_hash(rules_db: str) -> None:
     import hashlib
 
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     row = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     assert (
         row["lineage"]["backtest"]["sigma_sha256"]
@@ -384,15 +442,23 @@ def test_lineage_records_sigma_hash(rules_db: str) -> None:
 
 @pytest.mark.integration
 def test_supersede_bumps_version(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     first = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     assert first["version"] == 1
     assert first["lineage"]["version"] == 1
     second = add_candidate(
         rules_db,
         GOLDEN,
-        None,
+        incident_id,
         GOLDEN_MATCHED,
         passing_verdict(),
         "probe",
@@ -414,11 +480,12 @@ def test_supersede_bumps_version(rules_db: str) -> None:
 
 @pytest.mark.integration
 def test_supersede_unknown_id_rejected(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     with pytest.raises(ValueError):
         add_candidate(
             rules_db,
             GOLDEN,
-            None,
+            incident_id,
             GOLDEN_MATCHED,
             passing_verdict(),
             "probe",
@@ -436,8 +503,16 @@ def test_supersede_unknown_id_rejected(rules_db: str) -> None:
 def test_concurrent_transition_one_wins(rules_db: str) -> None:
     import threading
 
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     row = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     transition_rule(rules_db, row["id"], "shadow", approver="ana", reason="soak")
     barrier = threading.Barrier(2)
@@ -492,8 +567,16 @@ def test_concurrent_transition_one_wins(rules_db: str) -> None:
 
 @pytest.mark.integration
 def test_approver_allow_list(rules_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     row = add_candidate(
-        rules_db, GOLDEN, None, GOLDEN_MATCHED, passing_verdict(), "probe", "0.1", T0
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
     )
     monkeypatch.setenv("CORVUS_RULE_APPROVERS", "ana,bob")
     with pytest.raises(ValueError):
@@ -553,6 +636,348 @@ def test_cli_backtest_accepts_and_rejects(
     assert "rejected" in capsys.readouterr().out
 
 
+# Store-side verification --------------------------------------------------
+#
+# The store never trusts a caller-supplied verdict: every store re-runs
+# the backtest itself on the exact submitted text against the source
+# incident's stored events and the baseline, and refuses unless the
+# fresh result is accepted with codes == ["accepted"].
+
+
+def _seed_incident(test_url: str, uids: list[str]) -> int:
+    """Insert one incident carrying ``uids``; return its id."""
+    import json as json_module
+    import time as time_module
+
+    with psycopg.connect(test_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, title, entity_keys,"
+                " techniques, event_uids, first_seen, last_seen,"
+                " deterministic_score, severity_floor, severity_id,"
+                " severity_factors) VALUES (%s, %s, %s, %s, %s,"
+                " to_timestamp(%s), to_timestamp(%s), %s, %s, %s, %s)"
+                " RETURNING id",
+                (
+                    f"corr-learn-{time_module.time_ns()}",
+                    "chain1 candidate",
+                    json_module.dumps({}),
+                    json_module.dumps(["T1105"]),
+                    json_module.dumps(uids),
+                    1793420700,
+                    1793420800,
+                    4.0,
+                    4,
+                    4,
+                    json_module.dumps({}),
+                ),
+            )
+            row = cur.fetchone()
+            assert row is not None
+        conn.commit()
+    return int(row[0])
+
+
+@pytest.mark.integration
+def test_candidate_without_incident_is_refused(rules_db: str) -> None:
+    with pytest.raises(ValueError):
+        add_candidate(
+            rules_db,
+            GOLDEN,
+            None,
+            GOLDEN_MATCHED,
+            passing_verdict(),
+            "probe",
+            "0.1",
+            T0,
+        )
+    assert rule_count(rules_db) == 0
+
+
+@pytest.mark.integration
+def test_forged_self_hashed_verdict_with_invented_uids_rejected(
+    rules_db: str,
+) -> None:
+    import hashlib
+
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+    forged = {
+        "accepted": True,
+        "codes": ["accepted"],
+        "rule_id": "7c4f3a21-9b6e-4f2a-8c1d-3e5f6a7b8c9d",
+        "target_matched": ["lnx-invented-0001", "lnx-invented-0002"],
+        "target_total": 2,
+        "baseline_count": 0,
+        "group": "linux/process_creation",
+        "sigma_sha256": hashlib.sha256(GOLDEN.encode("utf-8")).hexdigest(),
+    }
+    with pytest.raises(ValueError):
+        add_candidate(
+            rules_db,
+            GOLDEN,
+            incident_id,
+            ["lnx-invented-0001", "lnx-invented-0002"],
+            forged,
+            "probe",
+            "0.1",
+            T0,
+        )
+    assert rule_count(rules_db) == 0
+
+
+@pytest.mark.integration
+def test_caller_verdict_is_informational_only(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+    stale = passing_verdict().to_dict()
+    stale["target_matched"] = []
+    row = add_candidate(
+        rules_db, GOLDEN, incident_id, GOLDEN_MATCHED, stale, "probe", "0.1", T0
+    )
+    assert row["lineage"]["backtest"]["target_matched"] == sorted(GOLDEN_MATCHED)
+    assert row["lineage"]["backtest"]["codes"] == ["accepted"]
+
+
+@pytest.mark.integration
+def test_two_texts_cannot_share_a_verdict(rules_db: str) -> None:
+    import hashlib
+
+    import yaml
+
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+    golden_verdict = passing_verdict()
+    with pytest.raises(ValueError):
+        add_candidate(
+            rules_db,
+            BROAD,
+            incident_id,
+            GOLDEN_UIDS,
+            golden_verdict,
+            "probe",
+            "0.1",
+            T0,
+        )
+    assert rule_count(rules_db) == 0
+    mutant_doc = yaml.safe_load(GOLDEN)
+    assert isinstance(mutant_doc, dict)
+    mutant_doc["title"] = "Sudo Find Writing SSH Authorized Keys (retitled)"
+    mutant = yaml.safe_dump(mutant_doc, sort_keys=False, allow_unicode=True)
+    mutant_row = add_candidate(
+        rules_db,
+        mutant,
+        incident_id,
+        GOLDEN_MATCHED,
+        golden_verdict,
+        "probe",
+        "0.1",
+        T0,
+    )
+    assert (
+        mutant_row["lineage"]["backtest"]["sigma_sha256"]
+        == hashlib.sha256(mutant.encode("utf-8")).hexdigest()
+    )
+    assert (
+        mutant_row["lineage"]["backtest"]["sigma_sha256"]
+        != hashlib.sha256(GOLDEN.encode("utf-8")).hexdigest()
+    )
+
+
+# Versioning ----------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_double_supersede_of_same_parent_fails(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+    first = add_candidate(
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
+    )
+    second = add_candidate(
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.2",
+        T0,
+        supersedes=first["id"],
+    )
+    assert second["version"] == 2
+    with pytest.raises(ValueError):
+        add_candidate(
+            rules_db,
+            GOLDEN,
+            incident_id,
+            GOLDEN_MATCHED,
+            passing_verdict(),
+            "probe",
+            "0.3",
+            T0,
+            supersedes=first["id"],
+        )
+    assert sorted(row["version"] for row in list_rules(rules_db)) == [1, 2]
+
+
+@pytest.mark.integration
+def test_concurrent_supersede_of_same_parent_one_wins(rules_db: str) -> None:
+    import threading
+
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+    first = add_candidate(
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
+    )
+    barrier = threading.Barrier(2)
+    outcomes: dict[str, tuple[str, Any]] = {}
+
+    def race_once(name: str) -> None:
+        barrier.wait(timeout=60)
+        try:
+            outcomes[name] = (
+                "ok",
+                add_candidate(
+                    rules_db,
+                    GOLDEN,
+                    incident_id,
+                    GOLDEN_MATCHED,
+                    passing_verdict(),
+                    "probe",
+                    name,
+                    T0,
+                    supersedes=first["id"],
+                ),
+            )
+        except Exception as exc:
+            outcomes[name] = ("error", exc)
+
+    threads = [
+        threading.Thread(target=race_once, args=(f"racer-{index}",))
+        for index in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    assert sorted(kind for kind, _ in outcomes.values()) == ["error", "ok"]
+    loser = next(value for value in outcomes.values() if value[0] == "error")
+    assert isinstance(loser[1], ValueError)
+    assert sorted(row["version"] for row in list_rules(rules_db)) == [1, 2]
+
+
+@pytest.mark.integration
+def test_supersede_archived_or_stale_revision_fails(rules_db: str) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+
+    def store(version_tag: str, parent: int | None) -> dict[str, Any]:
+        return add_candidate(
+            rules_db,
+            GOLDEN,
+            incident_id,
+            GOLDEN_MATCHED,
+            passing_verdict(),
+            "probe",
+            version_tag,
+            T0,
+            supersedes=parent,
+        )
+
+    first = store("0.1", None)
+    second = store("0.2", first["id"])
+    third = store("0.3", second["id"])
+    assert third["version"] == 3
+    with pytest.raises(ValueError):
+        store("0.4-stale", first["id"])
+    archive_rule(rules_db, third["id"], approver="ana", reason="superseded")
+    with pytest.raises(ValueError):
+        store("0.5-archived", third["id"])
+    fourth = store("0.4", second["id"])
+    assert fourth["version"] == 4
+    assert fourth["lineage"]["sigma_rule_id"] == first["lineage"]["sigma_rule_id"]
+    assert sorted(row["version"] for row in list_rules(rules_db)) == [1, 2, 3, 4]
+
+
+# Attribution -----------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_attribution_picks_latest_active_revision(rules_db: str) -> None:
+    from corvus.live.poll import load_stored_rules
+
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+    first = add_candidate(
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
+    )
+    sigma_id = first["lineage"]["sigma_rule_id"]
+    second = add_candidate(
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.2",
+        T0,
+        supersedes=first["id"],
+    )
+    transition_rule(
+        rules_db, second["id"], "shadow", approver="ana", reason="shadow soak"
+    )
+    _, by_sigma = load_stored_rules(rules_db)
+    assert by_sigma[sigma_id]["version"] == 2
+    assert by_sigma[sigma_id]["status"] == "shadow"
+    archive_rule(rules_db, second["id"], approver="ana", reason="soak done")
+    _, by_sigma_after = load_stored_rules(rules_db)
+    assert by_sigma_after[sigma_id]["version"] == 1
+
+
+# Approver --------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_approver_recorded_stripped(
+    rules_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
+    row = add_candidate(
+        rules_db,
+        GOLDEN,
+        incident_id,
+        GOLDEN_MATCHED,
+        passing_verdict(),
+        "probe",
+        "0.1",
+        T0,
+    )
+    monkeypatch.setenv("CORVUS_RULE_APPROVERS", "ana")
+    moved = transition_rule(
+        rules_db, row["id"], "shadow", approver=" ana ", reason="shadow soak"
+    )
+    assert moved["lineage"]["history"][-1]["approver"] == "ana"
+    with pytest.raises(ValueError):
+        transition_rule(
+            rules_db, moved["id"], "active", approver=" mallory ", reason="nope"
+        )
+
+
 @pytest.mark.integration
 def test_cli_add_list_show(
     rules_db: str,
@@ -563,6 +988,7 @@ def test_cli_add_list_show(
     from corvus.cli import main
 
     monkeypatch.setenv("DATABASE_URL", rules_db)
+    incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
     golden_file = tmp_path / "golden.yml"
     golden_file.write_text(GOLDEN, encoding="utf-8")
     assert (
@@ -575,6 +1001,8 @@ def test_cli_add_list_show(
                 GOLDEN_UIDS[0],
                 "--event-uid",
                 GOLDEN_UIDS[1],
+                "--incident",
+                str(incident_id),
                 "--producer",
                 "probe",
                 "--producer-version",
