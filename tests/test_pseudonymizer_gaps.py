@@ -195,21 +195,147 @@ def test_base64_utf8_token_neutralized() -> None:
 
 
 def test_benign_and_short_blobs_stay() -> None:
-    """Blobs without entities, short tokens and hex blobs stay verbatim."""
+    """Blobs without entities and short tokens stay verbatim."""
     admin_url, name, pg_url = _pg_url()
     try:
         benign = _b64_utf8("Write-Host hello world from automation daily")
         short = _b64_utf8("deploy_bot")
-        hexblob = b"deploy_bot".hex()
         assert len(benign) >= 24
         assert len(short) < 24
         dumped = _send(
             pg_url,
-            {"cmd_line": f"tool --data {benign} then {short} then {hexblob} end"},
+            {"cmd_line": f"tool --data {benign} then {short} end"},
             [("user", "deploy_bot")],
         )
         assert benign in dumped
         assert short in dumped
-        assert hexblob in dumped
     finally:
         _drop_database(admin_url, name)
+
+
+def _hex_utf8(text: str) -> str:
+    return text.encode("utf-8").hex()
+
+
+def test_hex_encoded_entity_masked() -> None:
+    """A lowercase hex blob decoding to a registered user is masked."""
+    admin_url, name, pg_url = _pg_url()
+    try:
+        blob = _hex_utf8("run sync for deploy_bot account check")
+        assert len(blob) >= 12 and len(blob) % 2 == 0
+        dumped = _send(
+            pg_url,
+            {"cmd_line": f"tool acct={blob} done"},
+            [("user", "deploy_bot")],
+        )
+        assert blob not in dumped
+        assert "deploy_bot" not in dumped
+        assert "[ENCODED:contains-entity]" in dumped
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_uppercase_hex_proctitle_masked() -> None:
+    """Uppercase hex (auditd style) decoding to user and IP is masked."""
+    admin_url, name, pg_url = _pg_url()
+    try:
+        blob = _hex_utf8("ssh svc_backup@10.70.1.20").upper()
+        dumped = _send(
+            pg_url,
+            {"cmd_line": f"auditd proctitle={blob} end"},
+            [("user", "svc_backup"), ("ip", "10.70.1.20")],
+        )
+        assert blob not in dumped
+        assert "svc_backup" not in dumped
+        assert "[ENCODED:contains-entity]" in dumped
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_benign_and_short_hex_stays() -> None:
+    """Hex without entities, odd-length runs and short runs stay verbatim."""
+    admin_url, name, pg_url = _pg_url()
+    try:
+        benign = _hex_utf8("Write-Host hello world from automation daily")
+        short = _hex_utf8("abcde")
+        odd = "abc"
+        assert len(benign) >= 12 and len(benign) % 2 == 0
+        dumped = _send(
+            pg_url,
+            {"cmd_line": f"tool --data {benign} then {short} then {odd} end"},
+            [("user", "deploy_bot")],
+        )
+        assert benign in dumped
+        assert short in dumped
+        assert odd in dumped
+        assert "[ENCODED:contains-entity]" not in dumped
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_decimal_integer_ip_replaced() -> None:
+    """A decimal-integer IPv4 of a registered IP is replaced (str and int)."""
+    admin_url, name, pg_url = _pg_url()
+    try:
+        packed = int.from_bytes(bytes((10, 70, 1, 20)), "big")
+        assert packed == 172359956
+        dumped = _send(
+            pg_url,
+            {"cmd_line": f"probe src={packed} done"},
+            [("ip", "10.70.1.20")],
+        )
+        assert str(packed) not in dumped
+        assert "10.70.1.20" not in dumped
+        assert "IP-0001" in dumped
+        dumped = _send(
+            pg_url,
+            {"src": packed},
+            [("ip", "10.70.1.20")],
+        )
+        assert str(packed) not in dumped
+        assert "IP-0001" in dumped
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_unrelated_integers_stay() -> None:
+    """Integers that are no registered IP stay byte-identical."""
+    admin_url, name, pg_url = _pg_url()
+    try:
+        dumped = _send(
+            pg_url,
+            {"count": 172359957, "port": 443, "flag": True},
+            [("ip", "10.70.1.20")],
+        )
+        assert "172359957" in dumped
+        assert "443" in dumped
+        assert "true" in dumped
+    finally:
+        _drop_database(admin_url, name)
+
+
+def test_ip_match_body_covers_variant_spellings() -> None:
+    """Unit pin: variant spellings resolve without the free-text scanner.
+
+    Mutating ``_ip_match_body`` to return None must fail this test:
+    the table holds only the canonical quad (as when the IP was
+    registered from a typed field), so only the variant matcher can
+    replace the padded, spaced and hex spellings.
+    """
+    from corvus.guardrails.pseudonymizer import (
+        _ip_match_body,
+        _replace_free_text,
+    )
+
+    assert _ip_match_body("10.70.1.20") is not None
+    assert _ip_match_body("::1") is None
+    table = {"10.70.1.20": ("IP-0001", "ip")}
+    registered = frozenset({("ip", "10.70.1.20")})
+    for spelling in (
+        "010.070.001.020",
+        "10 . 70 . 1 . 20",
+        "0x0A460114",
+        "0x0a460114",
+    ):
+        out = _replace_free_text(f"saw {spelling} today", dict(table), registered)
+        assert out == "saw IP-0001 today", spelling

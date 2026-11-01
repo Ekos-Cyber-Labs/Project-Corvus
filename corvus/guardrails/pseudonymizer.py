@@ -103,9 +103,15 @@ scanner-shaped key is looked up.
 Base64 blobs (UTF-8 or UTF-16LE) of at least 24 characters whose
 decoded printable text contains a registered entity — PowerShell
 ``-EncodedCommand``/``-enc`` blobs included — are replaced wholesale
-with ``[ENCODED:contains-entity]``. Shorter tokens, undecodable
-tokens, binary decodes and hex blobs stay verbatim: hex and arbitrary
-encodings are not decoded (see ``docs/architecture.md``).
+with ``[ENCODED:contains-entity]``. The same holds for even-length
+runs of 12+ hex digits (either case, the shape auditd emits for
+spaced arguments); ``0x``-prefixed runs stay for the IPv4 matcher.
+Shorter tokens, undecodable tokens, binary decodes and hex decoding
+to no registered entity stay verbatim, as do compressed, encrypted
+and other charsets (see ``docs/architecture.md``). Decimal-integer
+IPv4 literals (``src=173343012``) and JSON integers holding the
+packed 32-bit value of a registered IP map to the same IP pseudonym;
+short integers (ports, counts) never match.
 """
 
 from __future__ import annotations
@@ -866,14 +872,8 @@ def canonicalize_ip_text(value: str | None) -> str | None:
     return canonicalize_ip(squashed)
 
 
-def _ip_match_body(canonical: str) -> str | None:
-    """Match every IPv4 spelling of a canonical dotted quad, else None.
-
-    One alternative covers the dotted form with optional leading zeros
-    and optional spaces around the dots; the other covers the 8-digit
-    hex form in either case. Non-quad canonicals (IPv6) return None
-    and keep their exact matcher.
-    """
+def _ip_numbers(canonical: str) -> list[int] | None:
+    """Split a canonical dotted quad into its four octets, else None."""
     parts = canonical.split(".")
     if len(parts) != 4 or any(not part.isdigit() for part in parts):
         return None
@@ -883,6 +883,20 @@ def _ip_match_body(canonical: str) -> str | None:
         return None
     if any(number > 255 for number in numbers):
         return None
+    return numbers
+
+
+def _ip_match_body(canonical: str) -> str | None:
+    """Match every IPv4 spelling of a canonical dotted quad, else None.
+
+    One alternative covers the dotted form with optional leading zeros
+    and optional spaces around the dots; the other covers the 8-digit
+    hex form in either case. Non-quad canonicals (IPv6) return None
+    and keep their exact matcher.
+    """
+    numbers = _ip_numbers(canonical)
+    if numbers is None:
+        return None
     octets = [("0+" if number == 0 else f"0*{number}") for number in numbers]
     dotted = r"\s*\.\s*".join(octets)
     packed = (numbers[0] << 24) | (numbers[1] << 16) | (numbers[2] << 8) | numbers[3]
@@ -891,6 +905,25 @@ def _ip_match_body(canonical: str) -> str | None:
         for digit in f"{packed:08X}"
     )
     return f"(?:{dotted}|0[xX]{hexed})"
+
+
+def _ip_packed(canonical: str) -> int | None:
+    """Pack a canonical dotted quad into its 32-bit integer, else None."""
+    numbers = _ip_numbers(canonical)
+    if numbers is None:
+        return None
+    return (numbers[0] << 24) | (numbers[1] << 16) | (numbers[2] << 8) | numbers[3]
+
+
+def _packed_dotted(value: int) -> str:
+    """Render a 32-bit integer as its dotted-quad IPv4 spelling."""
+    return ".".join(str((value >> shift) & 0xFF) for shift in (24, 16, 8, 0))
+
+
+#: Decimal literals below this length never match a registered IP:
+#: short values (ports, counts, single octets) must not be eaten by
+#: the decimal-IPv4 matcher.
+_MIN_DECIMAL_IP_DIGITS = 7
 
 
 def _encoded_char_pattern(char: str) -> str:
@@ -915,19 +948,53 @@ _B64_TOKEN = re.compile(
     r"(?<![A-Za-z0-9+/=])(?P<tok>[A-Za-z0-9+/]{24,}={0,2})(?![A-Za-z0-9+/=])"
 )
 
+#: Hex runs of at least 12 digits (6 decoded bytes) with an even
+#: length: shorter runs cannot carry an entity worth hiding. A run
+#: right after ``0x``/``0X`` is skipped: that spelling is a 32-bit
+#: IPv4 literal and the free-text IP matcher owns it (it maps to the
+#: IP pseudonym, not the encoded marker).
+_HEX_TOKEN = re.compile(
+    r"(?<![0-9A-Fa-f])(?<!0[xX])(?P<hex>(?:[0-9A-Fa-f]{2}){6,})(?![0-9A-Fa-f])"
+)
+
+
+def _decoded_has_entity(raw: bytes, wanted: list[str]) -> bool:
+    """True when ``raw`` decodes (UTF-8 or UTF-16LE) to printable text.
+
+    The decoded text must be non-blank printable (whitespace allowed)
+    and hold one of ``wanted`` (already lowercased) case-insensitively.
+    """
+    for encoding in ("utf-8", "utf-16le"):
+        try:
+            decoded = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        clean = decoded.replace("\x00", "").replace("﻿", "")
+        if not clean.strip():
+            continue
+        if not all(char.isprintable() or char.isspace() for char in clean):
+            continue
+        lowered = clean.lower()
+        if any(needle in lowered for needle in wanted):
+            return True
+    return False
+
 
 def _mask_encoded_blobs(text: str, needles: Collection[str]) -> str:
-    """Replace base64 blobs decoding (UTF-8 or UTF-16LE) to an entity.
+    """Replace encoded blobs decoding (UTF-8 or UTF-16LE) to an entity.
 
     Every base64 token of at least 24 characters that strict-decodes
     and, as printable text, contains one of ``needles``
-    (case-insensitive) becomes ``[ENCODED:contains-entity]``. Anything
-    else stays: short tokens, undecodable tokens, binary decodes and
-    hex blobs. Hex and arbitrary encodings are NOT decoded (a
-    documented limitation in ``docs/architecture.md``).
+    (case-insensitive) becomes ``[ENCODED:contains-entity]``. The same
+    holds for every even-length run of 12+ hex digits (either case,
+    the shape auditd emits for spaced arguments). Anything else stays:
+    short tokens, undecodable tokens, binary decodes and hex that
+    decodes to no registered entity. Compressed, encrypted and other
+    charsets stay verbatim (a documented limitation in
+    ``docs/architecture.md``).
     """
     wanted = [needle.lower() for needle in needles if len(needle) >= 2]
-    if not text or len(text) < 24 or not wanted:
+    if not text or not wanted:
         return text
 
     def _blob(match: re.Match[str]) -> str:
@@ -938,22 +1005,19 @@ def _mask_encoded_blobs(text: str, needles: Collection[str]) -> str:
             raw = base64.b64decode(token, validate=True)
         except ValueError:
             return token
-        for encoding in ("utf-8", "utf-16le"):
-            try:
-                decoded = raw.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-            clean = decoded.replace("\x00", "").replace("﻿", "")
-            if not clean.strip():
-                continue
-            if not all(char.isprintable() or char.isspace() for char in clean):
-                continue
-            lowered = clean.lower()
-            if any(needle in lowered for needle in wanted):
-                return ENCODED_MARKER
-        return token
+        return ENCODED_MARKER if _decoded_has_entity(raw, wanted) else token
 
-    return _B64_TOKEN.sub(_blob, text)
+    def _hex_blob(match: re.Match[str]) -> str:
+        token = match.group("hex")
+        try:
+            raw = bytes.fromhex(token)
+        except ValueError:
+            return token
+        return ENCODED_MARKER if _decoded_has_entity(raw, wanted) else token
+
+    if len(text) >= 24:
+        text = _B64_TOKEN.sub(_blob, text)
+    return _HEX_TOKEN.sub(_hex_blob, text)
 
 
 #: Candidate IPv4 literal (kept only when it parses as an address;
@@ -1451,6 +1515,20 @@ class Pseudonymizer:
                 self._replace(item, table, registered=registered, needles=needles)
                 for item in value
             )
+        if isinstance(value, bool):
+            # Booleans are integers in Python; ``True`` is not the
+            # registered ``0.0.0.1``.
+            return value
+        if (
+            isinstance(value, int)
+            and 0 <= value <= 0xFFFFFFFF
+            and len(str(value)) >= _MIN_DECIMAL_IP_DIGITS
+        ):
+            # A JSON integer holding the packed 32-bit value of a
+            # registered IPv4 maps to the same pseudonym.
+            entry = table.get(_packed_dotted(value))
+            if entry is not None and entry[1] == "ip":
+                return entry[0]
         return value
 
     def reveal(self, text: str) -> str:
@@ -1638,4 +1716,14 @@ def _replace_free_text(
             return pseudo + punct
 
         text = pattern.sub(_emit, text)
+        if kind == "ip":
+            # Decimal-integer IPv4 (``src=173343012``): the packed
+            # 32-bit value of a registered quad maps to the same
+            # pseudonym. Short literals stay untouched (ports, counts).
+            entry_canonical = _canonical(kind, raw)
+            packed = (
+                _ip_packed(entry_canonical) if entry_canonical is not None else None
+            )
+            if packed is not None and len(str(packed)) >= _MIN_DECIMAL_IP_DIGITS:
+                text = re.sub(rf"(?<!\d){packed}(?!\d)", pseudonym, text)
     return text

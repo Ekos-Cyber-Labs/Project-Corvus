@@ -163,3 +163,138 @@ def test_password_forms_idempotent() -> None:
         once = redact(raw)
         assert redact(once) == once, raw
     assert redact(redact(NT_PAIR)) == redact(NT_PAIR)
+
+
+# (raw command, password fragment that must vanish, survivors kept verbatim)
+URL_PLUS_SCHEMES: list[tuple[str, list[str]]] = [
+    ("mongodb+srv://u:pw@h/x", ["mongodb+srv://u:", "@h/x"]),  # gitleaks:allow
+    ("amqps://u:pw@h", ["amqps://u:", "@h"]),  # gitleaks:allow
+    ("ldaps://u:pw@h", ["ldaps://u:", "@h"]),  # gitleaks:allow
+    ("rediss://u:pw@cache/x", ["rediss://u:", "@cache/x"]),  # gitleaks:allow
+    ("postgres://u:pw@h/db", ["postgres://u:", "@h/db"]),  # gitleaks:allow
+    ("mysql+pymysql://u:pw@h/db", ["mysql+pymysql://u:", "@h/db"]),  # gitleaks:allow
+    ("smb://u:pw@srv/share", ["smb://u:", "@srv/share"]),  # gitleaks:allow
+]
+
+
+def test_url_userinfo_generic_schemes_keep_user_and_host() -> None:
+    for raw, survivors in URL_PLUS_SCHEMES:
+        out = redact(raw)
+        assert ":pw@" not in out, raw
+        assert "[REDACTED:credential]" in out, raw
+        for survivor in survivors:
+            assert survivor in out, (raw, survivor)
+        assert redact(out) == out, raw
+
+
+def test_url_userinfo_special_password_chars() -> None:
+    cases = [
+        "postgresql://u:Zq9!x#Tv7@db/x",  # gitleaks:allow
+        "postgresql://u:Zq9!xTv7@db/x",  # gitleaks:allow
+        "postgresql://u:pa#ss@db/x",  # gitleaks:allow
+        "postgresql://u:pa?ss@db/x",  # gitleaks:allow
+        "postgresql://u:pa/ss@db/x",  # gitleaks:allow
+        "postgresql://u:a!b#c?d/e@db/x",  # gitleaks:allow
+    ]
+    for raw in cases:
+        out = redact(raw)
+        password = raw.split("u:", 1)[1].rsplit("@", 1)[0]
+        assert password not in out, (raw, out)
+        assert out.startswith("postgresql://u:[REDACTED:credential]@db/x"), (raw, out)
+        assert redact(out) == out, raw
+
+
+def test_url_userinfo_last_at_wins_and_bare_user_falls_back() -> None:
+    out = redact("postgresql://u:p@ss@db/x")  # gitleaks:allow
+    assert out == "postgresql://u:[REDACTED:credential]@db/x", out
+    out = redact("https://bob@db.example.com/api")
+    assert out == "https://[REDACTED:userinfo]@db.example.com/api", out
+    out = redact("redis://:S3cret-Pass-9@cache.example.com:6379/0")  # gitleaks:allow
+    assert "S3cret-Pass-9" not in out, out
+    assert out.startswith("redis://[REDACTED:userinfo]@"), out
+    assert redact(out) == out, out
+
+
+def test_url_path_at_sign_is_not_userinfo() -> None:
+    assert redact("https://example.com/a@b") == "https://example.com/a@b"
+    assert redact("mysql://db.example.com/app") == "mysql://db.example.com/app"
+
+
+POWERSHELL_PASSWORD_FORMS: list[tuple[str, list[str]]] = [
+    ('-Password "S3cret-Pass-9"', ["-Password"]),  # gitleaks:allow
+    ("-Password S3cret-Pass-9", ["-Password"]),  # gitleaks:allow
+    ("-password:S3cret-Pass-9", ["-password:"]),  # gitleaks:allow
+    ("-Pass S3cret-Pass-9", ["-Pass"]),  # gitleaks:allow
+    ("-Pwd S3cret-Pass-9", ["-Pwd"]),  # gitleaks:allow
+    ("-Password='S3cret-Pass-9'", ["-Password="]),  # gitleaks:allow
+]
+
+
+def test_powershell_password_flag_preserved() -> None:
+    for raw, survivors in POWERSHELL_PASSWORD_FORMS:
+        out = redact(raw)
+        assert "S3cret-Pass-9" not in out, (raw, out)
+        assert "[REDACTED:credential]" in out, (raw, out)
+        for survivor in survivors:
+            assert survivor in out, (raw, survivor)
+        assert "-p[REDACTED:" not in out, (raw, out)
+        assert redact(out) == out, raw
+
+
+def test_powershell_password_does_not_eat_neighbours() -> None:
+    # Adjacent long flags keep their meaning; openssl keeps its own form.
+    assert redact("-passin file:cert.pem") == "-passin file:cert.pem"
+    assert redact("-Password -Force") == "-Password -Force"
+    assert redact("deploy --password s3cretPassw0rd now") != (
+        "deploy --password s3cretPassw0rd now"
+    )
+    assert "s3cretPassw0rd" not in redact("deploy --password s3cretPassw0rd now")
+
+
+def test_ldapsearch_glued_and_bindpw_forms() -> None:
+    cases = [
+        (  # gitleaks:allow
+            "ldapsearch -x -wS3cret-Pass-9 -b dc=example,dc=com",
+            ["ldapsearch", "-w", "-b dc=example,dc=com"],
+        ),
+        (  # gitleaks:allow
+            "ldapsearch -x --bindpw S3cret-Pass-9 -b dc=example,dc=com",
+            ["ldapsearch", "--bindpw", "-b dc=example,dc=com"],
+        ),
+        (  # gitleaks:allow
+            "ldapsearch -x --bindpw=S3cret-Pass-9 -b dc=example,dc=com",
+            ["ldapsearch", "--bindpw=", "-b dc=example,dc=com"],
+        ),
+    ]
+    for raw, survivors in cases:
+        out = redact(raw)
+        assert "S3cret-Pass-9" not in out, (raw, out)
+        assert "[REDACTED:credential]" in out, (raw, out)
+        for survivor in survivors:
+            assert survivor in out, (raw, survivor)
+        assert redact(out) == out, raw
+    # curl -w (a format string, not ldapsearch) stays untouched.
+    assert redact('curl -w "%{http_code}" https://example.com/') == (
+        'curl -w "%{http_code}" https://example.com/'
+    )
+
+
+def test_sqlcmd_uppercase_flag_preserved() -> None:
+    out = redact("sqlcmd -S dbserver -U sa -P S3cret-Pass-9")  # gitleaks:allow
+    assert "S3cret-Pass-9" not in out, out
+    assert "-P [REDACTED:credential]" in out, out
+    out = redact("sqlcmd -S dbserver -U sa -PS3cret-Pass-9")  # gitleaks:allow
+    assert "S3cret-Pass-9" not in out, out
+    assert "-P [REDACTED:credential]" in out, out
+    assert "-p[REDACTED:" not in out, out
+
+
+def test_net_use_quoted_share_with_space() -> None:
+    raw = 'net use Z: "\\\\srv\\sh are" S3cret-Pass-9 /user:bob'  # gitleaks:allow
+    out = redact(raw)
+    assert "S3cret-Pass-9" not in out, out
+    assert out.count("[REDACTED:credential]") == 1, out
+    assert '"\\\\srv\\sh are"' in out, out
+    assert "Z:" in out, out
+    assert "/user:bob" in out, out
+    assert redact(out) == out, out

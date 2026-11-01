@@ -1387,3 +1387,37 @@ rules back to Wazuh (shadow first, human approval).
   delta. No paid API called, nothing executed against a server.
   `eval/reports/llm_latest.*` untouched. Compose Postgres left
   running. Awaiting maintainer commit.
+
+- 2026-11-01: fixed six independent-probe redaction gaps, tests
+  failing-first (llm-engineer, security-reviewer pass). (1) URL
+  userinfo (`corvus/guardrails/egress.py`): scheme matches generically
+  per RFC 3986 (covers `+`/trailing-`s` schemes) and userinfo ends at
+  the last `@` (tried last-first, so a path `@` is not credentials);
+  passwords may hold `#`/`?`/`/`/`!`/`@`, and a separable user is
+  kept (`scheme://user:[REDACTED:credential]@host`, else the whole
+  userinfo as before; marker text is never re-matched). (2)
+  PowerShell `-Password`/`-Pass`/`-Pwd` (space, colon or `=`, quoted
+  or bare) redact the value with the flag kept, first in the CLI
+  alternation so the generic `-p` rule cannot eat the flag; the
+  attached `-p` rule no longer matches `[`-led marker output (that
+  cross-stage eat also lowercased sqlcmd `-P`). (3) ldapsearch
+  `-w` glued and `--bindpw` (space/`=`) added, still case-sensitive
+  (`-W` prompts, never matches); sqlcmd `-P` glued/`=` added with the
+  uppercase flag preserved. (4) `net use` tokenizes quoted spans, so a
+  quoted share with a space is kept and only the password is
+  replaced. (5) Pseudonymizer (`corvus/guardrails/pseudonymizer.py`):
+  even-length 12+ hex runs (either case, `0x` skipped for the IP
+  matcher) decoding (UTF-8/UTF-16LE) to a registered entity are
+  masked; decimal-integer IPv4 and JSON integers holding a registered
+  quad's packed value map to its pseudonym (7+ digits only, booleans
+  excluded); `docs/architecture.md` residual paragraph updated (hex
+  now decoded; compressed/encrypted/other charsets stay). (6) New
+  `_replace_free_text` unit pin fails when `_ip_match_body` returns
+  None (canonical-only table, no scanner help); IPv6 None kept as the
+  documented exact-matcher path, not dead code. Verified with `make
+  lint` (green: ruff check, format check, mypy), the full `make
+  test` (1109 passed with Postgres), and gitleaks (Passed). No
+  normalizer, correlation, prompt or model changes, so no eval
+  delta. No paid API called, nothing executed against a server.
+  `eval/reports/llm_latest.*` untouched. Compose Postgres left
+  running. Awaiting maintainer commit.

@@ -316,11 +316,15 @@ or model inputs. Details: `datasets/README.md`.
   across percent-escapes, `_`/`-` joins, non-canonical IPv4 spellings
   (padded, spaced, hex) and inside dict keys; base64 blobs (UTF-8 or
   UTF-16LE, 24+ characters) decoding to a registered entity are
-  replaced wholesale. Bare words in no recognizable position
+  replaced wholesale, as are even-length runs of 12+ hex digits
+  (either case, the shape auditd emits for spaced arguments) decoding
+  to one; decimal-integer IPv4 literals and JSON integers holding the
+  packed 32-bit value of a registered IP map to the same IP
+  pseudonym. Bare words in no recognizable position
   cannot be found deterministically. Remaining limit, by design:
-  arbitrary encodings are not decoded (hex blobs, compressed or
-  encrypted payloads, other charsets stay verbatim), so a novel
-  encoding of an entity is a known residual leak path.
+  compressed or encrypted payloads, other charsets and short or
+  binary hex stay verbatim, so a novel encoding of an entity is a
+  known residual leak path.
 - Egress filter before every Spark call: host allowlist (model endpoints,
   Wazuh only) plus a secret-pattern redactor (tokens, passwords in command
   lines). Network-level egress remains the operator's firewall; the HTTP

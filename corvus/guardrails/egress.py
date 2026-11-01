@@ -348,8 +348,25 @@ _NET_USER_CMD = re.compile(
 
 #: ``net use``: handled by :func:`_redact_net_use`, which classifies each
 #: token (flags, ``\\\\share`` paths and ``X:`` drives are never secrets)
-#: instead of blindly taking the last token.
-_NET_USE_CMD = re.compile(r"(?i)(?P<head>\bnet\s+use\b)(?P<tail>(?:\s+[^\s|;&]+)*)")
+#: instead of blindly taking the last token. Quoted tokens (a share
+#: holding a space, a quoted password) stay one token.
+_NET_USE_CMD = re.compile(
+    r"(?i)(?P<head>\bnet\s+use\b)"
+    r"(?P<tail>(?:\s+(?:\"[^\"]*\"|'[^']*'|[^\s|;&]+))*)"
+)
+
+#: Tail splitter mirroring :data:`_NET_USE_CMD`: whitespace separators
+#: plus quoted or bare tokens, so ``"\\\\srv\\sh are"`` classifies as
+#: one share instead of two secrets.
+_NET_USE_TOKEN = re.compile(r"\s+|\"[^\"]*\"|'[^']*'|[^\s|;&]+")
+
+
+def _strip_quotes(token: str) -> str:
+    """Remove one pair of surrounding single or double quotes."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+        return token[1:-1]
+    return token
+
 
 #: Drive-letter device (``Z:``): never a password.
 _NET_USE_DRIVE = re.compile(r"^[A-Za-z]:$")
@@ -360,16 +377,25 @@ _SCHTASKS_RP = re.compile(
     r"(?i)(?<![\w])(?P<flag>/RP\s+)(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)",
 )
 
-#: ``sqlcmd ... -P <password>``: scoped to the sqlcmd command segment so
-#: ``scp -P <port>`` and ``wget -P <dir>`` stay untouched.
+#: ``sqlcmd ... -P <password>`` (space, ``=`` or glued): scoped to the
+#: sqlcmd command segment so ``scp -P <port>`` and ``wget -P <dir>``
+#: stay untouched. Case-sensitive: the flag is uppercase ``-P`` and the
+#: replacement keeps the original flag text.
 _SQLCMD_CMD = re.compile(r"(?i)\bsqlcmd\b[^\n;|&]*")
-_SQLCMD_P = re.compile(r"(?P<flag>(?<![\w-])-P\s+)(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)")
+_SQLCMD_P = re.compile(
+    r"(?P<flag>(?<![\w-])-P(?:\s*=\s*|\s+)?)"
+    r"(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)"
+)
 
-#: ``ldapsearch ... -w <password>``: scoped to the ldapsearch command
-#: segment so ``curl -w <format>`` stays untouched.
+#: ``ldapsearch ... -w <password>`` (space, ``=`` or glued) and
+#: ``--bindpw <password>`` / ``--bindpw=<password>``: scoped to the
+#: ldapsearch command segment so ``curl -w <format>`` stays untouched.
+#: Case-sensitive: uppercase ``-W`` prompts for the password and takes
+#: no value, so it never matches.
 _LDAPSEARCH_CMD = re.compile(r"(?i)\bldapsearch\b[^\n;|&]*")
 _LDAPSEARCH_W = re.compile(
-    r"(?P<flag>(?<![\w-])-w\s+)(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)"
+    r"(?P<flag>(?<![\w-])(?:-w|--bindpw)(?:\s*=\s*|\s+)?)"
+    r"(?P<pw>\"[^\"]*\"|'[^']*'|[^\s\"']+)"
 )
 
 #: ``xfreerdp ... /p:<password>`` (``/pth:`` is a different flag and is
@@ -433,12 +459,26 @@ def _is_credential_key(key: str) -> bool:
 
 
 _CLI_FLAG = re.compile(
-    r"(?P<eq>(?:--password(?:[_-]?[A-Za-z]+)?|--passwd|-p\b)\s*=\s*[^\s\"']+)"
+    # PowerShell ``-Password`` / ``-Pass`` / ``-Pwd`` (space, ``:`` or
+    # ``=`` separated, quoted or bare): the value after the flag is the
+    # secret and the flag name is kept. First so the generic ``-p``
+    # attached rule below cannot eat the flag name. ``-passin`` /
+    # ``-passout`` never match (``\b`` fails inside the longer word;
+    # the openssl pattern owns them anyway, see redact() order), and
+    # ``--password`` never matches (the leading ``(?<![\w-])-`` takes
+    # exactly one dash).
+    r"(?P<ps>(?P<flag>(?<![\w-])-(?:password|passwd|pass|pwd)\b\s*[:=]?\s*)"
+    r'(?P<pw>"[^"]*"|\'[^\']*\'|[^\s"\']+))'
+    r"|(?P<eq>(?:--password(?:[_-]?[A-Za-z]+)?|--passwd|-p\b)\s*=\s*[^\s\"']+)"
     r"|(?P<sp>(?:--password(?:[_-]?[A-Za-z]+)?|--passwd|--token|--secret)"
     r"\s+[^\s-][^\s]*)"
     # ``-passin``/``-passout`` are openssl flags, not ``-p`` with an
     # attached value: the openssl pattern owns them (see redact() order).
-    r"|(?P<att>(?<![A-Za-z0-9])-p(?!assin\b|assout\b)[^\s\"'\d][^\s\"']*)",
+    # The value never starts with ``[``: earlier stages emit their
+    # markers glued to the flag (``-P[REDACTED:credential]``,
+    # ``-Password[REDACTED:credential]``) and this rule must not eat
+    # them on the same pass (which also lowercased ``-P`` to ``-p``).
+    r"|(?P<att>(?<![A-Za-z0-9])-p(?!assin\b|assout\b)[^\s\"'\d\[][^\s\"']*)",
     re.IGNORECASE,
 )
 _PRIVATE_KEY = re.compile(
@@ -446,14 +486,54 @@ _PRIVATE_KEY = re.compile(
     r".*?-----END (?:RSA |OPENSSH |EC |DSA |ENCRYPTED )?PRIVATE KEY-----",
     re.DOTALL,
 )
-#: URL userinfo (``user:password@``) for HTTP(S) and the non-HTTP
-#: schemes attackers embed credentials in (database, directory, file
-#: transfer, cache, queue and SMB URLs). A URL without userinfo never
-#: matches: the ``@`` after the authority is required.
-_URL_USERINFO = re.compile(
-    r"(?i)\b((?:https?|mysql|postgres(?:ql)?|ftp|redis|mongodb|amqp|ldap|smb)://)"
-    r"([^/\s@?#]+)@"
-)
+#: Any ``scheme://`` URL (RFC 3986: ALPHA *( ALPHA / DIGIT / "+" /
+#: "-" / "." )) carrying userinfo (``user:password@`` or bare
+#: ``user@``). Database, directory, file-transfer, cache, queue and
+#: SMB URLs embed credentials this way (``mongodb+srv://``,
+#: ``amqps://``, ``ldaps://``, ``rediss://``, ``postgres://``,
+#: ``mysql+pymysql://`` ...), so the scheme matches generically
+#: instead of a fixed list. A URL without userinfo never matches: an
+#: ``@`` past the scheme is required.
+_URL_SCHEME = re.compile(r"(?i)\b([A-Za-z][A-Za-z0-9+.\-]*://)([^\s\x00-\x1f\x7f]*)")
+
+#: User names that can be kept verbatim next to the marker: no
+#: slashes, whitespace, ``@``, ``?``, ``#`` or ``:`` of their own.
+_URL_USER = re.compile(r"[^/\s@?#:]+")
+
+
+def _redact_url_userinfo(match: re.Match[str]) -> str:
+    """Redact URL userinfo, keeping a separable user name and the host.
+
+    Userinfo ends at the LAST ``@`` in the authority run (a password
+    may itself hold ``@``); candidates are tried last-first so an ``@``
+    inside the path (``https://example.com/a@b``) does not match: a
+    userinfo holding ``/`` without a ``:`` is a path, not credentials.
+    ``#``, ``?`` and ``/`` inside the password stay inside the
+    redaction. With a separable ``user:`` prefix the output keeps the
+    user (``scheme://user:[REDACTED:credential]@host``); otherwise the
+    whole userinfo goes (``scheme://[REDACTED:userinfo]@host``, as
+    before). Text already holding a marker is left alone (idempotency).
+    """
+    scheme, rest = match.group(1), match.group(2)
+    if "[REDACTED:" in rest:
+        return match.group(0)
+    credential = REDACTED_TEMPLATE.format(kind="credential")
+    whole = REDACTED_TEMPLATE.format(kind="userinfo")
+    for at in [m.start() for m in re.finditer(r"@", rest)][::-1]:
+        userinfo, after = rest[:at], rest[at + 1 :]
+        if not userinfo or not after:
+            continue
+        if ":" in userinfo:
+            user, _, _ = userinfo.partition(":")
+            if user and _URL_USER.fullmatch(user) is not None:
+                return f"{scheme}{user}:{credential}@{after}"
+            return f"{scheme}{whole}@{after}"
+        if "/" in userinfo or "@" in userinfo:
+            continue
+        return f"{scheme}{whole}@{after}"
+    return match.group(0)
+
+
 _SHORT_FLAG_VALUE = re.compile(r"(?<![A-Za-z0-9])-p\s+(\S+)")
 
 
@@ -500,27 +580,31 @@ def _redact_password_token(match: re.Match[str]) -> str:
 def _redact_net_use(match: re.Match[str]) -> str:
     """Replace ``net use`` password tokens, keeping targets and flags."""
     head, tail = match.group("head"), match.group("tail")
-    parts = re.findall(r"\s+|\S+", tail)
+    parts = _NET_USE_TOKEN.findall(tail)
     tokens = [part for part in parts if not part[0].isspace()]
+    bare = [_strip_quotes(token) for token in tokens]
     has_target = any(
         token.startswith("\\")
         or _NET_USE_DRIVE.fullmatch(token) is not None
         or token[:6].lower() == "/user:"
-        for token in tokens
+        for token in bare
     )
     if not has_target:
         return match.group(0)
-    marker = REDACTED_TEMPLATE.format(kind="credential")
     rebuilt: list[str] = []
     for part in parts:
-        if part[0].isspace() or part.startswith("/"):
+        if part[0].isspace():
             rebuilt.append(part)
-        elif part.startswith("\\\\") or part == "*":
+            continue
+        token = _strip_quotes(part)
+        if token.startswith("/") or token == "*":
             rebuilt.append(part)
-        elif _NET_USE_DRIVE.fullmatch(part) is not None:
+        elif token.startswith("\\"):
+            rebuilt.append(part)
+        elif _NET_USE_DRIVE.fullmatch(token) is not None:
             rebuilt.append(part)
         else:
-            rebuilt.append(marker)
+            rebuilt.append(_mask_value("", part))
     return head + "".join(rebuilt)
 
 
@@ -529,6 +613,10 @@ def _redact_flag_value(match: re.Match[str]) -> str:
     flag, value = match.group("flag"), match.group("pw")
     if value.startswith("/") or value.startswith("-"):
         return match.group(0)
+    if flag and not flag[-1].isspace() and not flag.endswith(("=", ":")):
+        # Glued form (``-P<password>``, ``-w<password>``): keep the
+        # flag readable by separating it from the marker.
+        flag += " "
     return _mask_value(flag, value)
 
 
@@ -560,17 +648,25 @@ def redact(text: str) -> str:
     ``token``, ``password``, ``passwd``, ``pwd`` or ``api_key`` as an
     underscore/dash segment (quoted or bare), ``curl -u`` / ``--user``
     user:password pairs, command-line password forms (``net user``,
-    ``net use`` with its share/drive/user targets kept, ``schtasks
-    /RP``, ``sqlcmd -P`` and ``ldapsearch -w`` scoped to their own
+    ``net use`` with its share/drive/user targets kept (quoted shares
+    holding a space stay one token), ``schtasks
+    /RP``, ``sqlcmd -P`` (space, ``=`` or glued, flag text kept) and
+    ``ldapsearch -w`` (space, ``=`` or glued) / ``--bindpw`` (space or
+    ``=``) scoped to their own
     command so ``scp -P``/``wget -P``/``curl -w`` stay untouched,
     ``xfreerdp /p:``, ``smbclient -U user%pass``, ``user:pass |
     chpasswd``, ``openssl -passin/-passout pass:``), the
     ``ConvertTo-SecureString`` literal, 32/64-hex NTLM/RC4/AES hashes
     and bare NTLM ``LM:NT`` (32 hex : 32 hex) pairs,
     ``Cookie``/``Set-Cookie`` values, ``-p`` / ``--password`` style
-    command-line arguments, private key blocks, and URLs with embedded
-    userinfo (HTTP(S) plus mysql, postgresql, ftp, redis, mongodb,
-    amqp, ldap and smb schemes). A
+    command-line arguments (including PowerShell ``-Password`` /
+    ``-Pass`` / ``-Pwd`` with the flag name kept), private key blocks,
+    and URLs with embedded userinfo (any ``scheme://`` à la RFC 3986,
+    so ``mongodb+srv://``, ``amqps://``, ``rediss://`` and
+    ``mysql+pymysql://`` match too; a separable ``user:`` keeps the
+    user as ``scheme://user:[REDACTED:credential]@host``, otherwise the
+    whole userinfo goes; passwords may hold ``#``, ``?``, ``/``, ``!``
+    and ``@``). A
     bare ``-p`` followed by only digits is left alone (it is almost
     always a port, e.g. ``ssh -p 22``). Prose disclosures without a
     key (``my password is hunter2``) are NOT redacted: the pattern set
@@ -586,9 +682,7 @@ def redact(text: str) -> str:
     if not text:
         return text
     redacted = _PRIVATE_KEY.sub(REDACTED_TEMPLATE.format(kind="private_key"), text)
-    redacted = _URL_USERINFO.sub(
-        r"\1" + REDACTED_TEMPLATE.format(kind="userinfo") + "@", redacted
-    )
+    redacted = _URL_SCHEME.sub(_redact_url_userinfo, redacted)
     redacted = _AUTH_HEADER.sub(
         r"\1" + REDACTED_TEMPLATE.format(kind="authorization"), redacted
     )
@@ -622,6 +716,8 @@ def redact(text: str) -> str:
 
     def _cli(match: re.Match[str]) -> str:
         marker = REDACTED_TEMPLATE.format(kind="credential")
+        if match.group("ps") is not None:
+            return _redact_flag_value(match)
         eq = match.group("eq")
         if eq is not None:
             return f"{eq.split('=', 1)[0].rstrip()}={marker}"
