@@ -24,6 +24,7 @@ EXPECTED_TABLES = {
     "llm_attempts",
     "incident_analyses",
     "spend_reservations",
+    "wazuh_poll_cycles",
 }
 
 # Key columns per table, exactly as named in the migration-002 spec.
@@ -52,6 +53,7 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "status",
         "ai_status",
         "review_required",
+        "learned_rules",
         "created_at",
         "updated_at",
     },
@@ -181,6 +183,7 @@ def test_migrate_applies_twice_idempotently() -> None:
         assert "0005_injection_signals.sql" in first
         assert "0006_agent_step_scope.sql" in first
         assert "0007_rules_native_uid.sql" in first
+        assert "0008_live_poll.sql" in first
         assert migrate(test_url) == []
         with psycopg.connect(test_url) as conn:
             with conn.cursor() as cur:
@@ -193,6 +196,7 @@ def test_migrate_applies_twice_idempotently() -> None:
                     "0005_injection_signals.sql",
                     "0006_agent_step_scope.sql",
                     "0007_rules_native_uid.sql",
+                    "0008_live_poll.sql",
                 ]
 
         # File-level idempotency: executing 0002 and 0004 directly, twice, is safe.
@@ -235,6 +239,14 @@ def test_migrate_applies_twice_idempotently() -> None:
             with conn.cursor() as cur:
                 cur.execute(native_text)
                 cur.execute(native_text)
+            conn.commit()
+        live_text = (Path(MIGRATIONS_DIR) / "0008_live_poll.sql").read_text(
+            encoding="utf-8"
+        )
+        with psycopg.connect(test_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(live_text)
+                cur.execute(live_text)
             conn.commit()
 
         with psycopg.connect(test_url) as conn:

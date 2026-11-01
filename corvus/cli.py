@@ -430,6 +430,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("DATABASE_URL"),
         help="Postgres URL (default: $DATABASE_URL).",
     )
+    ledger_check = rules_sub.add_parser(
+        "ledger-check",
+        help="Print llm_attempts and spend rows in a window grouped by "
+        "purpose and model (with --expect-zero, exit non-zero if any).",
+    )
+    ledger_check.add_argument("--start", required=True, help="Window start (ISO-8601).")
+    ledger_check.add_argument("--end", required=True, help="Window end (ISO-8601).")
+    ledger_check.add_argument(
+        "--expect-zero",
+        action="store_true",
+        help="Exit non-zero when any ledger row exists in the window.",
+    )
+    ledger_check.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
     prove = rules_sub.add_parser(
         "prove",
         help="Learning proof: stored rule fires on the control store, "
@@ -454,6 +471,68 @@ def build_parser() -> argparse.ArgumentParser:
         "--database-url",
         default=os.environ.get("DATABASE_URL"),
         help="Postgres URL (default: $DATABASE_URL).",
+    )
+
+    wazuh = sub.add_parser("wazuh", help="Live Wazuh indexer commands.")
+    wazuh_sub = wazuh.add_subparsers(dest="wazuh_command", required=True)
+    poll = wazuh_sub.add_parser(
+        "poll",
+        help="Poll new alerts from the Wazuh indexer into findings and "
+        "incidents (no model calls; resumable via the checkpoints table).",
+    )
+    poll.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single cycle and stop (default when --interval is absent).",
+    )
+    poll.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        help="Seconds between cycles; loop until SIGINT (default: run once).",
+    )
+    poll.add_argument(
+        "--store",
+        default="data/live",
+        help="Live replay-format store directory (default: data/live).",
+    )
+    poll.add_argument(
+        "--since",
+        default=None,
+        help="Seed cursor when no checkpoint is stored (ISO-8601).",
+    )
+    poll.add_argument(
+        "--with-archives",
+        action="store_true",
+        help="Fetch surrounding archive events for each new incident.",
+    )
+    poll.add_argument(
+        "--archives-limit",
+        type=int,
+        default=200,
+        help="Archive events per incident, at most (default: 200).",
+    )
+    poll.add_argument(
+        "--page-size",
+        type=int,
+        default=500,
+        help="Alerts per indexer page, at most 1000 (default: 500).",
+    )
+    poll.add_argument(
+        "--max-docs",
+        type=int,
+        default=5000,
+        help="Documents per cycle, at most (default: 5000).",
+    )
+    poll.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
+    )
+    poll.add_argument(
+        "--attack",
+        default="data/attack/enterprise.json",
+        help="Compact ATT&CK dictionary (default: data/attack/enterprise.json).",
     )
 
     evaluation = sub.add_parser("eval", help="Evaluation harness commands.")
@@ -812,6 +891,135 @@ def main(argv: list[str] | None = None) -> int:
             f" tool calls: {outcome.tool_calls_used},"
             f" loop tokens: {outcome.loop_tokens}"
         )
+        return 0
+    if args.command == "rules" and args.rules_command == "ledger-check":
+        from corvus.learning.ledger import ledger_check
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        try:
+            return ledger_check(
+                args.database_url,
+                args.start,
+                args.end,
+                expect_zero=args.expect_zero,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        return 2
+    if args.command == "wazuh" and args.wazuh_command == "poll":
+        import random
+        import signal
+        import time
+
+        import httpx2
+
+        from corvus.adapters.wazuh.adapter import WazuhAdapter
+        from corvus.adapters.wazuh.client import IndexerError, ReadOnlyIndexerClient
+        from corvus.live.poll import run_poll_cycle
+        from corvus.normalize.wazuh import parse_wazuh_time
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        if args.once and args.interval is not None:
+            parser.error("pass --once or --interval, not both")
+        if args.interval is not None and args.interval <= 0:
+            parser.error("--interval must be positive seconds")
+        since_ms: int | None = None
+        if args.since is not None:
+            try:
+                since_ms = parse_wazuh_time(args.since)
+            except ValueError as exc:
+                parser.error(f"--since is not a time: {exc}")
+        missing = [
+            name
+            for name in (
+                "WAZUH_INDEXER_URL",
+                "WAZUH_INDEXER_USER",
+                "WAZUH_INDEXER_PASSWORD",
+            )
+            if not os.environ.get(name)
+        ]
+        if missing:
+            # Names only: values (credentials) never appear in errors.
+            parser.error("wazuh poll needs from the environment: " + ", ".join(missing))
+        url = os.environ["WAZUH_INDEXER_URL"]
+        user = os.environ["WAZUH_INDEXER_USER"]
+        password = os.environ["WAZUH_INDEXER_PASSWORD"]
+        ca_path = os.environ.get("WAZUH_INDEXER_CA") or None
+        try:
+            client = ReadOnlyIndexerClient(
+                url,
+                user,
+                password,
+                ca_path=ca_path,
+                timeout=httpx2.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            parser.error(f"wazuh indexer misconfigured: {exc}")
+        adapter = WazuhAdapter(client, database_url=args.database_url)
+        stop = False
+
+        def _request_stop(signum: int, frame: object) -> None:
+            nonlocal stop
+            stop = True
+
+        signal.signal(signal.SIGINT, _request_stop)
+        signal.signal(signal.SIGTERM, _request_stop)
+
+        def _sleep(seconds: float) -> None:
+            deadline = time.monotonic() + seconds
+            while not stop and time.monotonic() < deadline:
+                time.sleep(min(0.2, deadline - time.monotonic()))
+
+        failures = 0
+        while True:
+            try:
+                cycle = run_poll_cycle(
+                    adapter=adapter,
+                    database_url=args.database_url,
+                    store_dir=args.store,
+                    attack_path=args.attack,
+                    page_size=args.page_size,
+                    max_docs=args.max_docs,
+                    since_ms=since_ms,
+                    with_archives=args.with_archives,
+                    archives_limit=args.archives_limit,
+                )
+            except IndexerError as exc:
+                failures += 1
+                print(f"poll failed ({exc}); backing off")
+                if args.interval is None and failures > 3:
+                    return 1
+                _sleep(min(2.0**failures, 30.0) + random.uniform(0, 1.0))
+                if args.interval is None:
+                    continue
+                if stop:
+                    return 1
+                continue
+            except ValueError as exc:
+                parser.error(str(exc))
+            failures = 0
+            print(
+                f"poll cycle: alerts={cycle.alerts_seen}"
+                f" events={cycle.events_written}"
+                f" findings={cycle.findings_written}"
+                f" learned={cycle.learned_findings}"
+                f" shadow={cycle.shadow_findings}"
+                f" unknown={cycle.unknown_learned}"
+                f" incidents={cycle.incidents_upserted}"
+                f" (total {cycle.incidents_total})"
+                f" archives={cycle.archives_added}"
+            )
+            if args.with_archives and cycle.archives_empty:
+                print("archives index returned nothing for this cycle")
+            if args.interval is None or stop:
+                break
+            _sleep(args.interval)
+        try:
+            client.close()
+        except Exception:
+            pass
         return 0
     if args.command == "eval" and args.eval_command == "llm":
         from eval.llm_harness import main as llm_harness_main

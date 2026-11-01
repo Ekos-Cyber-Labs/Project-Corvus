@@ -414,7 +414,8 @@ def list_incidents(
                     " EXISTS(SELECT 1 FROM incident_signals s WHERE"
                     " s.incident_id=i.id AND s.kind='injection'),"
                     " EXISTS(SELECT 1 FROM incident_analyses a"
-                    " WHERE a.incident_id=i.id AND a.stage='analysis')"
+                    " WHERE a.incident_id=i.id AND a.stage='analysis'),"
+                    " i.learned_rules"
                     f" FROM incidents i {where} ORDER BY 11 DESC,"
                     " i.severity_floor DESC, i.id DESC LIMIT %s OFFSET %s",
                     [*params, capped, offset],
@@ -434,6 +435,7 @@ def list_incidents(
                         "event_count": int(r[8] or 0),
                         "has_injection": bool(r[9]),
                         "analyzed": bool(r[10]),
+                        "learned_rules": list(r[11] or []),
                     }
                     for r in cur.fetchall()
                 ]
@@ -454,7 +456,7 @@ def get_incident(incident_id: int) -> Any:
                     "SELECT id, title, severity_floor, severity_id, ai_status, verdict,"
                     " status, first_seen, last_seen, severity_factors,"
                     " techniques, event_uids,"
-                    " review_required FROM incidents WHERE id=%s AND"
+                    " review_required, learned_rules FROM incidents WHERE id=%s AND"
                     " correlation_key NOT LIKE 'adv-llm:%%'",
                     (incident_id,),
                 )
@@ -615,6 +617,7 @@ def get_incident(incident_id: int) -> Any:
         "event_uids": [str(u) for u in (row[11] or [])],
         "event_count": len(row[11] or []),
         "review_required": bool(row[12]),
+        "learned_rules": list(row[13] or []),
         "analysis": verdict_obj,
         "triage": {
             "status": (analyses.get("triage") or {}).get("status"),

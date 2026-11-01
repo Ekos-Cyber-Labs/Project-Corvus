@@ -95,7 +95,9 @@ class Incident(TypedDict):
     storage follow-up adds. ``first_seen``/``last_seen`` are UTC epoch
     milliseconds; the follow-up converts them to ``timestamptz``.
     ``event_uids`` holds member finding uids plus the referenced event
-    uids present in the events map.
+    uids present in the events map. ``learned_rules`` holds the
+    learned-rule references behind the member findings (empty for
+    replay data, which carries no attribution stamps).
     """
 
     correlation_key: str
@@ -109,6 +111,7 @@ class Incident(TypedDict):
     severity_floor: int
     severity_id: int
     severity_factors: dict[str, Any]
+    learned_rules: list[dict[str, Any]]
 
 
 @dataclass
@@ -427,8 +430,18 @@ def _build_incident(
     events: Mapping[str, OcsfEvent],
     auth_failure_threshold: int,
     gap_ms: int,
+    muted_uids: frozenset[str] = frozenset(),
 ) -> Incident:
-    """Render one cluster as a plain JSON-serializable incident dict."""
+    """Render one cluster as a plain JSON-serializable incident dict.
+
+    ``muted_uids`` holds member finding uids whose severity must not
+    raise the incident (shadow and untrusted learned-rule findings):
+    they still join, count breadth, and contribute entities and
+    techniques, but ``max_severity`` ignores them. When every member
+    is muted the severity input falls back to Informational (1) and
+    the muting is recorded in ``severity_factors``; incidents without
+    muted members carry no muting key at all.
+    """
     tactics = sorted({short for member in cluster.members for short in member.tactics})
     primaries = sorted(
         {
@@ -440,7 +453,12 @@ def _build_incident(
     techniques = sorted(
         {tech for member in cluster.members for tech in member.techniques}
     )
-    max_severity = max(member.severity_id for member in cluster.members)
+    trusted = [member for member in cluster.members if member.uid not in muted_uids]
+    muted = [member for member in cluster.members if member.uid in muted_uids]
+    if trusted:
+        max_severity = max(member.severity_id for member in trusted)
+    else:
+        max_severity = 1
     detail = _success_detail(
         cluster, events, auth_failure_threshold, cluster.first_seen - gap_ms
     )
@@ -449,6 +467,13 @@ def _build_incident(
     )
     factor_4 = factors["factor_4_success_vs_attempt"]
     factors["factor_4_success_vs_attempt"] = {**factor_4, **detail}
+    if muted:
+        factors["learned_rule_muting"] = {
+            "muted_findings": len(muted),
+            "muted_severities": sorted({member.severity_id for member in muted}),
+            "shadow_only": not trusted,
+            "contribution": "muted findings never raise the incident severity",
+        }
     breadth = len(primaries)
     score = round(float(floor) + SCORE_BREADTH_STEP * max(breadth - 1, 0), 2)
     earliest = min(cluster.members, key=lambda member: (member.time, member.uid))
@@ -481,6 +506,7 @@ def _build_incident(
         severity_floor=floor,
         severity_id=floor,
         severity_factors=factors,
+        learned_rules=[],
     )
 
 
@@ -506,10 +532,16 @@ def correlate_findings(
     ``[first_seen - session gap, last_seen]``. Findings without
     referenced events correlate on their evidence context alone.
     """
+    from corvus.live.attribution import finding_muted, learned_refs_for_uids
+
     dictionary = attack if attack is not None else load_dictionary()
     events: Mapping[str, OcsfEvent] = events_by_uid or {}
     gap_ms = int(session_gap.total_seconds() * 1000)
     span_ms = int(max_span.total_seconds() * 1000)
+    findings_by_uid = {finding.metadata.uid or "": finding for finding in findings}
+    muted_uids = frozenset(
+        uid for uid, finding in findings_by_uid.items() if finding_muted(finding)
+    )
     ordered = sorted(
         (_signals_for(finding, events, dictionary) for finding in findings),
         key=lambda signals: (signals.time, signals.uid),
@@ -541,10 +573,22 @@ def correlate_findings(
                     keeper.add(member)
                 clusters.remove(other)
             keeper.add(signals)
-    incidents = [
-        _build_incident(cluster, dictionary, events, auth_failure_threshold, gap_ms)
-        for cluster in clusters
-    ]
+    incidents = []
+    for cluster in clusters:
+        incident = _build_incident(
+            cluster,
+            dictionary,
+            events,
+            auth_failure_threshold,
+            gap_ms,
+            muted_uids=frozenset(
+                member.uid for member in cluster.members if member.uid in muted_uids
+            ),
+        )
+        incident["learned_rules"] = learned_refs_for_uids(
+            [member.uid for member in cluster.members], findings_by_uid
+        )
+        incidents.append(incident)
     return sorted(
         incidents, key=lambda item: (item["first_seen"], item["correlation_key"])
     )

@@ -1226,3 +1226,38 @@ rules back to Wazuh (shadow first, human approval).
   `make test` (979 passed with Postgres), and gitleaks (Passed).
   No paid API called, nothing executed against a server. Compose
   Postgres left running. Awaiting maintainer commit.
+- 2026-10-31: shipped the live path (detection-engineer, with a
+  security-reviewer pass). `corvus wazuh poll [--once | --interval
+  SECONDS]` reads alerts through `WazuhAdapter.stream_alerts`
+  (settings from `WAZUH_INDEXER_URL/USER/PASSWORD/CA` only, TLS stays
+  on, credentials never in logs/errors/argv/DB), resumes from the
+  checkpoints table, normalizes with the alert-hit mapper, writes a
+  live replay-format store (provenance: index plus document id), and
+  correlates/upserts incidents with no model call; `--with-archives`
+  pulls host/window context per new incident and says plainly when
+  the archives index returns nothing. Attribution
+  (`corvus/live/attribution.py`): native-id join plus pair join via
+  the shared `corvus_<sigma id>` group (the second native id is the
+  next free id at export time, not anchor+1); incidents/findings
+  carry rule id, Sigma id, version, shadow/active mode, lineage id;
+  shadow and unknown findings never raise severity (recorded in
+  `severity_factors.learned_rule_muting`), exposed read-only in the
+  incidents API. `corvus rules ledger-check --start/--end
+  [--expect-zero]` groups `llm_attempts`/`spend` by purpose/model;
+  each cycle also writes a `wazuh_poll_cycles` row. New migration
+  `0008_live_poll.sql` (`incidents.learned_rules`,
+  `wazuh_poll_cycles`); additive `last_provenance` capture on the
+  adapter. `tests/test_wazuh_live.py` (18 tests) uses verbatim lab
+  shadow lines (2 sudo, 5 auditd of 313) for the pair fixtures plus
+  stand-in transports for pages/overlap/out-of-order/malformed/5 MB/
+  unicode+injection/non-numeric id/unknown 100999/401/500/timeout/TLS/
+  crash-resume/double-run/ledger windows/no-llm-rows. Failures found
+  first: 2 wrong test expectations (JSON-escaped raw check, late-doc
+  timestamp), 1 empty-cycle archives flag fixed in product, 1 incident
+  key-set test updated for the new contract. Verified with `make
+  lint` (green: ruff check, format, mypy on 76 files), the full
+  `make test` (997 passed with Postgres), eval harness to throwaway
+  reports (every metric delta +0, both gates pass, 240 s wall), and
+  gitleaks over every changed file (no leaks). No paid API called,
+  nothing executed against a server. Compose Postgres left running.
+  Awaiting maintainer commit.

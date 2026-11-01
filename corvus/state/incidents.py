@@ -64,6 +64,7 @@ def upsert_incidents(database_url: str, incidents: Sequence[Mapping[str, Any]]) 
             incident["severity_floor"],
             incident["severity_id"],
             Jsonb(incident["severity_factors"]),
+            Jsonb(incident.get("learned_rules") or []),
         )
         for incident in incidents
     ]
@@ -73,8 +74,8 @@ def upsert_incidents(database_url: str, incidents: Sequence[Mapping[str, Any]]) 
                 "INSERT INTO incidents (correlation_key, title, entity_keys, "
                 "techniques, event_uids, first_seen, last_seen, "
                 "deterministic_score, severity_floor, severity_id, "
-                "severity_factors, updated_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()) "
+                "severity_factors, learned_rules, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()) "
                 "ON CONFLICT (correlation_key) DO UPDATE SET "
                 "title = EXCLUDED.title, "
                 "entity_keys = EXCLUDED.entity_keys, "
@@ -88,6 +89,7 @@ def upsert_incidents(database_url: str, incidents: Sequence[Mapping[str, Any]]) 
                 "EXCLUDED.severity_floor AND EXCLUDED.severity_floor + 1 "
                 "THEN incidents.severity_id ELSE EXCLUDED.severity_floor END, "
                 "severity_factors = EXCLUDED.severity_factors, "
+                "learned_rules = EXCLUDED.learned_rules, "
                 "updated_at = NOW()",
                 rows,
             )

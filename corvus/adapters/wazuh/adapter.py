@@ -143,6 +143,13 @@ class WazuhAdapter:
         self._overlap_seconds = overlap_seconds
         self._database_url = database_url
         self.unmapped_counts: dict[tuple[str, str | None], int] = {}
+        #: Provenance of the records the last ``stream_alerts`` call
+        #: emitted: ``metadata.uid`` -> ``(index, document _id)``.
+        #: Reset on every call; the live poll reads it to write a
+        #: live replay-format store without touching the OCSF records.
+        self.last_provenance: dict[str, tuple[str, str]] = {}
+        #: Same, for the last ``query_events`` call (archive context).
+        self.last_archive_provenance: dict[str, tuple[str, str]] = {}
 
     @classmethod
     def from_settings(
@@ -294,6 +301,7 @@ class WazuhAdapter:
                 f"page_size must be 1..{MAX_STREAM_PAGE_SIZE}, got {page_size}"
             )
         cursor = since or self._load_cursor() or Cursor()
+        self.last_provenance = {}
         seen: set[str] = {uid for _, uid in cursor.seen}
         if cursor.last_time is not None:
             query: dict[str, Any] = {
@@ -315,6 +323,10 @@ class WazuhAdapter:
                 break
             if not isinstance(hit, dict):
                 continue
+            provenance = (
+                str(hit.get("_index") or ""),
+                str(hit.get("_id") or ""),
+            )
             try:
                 finding, event, unmapped_key = map_alert(hit)
             except ValueError:
@@ -331,6 +343,7 @@ class WazuhAdapter:
                 collected.append(record)
                 emitted.append((record.time, uid))
                 seen.add(uid)
+                self.last_provenance[uid] = provenance
                 if len(collected) >= page_size:
                     break
         if not collected:
@@ -408,6 +421,7 @@ class WazuhAdapter:
             raise ValueError(f"start {start} is after end {end}")
         query = self._archive_query(entity, start, end)
         wanted = set(classes) if classes is not None else None
+        self.last_archive_provenance = {}
         matched: list[OcsfEvent] = []
         search_after: list[Any] | None = None
         pit_id = self._client.create_pit(ARCHIVES_INDEX, _PIT_KEEP_ALIVE)
@@ -443,6 +457,10 @@ class WazuhAdapter:
                     if wanted is not None and event.class_uid not in wanted:
                         continue
                     matched.append(event)
+                    self.last_archive_provenance[event.metadata.uid or ""] = (
+                        str(hit.get("_index") or ""),
+                        str(hit.get("_id") or ""),
+                    )
                 last = batch[-1]
                 search_after = last.get("sort")
                 if not isinstance(search_after, list) or not search_after:

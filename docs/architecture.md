@@ -350,6 +350,50 @@ or model inputs. Details: `datasets/README.md`.
   and deployment stay `NotImplementedError` for the shadow-deployment
   milestone; server API with a limited role for logtest, rule files,
   CDB lists, config validation and manager restart.
+- Live poll (`corvus wazuh poll [--once | --interval SECONDS]`, no model
+  calls on this path): reads new alerts through
+  `WazuhAdapter.stream_alerts` (settings from `WAZUH_INDEXER_URL` /
+  `WAZUH_INDEXER_USER` / `WAZUH_INDEXER_PASSWORD` /
+  `WAZUH_INDEXER_CA` only; TLS verification stays on; credentials
+  never appear in logs, errors, argv, or the database), keeps its
+  cursor in the `checkpoints` table (resumable after a crash, overlap
+  handled, idempotent by document id), normalizes with the alert-hit
+  mapper, writes events and findings into a live replay-format store
+  (`--store`, default `data/live`; provenance is the index name plus
+  the document id instead of a file and line), correlates the store
+  into incidents and upserts them. Findings come from each alert's
+  own rule block; the Sigma engine over live events stays out of this
+  path. Bounded per cycle: page size (`--page-size`, max 1000), max
+  documents (`--max-docs`), backoff with jitter on indexer errors, a
+  hard 30 s read timeout per request, clean stop on SIGINT/SIGTERM.
+  `--with-archives` fetches the surrounding raw events for the host
+  and time window of each new incident via `query_events` (capped by
+  `--archives-limit`) so the analysis loop's `get_events` has
+  context; the cycle reports how many were added and says plainly
+  when the archives index returns nothing. Correlation windows come
+  from `CORRELATION_SESSION_GAP_MINUTES` /
+  `CORRELATION_MAX_SPAN_HOURS` /
+  `CORRELATION_AUTH_FAILURE_THRESHOLD` (else the correlate
+  defaults), so the poll never requires model settings to run.
+  Learned-rule attribution (`corvus/live/attribution.py`): a finding
+  whose rule id is in 100000-120000 joins its stored rule by
+  `native_rule_id`, and a sudo/auditd pair joins by its shared
+  `corvus_<sigma id>` group; the incident and the finding carry the
+  reference (rule record id, Sigma id, version, mode shadow/active,
+  lineage id), exposed read-only in the incidents API. Shadow
+  findings (group `corvus_shadow`) never raise incident severity,
+  never notify (no notification path exists), and read visibly
+  different through that reference; an in-range id matching no stored
+  rule is kept, flagged `unknown_learned_rule`, never trusted, never
+  raising severity. Every cycle writes one `wazuh_poll_cycles` row
+  (counts only, including learned/shadow/unknown findings), and
+  `corvus rules ledger-check --start ISO --end ISO [--expect-zero]`
+  prints the `llm_attempts`/`spend` rows of a window grouped by
+  purpose and model (non-zero exit with `--expect-zero` when any
+  exist), so the no-model proof never depends on log scraping.
+  The operator reaches the indexer through a local port forward to
+  the manager host; the forward command and any address stay outside
+  the repository (local shell / env file only, never committed).
 - `ReplayAdapter`: public datasets normalized with `corvus replay load`
   into per-file events/provenance Parquet under `data/replay/`
   (explicit schemas, batched streaming, atomic writes) and queried
@@ -398,6 +442,9 @@ or model inputs. Details: `datasets/README.md`.
   `work_queue.dedupe_key` for enqueueing. Analyst dispositions
   delete-restrict their incident and rule, so verdicts are never removed
   silently, and native rule ids stay inside the local 100000–120000
+  range; `0008_live_poll.sql` adds the read-only
+  `incidents.learned_rules` attribution array and the per-cycle
+  `wazuh_poll_cycles` bookkeeping table.
   range.
 - Durable queue (`corvus/state/queue.py`, `WorkQueue` over `work_queue`;
   no migration beyond `0002` was needed). Delivery is at-least-once, so

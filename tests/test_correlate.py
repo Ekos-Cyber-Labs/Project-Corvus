@@ -648,7 +648,9 @@ def test_incident_shape_is_serializable() -> None:
         "severity_floor",
         "severity_id",
         "severity_factors",
+        "learned_rules",
     }
+    assert incident["learned_rules"] == []
     assert set(incident["entity_keys"]) == {
         "hosts",
         "users",
