@@ -476,7 +476,17 @@ def transition_rule(
             current = cur.fetchone()
             if current is None:
                 raise ValueError(f"unknown rule id {rule_id}")
-            locked_status, lineage = str(current[0]), dict(current[1])
+            raw_lineage = current[1]
+            if raw_lineage is None:
+                lineage = {}
+            elif isinstance(raw_lineage, Mapping):
+                lineage = dict(raw_lineage)
+            else:
+                raise ValueError(
+                    f"rule {rule_id} has invalid lineage "
+                    f"{type(raw_lineage).__name__}, expected an object"
+                )
+            locked_status = str(current[0])
             if from_status is not None and locked_status != str(from_status):
                 raise ValueError(
                     f"rule {rule_id} is {locked_status}, "

@@ -19,11 +19,12 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from sigma.collection import SigmaCollection
 from sigma.rule import SigmaRule
 
 from corvus.adapters.replay import load_path
-from corvus.adapters.replay.schema import findings_dir
+from corvus.adapters.replay.schema import events_dir, findings_dir
 from corvus.attack.dictionary import AttackDictionary
 from corvus.detect import backend as backend_mod
 from corvus.detect import mapping as mapping_mod
@@ -1408,3 +1409,214 @@ level: high
     assert stats.skip_details["unmapped_field"] == {
         "linux/process_creation ParentImage": 1
     }
+
+
+def _event_idx_of(row: dict) -> object:
+    """Return the raw-record EventIdx carried inside a stored event row."""
+    import json as json_module
+
+    outer = json_module.loads(row["event_json"])
+    inner = json_module.loads(outer["raw_data"])
+    return inner.get("EventIdx")
+
+
+def _inject_surrogate_commandline(replay_dir: Path, event_idx: int, value: str) -> None:
+    """Rewrite one stored row's raw CommandLine to a hostile value.
+
+    Simulates a row whose ``event_json`` carries a lone surrogate as
+    an ASCII escape (it survives Parquet as ASCII and ``json.loads``
+    brings the character back): the stored text keeps the escape while
+    the decoded ``raw_data`` string holds the real surrogate, like a
+    legacy unsanitized row. The typed slots stay clean; only the raw
+    record carries the hostile text.
+    """
+    import json as json_module
+
+    import pyarrow.parquet as parquet_module
+
+    from corvus.adapters.replay.schema import EVENTS_SCHEMA, events_dir
+
+    table = parquet_module.read_table(events_dir(replay_dir))
+    rows = table.to_pylist()
+    touched = 0
+    for row in rows:
+        outer = json_module.loads(row["event_json"])
+        inner = json_module.loads(outer["raw_data"])
+        if inner.get("EventIdx") == event_idx:
+            inner["CommandLine"] = value
+            inner_text = json_module.dumps(inner)
+            # Unescape the surrogate into the raw text itself, so one
+            # ``json.loads`` of ``event_json`` returns the character
+            # (the outer dump re-escapes it for storage).
+            inner_text = inner_text.replace("\\udc80", "\udc80")
+            assert "\udc80" in inner_text
+            outer["raw_data"] = inner_text
+            row["event_json"] = json_module.dumps(outer)
+            touched += 1
+    assert touched == 1, f"expected one row with EventIdx {event_idx}"
+    import pyarrow as arrow_module
+
+    fixed = arrow_module.table(
+        {name: [row.get(name) for row in rows] for name in EVENTS_SCHEMA.names},
+        schema=EVENTS_SCHEMA,
+    )
+    target = sorted(events_dir(replay_dir).glob("*.parquet"))[0]
+    parquet_module.write_table(fixed, target)
+
+
+def test_surrogate_row_sanitized_group_still_evaluated(tmp_path: Path) -> None:
+    """A lone surrogate in one row is U+FFFD; the good rows still match."""
+    good = proc_record(EventIdx=501)
+    bad = proc_record(EventIdx=502)
+    good2 = proc_record(EventIdx=503)
+    replay_dir = write_store(tmp_path, [good, bad, good2])
+    _inject_surrogate_commandline(replay_dir, 502, "C:\\Windows\\x.exe \udc80-arg")
+    rules_dir = write_rules(
+        tmp_path,
+        [
+            make_rule(
+                "surrogate-kw",
+                PROC_LOGSOURCE,
+                "  selection:\n"
+                "    Image|contains: 'powershell'\n"
+                "  keywords:\n"
+                "    - 'powershell'\n"
+                "  condition: selection and keywords\n",
+            )
+        ],
+    )
+    matches, _, eval_stats, compiled = run_detect(replay_dir, rules_dir)
+    assert len(compiled) == 1
+    assert eval_stats.rules_errored == {}
+    assert eval_stats.sanitized_rows == 1
+    assert eval_stats.groups["process_creation"]["sanitized"] == 1
+    import pyarrow.parquet as parquet_module
+
+    uids = {
+        _event_idx_of(row): row["uid"]
+        for row in parquet_module.read_table(events_dir(replay_dir)).to_pylist()
+    }
+    assert uids[501] in matches[compiled[0].rule_id]
+    assert uids[503] in matches[compiled[0].rule_id]
+
+
+def test_sanitize_slice_rows_replaces_surrogates_only() -> None:
+    """Surrogates become U+FFFD; NUL and non-strings pass through."""
+    from corvus.detect.engine import sanitize_slice_rows
+
+    rows = [
+        {"uid": "a", "CommandLine": "x\udc80y", "count": 3},
+        {"uid": "b", "CommandLine": "nul\x00here", "other": None},
+    ]
+    assert sanitize_slice_rows(rows) == 1
+    assert rows[0]["CommandLine"] == "x\ufffdy"
+    assert rows[0]["count"] == 3
+    assert rows[1]["CommandLine"] == "nul\x00here"
+
+
+def _two_group_rules() -> list[str]:
+    """One process_creation rule plus one network_connection rule."""
+    return [
+        make_rule(
+            "proc-boom",
+            PROC_LOGSOURCE,
+            "  selection:\n    Image|contains: 'powershell'\n  condition: selection\n",
+        ),
+        make_rule(
+            "net-ok",
+            NET_LOGSOURCE,
+            "  selection:\n    DestinationPort: 443\n  condition: selection\n",
+        ),
+    ]
+
+
+def _two_group_store(tmp_path: Path) -> Path:
+    network = dict(fx.flat_sysmon_network())
+    network["EventIdx"] = 602
+    return write_store(tmp_path, [proc_record(EventIdx=601), network])
+
+
+def test_slice_load_failure_errors_only_its_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slice failure marks its group's rules errored; others still run."""
+    import corvus.detect.engine as engine_module
+    from corvus.detect.mapping import GROUPS
+
+    replay_dir = _two_group_store(tmp_path)
+    rules_dir = write_rules(tmp_path, _two_group_rules())
+    from corvus.detect.rules import load_rules
+
+    compiled, _ = load_rules(rules_dir)
+    assert len(compiled) == 2
+    by_group = {rule.rule_id: rule.group for rule in compiled}
+    proc_id = next(rid for rid, grp in by_group.items() if grp == "process_creation")
+    net_id = next(rid for rid, grp in by_group.items() if grp == "network_connection")
+    original = engine_module._load_slice
+
+    def _boom(connection: object, group: object, rows: list[dict]) -> None:
+        if group is GROUPS["process_creation"]:
+            raise RuntimeError("injected slice failure")
+        return original(connection, group, rows)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(engine_module, "_load_slice", _boom)
+    matches, _, eval_stats = engine_module.evaluate(replay_dir, compiled)
+    assert proc_id in eval_stats.rules_errored
+    assert "RuntimeError" in eval_stats.rules_errored[proc_id]
+    assert proc_id not in matches
+    assert net_id in matches
+    assert len(matches[net_id]) == 1
+    assert eval_stats.rules_run == 2
+    assert eval_stats.groups["process_creation"]["error"] == "RuntimeError"
+
+
+def test_iter_rows_failure_errors_only_its_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row-extraction failure marks its group's rules errored."""
+    import corvus.detect.engine as engine_module
+
+    replay_dir = _two_group_store(tmp_path)
+    rules_dir = write_rules(tmp_path, _two_group_rules())
+    from corvus.detect.rules import load_rules
+
+    compiled, _ = load_rules(rules_dir)
+    by_group = {rule.rule_id: rule.group for rule in compiled}
+    proc_id = next(rid for rid, grp in by_group.items() if grp == "process_creation")
+    net_id = next(rid for rid, grp in by_group.items() if grp == "network_connection")
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("injected row failure")
+
+    monkeypatch.setattr(engine_module, "_iter_group_rows", _boom)
+    matches, _, eval_stats = engine_module.evaluate(replay_dir, compiled)
+    assert proc_id in eval_stats.rules_errored or net_id in eval_stats.rules_errored
+    assert eval_stats.rules_run == 2
+    assert len(eval_stats.rules_errored) == 2
+
+
+def test_slice_keyboard_interrupt_and_system_exit_propagate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KeyboardInterrupt and SystemExit are never converted to rule errors."""
+    import corvus.detect.engine as engine_module
+
+    replay_dir = _two_group_store(tmp_path)
+    rules_dir = write_rules(tmp_path, _two_group_rules())
+    from corvus.detect.rules import load_rules
+
+    compiled, _ = load_rules(rules_dir)
+
+    def _interrupt(*args: object, **kwargs: object) -> object:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(engine_module, "_load_slice", _interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        engine_module.evaluate(replay_dir, compiled)
+
+    def _exit(*args: object, **kwargs: object) -> object:
+        raise SystemExit(1)
+
+    monkeypatch.setattr(engine_module, "_load_slice", _exit)
+    with pytest.raises(SystemExit):
+        engine_module.evaluate(replay_dir, compiled)

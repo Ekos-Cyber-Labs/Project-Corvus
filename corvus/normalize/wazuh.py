@@ -354,13 +354,20 @@ def _int(value: Any) -> int | None:
     return None
 
 
-def _device(source: dict[str, Any]) -> Device | None:
-    """Build the device from the alert ``agent`` block."""
+def _device(source: dict[str, Any], unmapped: dict[str, Any]) -> Device | None:
+    """Build the device from the alert ``agent`` block.
+
+    The agent name and ip land in typed slots (and entity keys), so
+    both are capped at :data:`WAZUH_RAW_DATA_CAP` with the original
+    length in ``unmapped``.
+    """
     agent = source.get("agent")
     if not isinstance(agent, dict):
         return None
-    hostname = _str(agent.get("name"))
-    ip = _str(agent.get("ip"))
+    hostname = _cap_typed(
+        _str(agent.get("name")), unmapped, "wazuh.agent_name_truncated"
+    )
+    ip = _cap_typed(_str(agent.get("ip")), unmapped, "wazuh.agent_ip_truncated")
     if hostname is None and ip is None:
         return None
     return Device(hostname=hostname, ip=ip, type="Unknown", type_id=0)
@@ -497,6 +504,24 @@ def _cap_raw_leaves(value: Any, truncated: dict[str, int], path: str = "$") -> A
             _cap_raw_leaves(item, truncated, f"{path}[{index}]")
             for index, item in enumerate(value)
         )
+    return value
+
+
+def _cap_typed(value: str | None, unmapped: dict[str, Any], key: str) -> str | None:
+    """Truncate a typed-slot string to :data:`WAZUH_RAW_DATA_CAP`.
+
+    The same documented bound as :data:`WAZUH_RAW_DATA_CAP` (asserted
+    equal to the Windows ``WINDOWS_TEXT_CAP``) applies to every string
+    the mappers copy into a typed slot, a finding title or an entity
+    key; longer values truncate here and the original length lands in
+    ``unmapped[key]``. The attacker-controlled Linux user name keeps
+    its own shorter :data:`LINUX_USERNAME_CAP` and never routes here.
+    """
+    if value is None:
+        return None
+    if len(value) > WAZUH_RAW_DATA_CAP:
+        unmapped[key] = len(value)
+        return value[:WAZUH_RAW_DATA_CAP]
     return value
 
 
@@ -754,6 +779,7 @@ def _map_sshd(
         # record without any user has no typed form.
         raise ValueError("sshd record has no user")
     user = User(name=username)
+    ip = _cap_typed(ip, unmapped, "wazuh.src_ip_truncated")
     endpoint: Endpoint | None = None
     if ip is not None or port is not None:
         endpoint = Endpoint(ip=ip, port=port)
@@ -788,14 +814,20 @@ def _map_sudo(
     ``command`` is the launched command line. Records without a command
     have no process to type, so they count as unmapped.
     """
-    command = _str(fields.get("command"))
+    unmapped: dict[str, Any] = {}
+    command = _cap_typed(
+        _str(fields.get("command")), unmapped, "wazuh.command_truncated"
+    )
     if command is None:
         raise ValueError("sudo record has no command")
     argv0 = command.split()[0]
     name = argv0.rsplit("/", 1)[-1] or None
-    invoking = _str(fields.get("srcuser"))
-    effective = _str(fields.get("dstuser"))
-    unmapped: dict[str, Any] = {}
+    invoking = _cap_typed(
+        _str(fields.get("srcuser")), unmapped, "wazuh.srcuser_truncated"
+    )
+    effective = _cap_typed(
+        _str(fields.get("dstuser")), unmapped, "wazuh.dstuser_truncated"
+    )
     for key in ("tty", "pwd"):
         value = _str(fields.get(key))
         if value is not None:
@@ -1182,11 +1214,14 @@ def _map_audit(
         replacements += blob["proctitle"]["replacements"]
     if command is None:
         command = _str(audit.get("command"))
-    exe = _str(audit.get("exe"))
+    unmapped: dict[str, Any] = {}
+    command = _cap_typed(command, unmapped, "wazuh.audit_command_truncated")
+    exe = _cap_typed(_str(audit.get("exe")), unmapped, "wazuh.audit_exe_truncated")
     if command is None and exe is None:
         raise ValueError("audit record has no command or exe")
     invoked, effective = _audit_users(audit)
-    unmapped: dict[str, Any] = {}
+    invoked = _cap_typed(invoked, unmapped, "wazuh.audit_actor_truncated")
+    effective = _cap_typed(effective, unmapped, "wazuh.audit_user_truncated")
     for key in ("type", "id", "arch", "syscall", "success", "tty", "session", "key"):
         value = audit.get(key)
         if _str(value) is not None:
@@ -1259,9 +1294,11 @@ def _map_audit_file(
     candidates = [item for item in blob["paths"] if item not in ("/", ".")]
     if not candidates:
         raise ValueError("auditd file record has no usable PATH")
-    path = candidates[-1]
-    invoked, _ = _audit_users(audit)
     unmapped: dict[str, Any] = {}
+    path = _cap_typed(candidates[-1], unmapped, "wazuh.file_path_truncated")
+    assert path is not None
+    invoked, _ = _audit_users(audit)
+    invoked = _cap_typed(invoked, unmapped, "wazuh.file_actor_truncated")
     for key in ("type", "id", "arch", "syscall", "success", "exit", "key"):
         value = audit.get(key)
         if _str(value) is not None:
@@ -1278,7 +1315,7 @@ def _map_audit_file(
     if blob["cwd"] is not None:
         unmapped["linux.cwd"] = blob["cwd"]
     pid = _int(audit.get("pid"))
-    exe = _str(audit.get("exe"))
+    exe = _cap_typed(_str(audit.get("exe")), unmapped, "wazuh.file_exe_truncated")
     return FileSystemActivity(
         time=time_ms,
         activity_id=_LINUX_FILE_ACTIVITIES[name],
@@ -1324,10 +1361,12 @@ def _map_audit_net(
         raise ValueError("auditd connect record has no decoded peer address")
     success = _str(audit.get("success"))
     activity_id = 1 if success == "yes" else 4
-    invoked, _ = _audit_users(audit)
-    pid = _int(audit.get("pid"))
-    exe = _str(audit.get("exe"))
     unmapped: dict[str, Any] = {}
+    invoked, _ = _audit_users(audit)
+    invoked = _cap_typed(invoked, unmapped, "wazuh.net_actor_truncated")
+    pid = _int(audit.get("pid"))
+    exe = _cap_typed(_str(audit.get("exe")), unmapped, "wazuh.net_exe_truncated")
+    peer_ip = _cap_typed(blob["saddr"]["ip"], unmapped, "wazuh.peer_ip_truncated")
     for key in ("type", "id", "arch", "syscall", "success", "exit", "key"):
         value = audit.get(key)
         if _str(value) is not None:
@@ -1351,7 +1390,7 @@ def _map_audit_net(
             ),
         ),
         device=device,
-        dst_endpoint=Endpoint(ip=blob["saddr"]["ip"], port=blob["saddr"]["port"]),
+        dst_endpoint=Endpoint(ip=peer_ip, port=blob["saddr"]["port"]),
         metadata=_metadata(uid, decoder, device),
         raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
@@ -1417,7 +1456,11 @@ def _map_audit_session(
     if username is None:
         raise ValueError(f"auditd {audit_type} record has no user")
     exe_match = _AUDIT_EXE_MSG.search(full_log)
-    exe = exe_match.group(1).strip('"') if exe_match else _str(audit.get("exe"))
+    exe = _cap_typed(
+        exe_match.group(1).strip('"') if exe_match else _str(audit.get("exe")),
+        unmapped,
+        "wazuh.session_exe_truncated",
+    )
     actor_process = None
     if exe is not None:
         actor_process = Process(
@@ -1475,15 +1518,21 @@ def _map_audit_user_cmd(
         decoded = raw_cmd.decode("utf-8", errors="replace")
         replacements = decoded.count("�")
         command = decoded or None
+    unmapped: dict[str, Any] = {}
+    command = _cap_typed(command, unmapped, "wazuh.user_cmd_truncated")
     if command is None:
         raise ValueError("USER_CMD record has no decodable command")
     uid_match = _AUDIT_UID_OF.search(full_log)
     invoking = uid_match.group(1) if uid_match else _str(audit.get("uid"))
     if invoking is None or invoking.lower() in ("unset", "4294967295"):
         invoking = None
+    invoking = _cap_typed(invoking, unmapped, "wazuh.user_cmd_actor_truncated")
     exe_match = _AUDIT_EXE_MSG.search(full_log)
-    exe = exe_match.group(1).strip('"') if exe_match else _str(audit.get("exe"))
-    unmapped: dict[str, Any] = {}
+    exe = _cap_typed(
+        exe_match.group(1).strip('"') if exe_match else _str(audit.get("exe")),
+        unmapped,
+        "wazuh.user_cmd_exe_truncated",
+    )
     cwd_match = _AUDIT_CWD_MSG.search(full_log)
     if cwd_match is not None:
         unmapped["linux.cwd"] = cwd_match.group(1)
@@ -1560,6 +1609,7 @@ def _map_pam(
         username = _str(fields.get("srcuser")) or _str(fields.get("dstuser"))
     if actor_name is None:
         actor_name = _str(fields.get("srcuser"))
+    actor_name = _cap_typed(actor_name, unmapped, "wazuh.pam_actor_truncated")
     username, capped = _linux_user(username)
     unmapped.update(capped)
     if username is None:
@@ -1606,6 +1656,7 @@ def _map_su(
     invoker = match.group("invoker") if match else _str(fields.get("srcuser"))
     target, capped = _linux_user(target)
     unmapped: dict[str, Any] = dict(capped)
+    invoker = _cap_typed(invoker, unmapped, "wazuh.su_invoker_truncated")
     if match is not None:
         unmapped["linux.tty"] = match.group("tty")
     if target is None:
@@ -1642,12 +1693,14 @@ def _map_syscheck(
     syscheck = fields.get("syscheck")
     if not isinstance(syscheck, dict):
         raise ValueError("syscheck record has no syscheck block")
-    path = _str(syscheck.get("path"))
+    unmapped: dict[str, Any] = {}
+    path = _cap_typed(
+        _str(syscheck.get("path")), unmapped, "wazuh.syscheck_path_truncated"
+    )
     if path is None:
         raise ValueError("syscheck record has no path")
     event = (_str(syscheck.get("event")) or "").lower()
     fingerprints: list[Fingerprint] = []
-    unmapped: dict[str, Any] = {}
     for key, value in syscheck.items():
         text = _str(value)
         if text is None:
@@ -1659,7 +1712,11 @@ def _map_syscheck(
                 caption, algorithm_id = mapped
                 fingerprints.append(
                     Fingerprint(
-                        algorithm=caption, algorithm_id=algorithm_id, value=text
+                        algorithm=caption,
+                        algorithm_id=algorithm_id,
+                        value=_cap_typed(
+                            text, unmapped, "wazuh.syscheck_digest_truncated"
+                        ),
                     )
                 )
                 continue
@@ -1749,7 +1806,8 @@ def _map_event(
                 time_ms = _far_future_ms(raw_stamp)
             except ValueError, TypeError:
                 return None, (decoder, rule_id)
-    device = _device(source)
+    device_unmapped: dict[str, Any] = {}
+    device = _device(source, device_unmapped)
     fields = _data_fields(source)
     try:
         if decoder == "sshd":
@@ -1854,6 +1912,8 @@ def _map_event(
             return None, (decoder, rule_id)
     except ValueError, ValidationError:
         return None, (decoder, rule_id)
+    if device_unmapped and event is not None:
+        event.unmapped.update(device_unmapped)
     return event, None
 
 
@@ -1866,18 +1926,29 @@ def _build_finding(
     decoder: str,
     event: OcsfEvent | None,
 ) -> DetectionFinding:
-    """Build the Detection Finding (2004) for one Wazuh alert."""
+    """Build the Detection Finding (2004) for one Wazuh alert.
+
+    The rule description becomes the finding title (and analytic
+    name/desc), so it is capped at :data:`WAZUH_RAW_DATA_CAP` with the
+    original length in ``unmapped``.
+    """
     rule_id = rule.get("id")
-    description = _str(rule.get("description")) or f"Wazuh rule {rule_id}"
+    unmapped: dict[str, Any] = {}
+    raw_description = _str(rule.get("description")) or f"Wazuh rule {rule_id}"
+    description = _cap_typed(raw_description, unmapped, "wazuh.description_truncated")
+    assert description is not None
     level = _int(rule.get("level"))
     severity_id, severity = severity_for_level(level if level is not None else 0)
     groups = _groups(rule)
+    category = _cap_typed(
+        ",".join(groups) if groups else None, unmapped, "wazuh.category_truncated"
+    )
     firedtimes = _int(rule.get("firedtimes"))
     analytic = Analytic(
         name=description,
         uid=str(rule_id) if rule_id is not None else None,
         desc=description,
-        category=",".join(groups) if groups else None,
+        category=category,
         type="Rule",
         type_id=1,
     )
@@ -1902,7 +1973,6 @@ def _build_finding(
     else:
         related = []
         evidences = None
-    unmapped: dict[str, Any] = {}
     if firedtimes is not None:
         unmapped["firedtimes"] = firedtimes
     return DetectionFinding(
@@ -1964,9 +2034,12 @@ def map_alert(
         if isinstance(decoder_block, dict)
         else _str(decoder_block)
     ) or "unknown"
-    device = _device(source)
+    finding_unmapped: dict[str, Any] = {}
+    device = _device(source, finding_unmapped)
     event, unmapped_key = _map_event(source, f"{alert_id}#event")
     finding = _build_finding(source, rule, alert_id, time_ms, device, decoder, event)
+    if finding_unmapped:
+        finding.unmapped.update(finding_unmapped)
     if source_bad:
         finding.unmapped["wazuh.text_sanitized"] = True
         if event is not None:
@@ -2199,9 +2272,18 @@ def map_linux_doc(
     finding: DetectionFinding | None = None
     if isinstance(rule, dict) and rule.get("id") is not None:
         finding_uid = _str(doc.get("id")) or event_uid
+        finding_unmapped: dict[str, Any] = {}
         finding = _build_finding(
-            doc, rule, finding_uid, time_ms, _device(doc), decoder, event
+            doc,
+            rule,
+            finding_uid,
+            time_ms,
+            _device(doc, finding_unmapped),
+            decoder,
+            event,
         )
+        if finding_unmapped:
+            finding.unmapped.update(finding_unmapped)
     if doc_bad:
         if event is not None:
             event.unmapped["wazuh.text_sanitized"] = True

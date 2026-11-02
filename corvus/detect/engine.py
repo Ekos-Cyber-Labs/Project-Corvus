@@ -35,6 +35,7 @@ __all__ = [
     "MatchedEvent",
     "evaluate",
     "peak_rss_mb",
+    "sanitize_slice_rows",
 ]
 
 #: Rows fetched from DuckDB per batch (bounds result buffering).
@@ -68,8 +69,49 @@ class EvaluateStats:
     matches: int = 0
     events_scanned: int = 0
     events_matched: int = 0
+    sanitized_rows: int = 0
     seconds: float = 0.0
     peak_rss_mb: float = 0.0
+
+
+def _sanitize_surrogates(value: str) -> str:
+    """Replace lone surrogates with U+FFFD (NUL passes through untouched).
+
+    Parquet/Arrow strings must be valid UTF-8: a lone surrogate (which
+    ``event_json`` can carry as an ASCII escape from a hostile or
+    legacy row) raises ``UnicodeEncodeError`` when the slice table is
+    built, losing every rule of the group. NUL handling stays exactly
+    as it is (Arrow and DuckDB accept NUL in strings; only the
+    normalizer/Postgres path rewrites it).
+    """
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return "".join(
+            "\ufffd" if 0xD800 <= ord(char) <= 0xDFFF else char for char in value
+        )
+    return value
+
+
+def sanitize_slice_rows(rows: list[dict[str, Any]]) -> int:
+    """Replace lone surrogates in every extracted string leaf.
+
+    Returns the number of rows where anything was replaced, so the
+    caller can count it under stats. Only ``str`` values are touched;
+    NUL bytes pass through exactly as before.
+    """
+    touched = 0
+    for row in rows:
+        changed = False
+        for key, value in row.items():
+            if isinstance(value, str):
+                fixed = _sanitize_surrogates(value)
+                if fixed != value:
+                    row[key] = fixed
+                    changed = True
+        if changed:
+            touched += 1
+    return touched
 
 
 def peak_rss_mb() -> float:
@@ -209,13 +251,29 @@ def evaluate(
         rules = sorted(by_group[group_name], key=lambda item: item.rule_id)
         group_started = time.monotonic()
         need_fulltext = any(FULLTEXT_COLUMN in rule.sql for rule in rules)
-        rows, group_infos, scanned = _iter_group_rows(
-            files, group, need_fulltext=need_fulltext, raw_fallback=raw_fallback
-        )
+        try:
+            rows, group_infos, scanned = _iter_group_rows(
+                files, group, need_fulltext=need_fulltext, raw_fallback=raw_fallback
+            )
+        except KeyboardInterrupt, SystemExit:
+            raise
+        except Exception as exc:
+            _mark_group_errored(stats, rules, group_name, group_started, exc, 0)
+            continue
         stats.events_scanned += scanned
+        sanitized = sanitize_slice_rows(rows)
+        stats.sanitized_rows += sanitized
         group_matches = 0
         with duckdb.connect() as connection:
-            _load_slice(connection, group, rows)
+            try:
+                _load_slice(connection, group, rows)
+            except KeyboardInterrupt, SystemExit:
+                raise
+            except Exception as exc:
+                _mark_group_errored(
+                    stats, rules, group_name, group_started, exc, len(rows)
+                )
+                continue
             for rule in rules:
                 stats.rules_run += 1
                 try:
@@ -234,6 +292,7 @@ def evaluate(
             "rules": len(rules),
             "rows": len(rows),
             "matches": group_matches,
+            "sanitized": sanitized,
             "seconds": round(time.monotonic() - group_started, 1),
         }
         stats.matches += group_matches
@@ -241,6 +300,33 @@ def evaluate(
     stats.seconds = time.monotonic() - started
     stats.peak_rss_mb = peak_rss_mb()
     return matches, infos, stats
+
+
+def _mark_group_errored(
+    stats: EvaluateStats,
+    rules: list[CompiledRule],
+    group_name: str,
+    group_started: float,
+    exc: BaseException,
+    rows: int,
+) -> None:
+    """Count every rule of a group as errored without aborting evaluate.
+
+    Used when the group's slice cannot be built or loaded (a hostile
+    row, a corrupt file): the other groups still evaluate. Caller
+    arguments are passed explicitly (no loop-variable closure).
+    """
+    for rule in rules:
+        stats.rules_run += 1
+        stats.rules_errored[rule.rule_id] = f"{type(exc).__name__}: {str(exc)[:120]}"
+    stats.groups[group_name] = {
+        "rules": len(rules),
+        "rows": rows,
+        "matches": 0,
+        "sanitized": 0,
+        "seconds": round(time.monotonic() - group_started, 1),
+        "error": f"{type(exc).__name__}",
+    }
 
 
 def _load_slice(

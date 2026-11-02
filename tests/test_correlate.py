@@ -667,15 +667,20 @@ def test_incident_shape_is_serializable() -> None:
     json.dumps(incident)
 
 
-def test_unknown_tactic_uid_raises() -> None:
+def test_unknown_tactic_uid_ignored_and_recorded() -> None:
     attack = _attack()
     finding = make_finding("u1", 0, [], host="web01")
     assert finding.finding_info is not None
     finding.finding_info.attacks = [
         AttackRef(tactic=TacticRef(uid="TA9999", name="Future"), version="v20.0")
     ]
-    with pytest.raises(ValueError, match="TA9999"):
-        correlate_findings([finding], {}, attack)
+    (incident,) = correlate_findings([finding], {}, attack)
+    assert incident["correlation_key"] == "corr-u1"
+    assert incident["severity_factors"]["attack_unknown_tactics"] == {
+        "count": 1,
+        "tactic_ids": ["TA9999"],
+        "contribution": "tactic ids unknown to the dictionary are ignored",
+    }
 
 
 def test_stage_coverage_of_loaded_dictionary() -> None:
@@ -686,3 +691,105 @@ def test_stage_coverage_of_loaded_dictionary() -> None:
     assert len(dictionary.tactic_order) == 15
     assert check_stage_coverage(list(dictionary.tactic_order)) == []
     assert set(STAGE_LEVELS) == set(dictionary.tactic_order)
+
+
+def test_unknown_tactic_real_alert_shape_mixed_batch() -> None:
+    """A real TA9999 alert maps fine and never aborts its batch mates."""
+    import copy
+
+    from corvus.normalize.wazuh import map_alert
+
+    raw = json.loads(
+        (Path(__file__).parent / "fixtures" / "wazuh" / "sudo.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    good_hit = copy.deepcopy(raw)
+    bad_doc = copy.deepcopy(raw["_source"])
+    bad_doc["id"] = "1714651320.19999"
+    bad_doc["rule"]["mitre"] = {
+        "id": ["TA9999"],
+        "tactic": ["Future Tactic"],
+        "technique": [],
+    }
+    bad_hit = {"_id": "alert-doc-ta9999", "_source": bad_doc}
+    good_finding, _, _ = map_alert(good_hit)
+    bad_finding, _, _ = map_alert(bad_hit)
+    attack = _attack()
+    incidents = correlate_findings([bad_finding, good_finding], {}, attack)
+    assert incidents, "the good finding must still produce an incident"
+    recorded = [
+        incident
+        for incident in incidents
+        if "attack_unknown_tactics" in incident["severity_factors"]
+    ]
+    assert recorded, "the TA9999 finding must stay visible in severity_factors"
+    assert recorded[0]["severity_factors"]["attack_unknown_tactics"]["tactic_ids"] == [
+        "TA9999"
+    ]
+    assert good_finding.metadata.uid in recorded[0]["event_uids"]
+
+
+def test_duplicate_finding_uids_counted_once() -> None:
+    """Four inputs with one duplicated uid yield one 3-finding incident."""
+    attack = _attack()
+    first = make_finding("d1", 0, ["T1059"], host="web01")
+    dup = make_finding("d1", 1, ["T1059"], host="web01")
+    other = make_finding("d2", 2, ["T1059"], host="web01")
+    third = make_finding("d3", 3, ["T1059"], host="web01")
+    (incident,) = correlate_findings([dup, third, first, other, dup], {}, attack)
+    assert incident["event_uids"] == ["d1", "d2", "d3"]
+    assert "(3 findings)" in incident["title"]
+    assert "(4 findings)" not in incident["title"]
+    assert incident["first_seen"] == BASE_MS
+
+
+def test_unresolvable_finding_skipped_with_typed_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A finding whose signals raise is skipped; the batch survives."""
+    import corvus.correlate.correlate as correlate_module
+
+    attack = _attack()
+    good = make_finding("g1", 0, ["T1059"], host="web01")
+    bad = make_finding("b1", 1, ["T1059"], host="web01")
+    original = correlate_module._signals_for
+
+    def _fail_once(finding: object, *args: object, **kwargs: object) -> object:
+        assert isinstance(finding, DetectionFinding)
+        if finding.metadata.uid == "b1":
+            raise RuntimeError("injected signals failure")
+        return original(finding, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(correlate_module, "_signals_for", _fail_once)
+    (incident,) = correlate_findings([good, bad], {}, attack)
+    assert incident["event_uids"] == ["g1"]
+    assert incident["severity_factors"]["unresolved_findings"] == {
+        "count": 1,
+        "finding_uids": ["b1"],
+        "contribution": "findings skipped without joining any incident",
+    }
+
+
+def test_signals_keyboard_interrupt_and_system_exit_propagate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KeyboardInterrupt and SystemExit are never swallowed as skips."""
+    import corvus.correlate.correlate as correlate_module
+
+    attack = _attack()
+    good = make_finding("g1", 0, ["T1059"], host="web01")
+
+    def _interrupt(finding: object, *args: object, **kwargs: object) -> object:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(correlate_module, "_signals_for", _interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        correlate_findings([good], {}, attack)
+
+    def _exit(finding: object, *args: object, **kwargs: object) -> object:
+        raise SystemExit(1)
+
+    monkeypatch.setattr(correlate_module, "_signals_for", _exit)
+    with pytest.raises(SystemExit):
+        correlate_findings([good], {}, attack)

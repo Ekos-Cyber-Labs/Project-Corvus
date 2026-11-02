@@ -131,6 +131,7 @@ class _Signals:
     primary_tactic: str | None
     techniques: tuple[str, ...]
     referenced_uids: frozenset[str]
+    unknown_tactics: tuple[str, ...] = ()
 
     @property
     def join_keys(self) -> frozenset[str]:
@@ -176,14 +177,16 @@ class _Cluster:
 
 def _attack_parts(
     finding: DetectionFinding, attack: AttackDictionary
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Resolve a finding's ATT&CK attacks to tactic shortnames and technique ids.
 
     Technique ids resolve through ``revoked-by``; unresolvable
     (unknown, deprecated, revoked-without-replacement) technique ids
     are ignored, never guessed. Tactic-only attacks map their ``TA####``
     uid back to the dictionary shortname; a tactic uid the dictionary
-    does not know raises instead of defaulting.
+    does not know (for example a newer ``TA9999`` the pinned
+    dictionary predates) is ignored the same way and returned as the
+    third tuple element, so one unknown tactic never aborts the batch.
     """
     ta_to_short: dict[str, str] = {}
     for shortname in attack.tactic_order:
@@ -192,6 +195,7 @@ def _attack_parts(
             ta_to_short[tactic.uid] = shortname
     tactics: set[str] = set()
     techniques: set[str] = set()
+    unknown: set[str] = set()
     attacks = finding.finding_info.attacks if finding.finding_info else None
     for ref in attacks or []:
         stated: str | None = (
@@ -211,12 +215,14 @@ def _attack_parts(
             continue
         short = ta_to_short.get(tactic_uid)
         if short is None:
-            raise ValueError(
-                f"finding {finding.metadata.uid} names tactic {tactic_uid} "
-                "unknown to the ATT&CK dictionary"
-            )
+            unknown.add(tactic_uid)
+            continue
         tactics.add(short)
-    return tuple(sorted(tactics)), tuple(sorted(techniques))
+    return (
+        tuple(sorted(tactics)),
+        tuple(sorted(techniques)),
+        tuple(sorted(unknown)),
+    )
 
 
 def _signals_for(
@@ -313,7 +319,7 @@ def _signals_for(
                 getattr(parent, "pid", None) if parent is not None else None,
             )
 
-    tactics, techniques = _attack_parts(finding, attack)
+    tactics, techniques, unknown_tactics = _attack_parts(finding, attack)
     return _Signals(
         uid=uid,
         time=finding.time,
@@ -328,6 +334,7 @@ def _signals_for(
         primary_tactic=primary_of(tactics, attack.tactic_order),
         techniques=techniques,
         referenced_uids=frozenset(referenced),
+        unknown_tactics=unknown_tactics,
     )
 
 
@@ -365,11 +372,41 @@ def _auth_outcome(event: Authentication) -> str | None:
     return None
 
 
+#: One pre-indexed Authentication event for factor 4:
+#: ``(time_ms, outcome, target_user, target_host, uid)``.
+_AuthAttempt = tuple[int, str | None, str | None, str | None, str]
+
+
+def _build_auth_index(events: Mapping[str, OcsfEvent]) -> list[_AuthAttempt]:
+    """Index Authentication events once (time order) for factor 4.
+
+    The old per-cluster scan walked the whole events map for every
+    cluster; this walks it once and each cluster filters the compact
+    list, with byte-identical results.
+    """
+    attempts: list[_AuthAttempt] = []
+    for ref_uid in sorted(events):
+        event = events[ref_uid]
+        if not isinstance(event, Authentication):
+            continue
+        attempts.append(
+            (
+                event.time,
+                _auth_outcome(event),
+                event.entity_keys.user,
+                event.entity_keys.host,
+                ref_uid,
+            )
+        )
+    return attempts
+
+
 def _success_detail(
     cluster: _Cluster,
     events: Mapping[str, OcsfEvent],
     threshold: int,
     window_start_ms: int,
+    auth_index: list[_AuthAttempt] | None = None,
 ) -> dict[str, Any]:
     """Check factor 4 over every matching Authentication event in the map.
 
@@ -379,28 +416,26 @@ def _success_detail(
     user or host of the incident and its time falls inside
     ``[window_start_ms, last_seen]``. Returns whether a success follows
     at least ``threshold`` failures against the same target user/host,
-    with the earliest firing success as the witness.
+    with the earliest firing success as the witness. ``auth_index``
+    (see :func:`_build_auth_index`) avoids re-walking the map once per
+    cluster; results are identical either way.
     """
     failures: dict[tuple[str | None, str | None], list[int]] = {}
     successes: dict[tuple[str | None, str | None], list[tuple[int, str]]] = {}
-    for ref_uid in sorted(events):
-        event = events[ref_uid]
-        if not isinstance(event, Authentication):
+    if auth_index is None:
+        auth_index = _build_auth_index(events)
+    for when, outcome, target_user, target_host, ref_uid in auth_index:
+        if when < window_start_ms or when > cluster.last_seen:
             continue
-        if event.time < window_start_ms or event.time > cluster.last_seen:
-            continue
-        target_user = event.entity_keys.user
-        target_host = event.entity_keys.host
         if target_user not in cluster.users and target_host not in cluster.hosts:
             continue
-        outcome = _auth_outcome(event)
         if outcome is None:
             continue
         target = (target_user, target_host)
         if outcome == "failure":
-            failures.setdefault(target, []).append(event.time)
+            failures.setdefault(target, []).append(when)
         else:
-            successes.setdefault(target, []).append((event.time, ref_uid))
+            successes.setdefault(target, []).append((when, ref_uid))
     best: tuple[int, str, str | None, str | None, int] | None = None
     for target, wins in successes.items():
         prior = sorted(failures.get(target, []))
@@ -431,6 +466,8 @@ def _build_incident(
     auth_failure_threshold: int,
     gap_ms: int,
     muted_uids: frozenset[str] = frozenset(),
+    auth_index: list[_AuthAttempt] | None = None,
+    skipped_uids: tuple[str, ...] = (),
 ) -> Incident:
     """Render one cluster as a plain JSON-serializable incident dict.
 
@@ -440,7 +477,14 @@ def _build_incident(
     techniques, but ``max_severity`` ignores them. When every member
     is muted the severity input falls back to Informational (1) and
     the muting is recorded in ``severity_factors``; incidents without
-    muted members carry no muting key at all.
+    muted members carry no muting key at all. Member findings that
+    named tactic ids the dictionary does not know are recorded under
+    ``severity_factors["attack_unknown_tactics"]`` (count plus sorted
+    ids); findings skipped because their own signals could not be
+    resolved are recorded under
+    ``severity_factors["unresolved_findings"]``. Both keys appear only
+    when non-empty, so batches without them render byte-identical
+    factors.
     """
     tactics = sorted({short for member in cluster.members for short in member.tactics})
     primaries = sorted(
@@ -459,8 +503,15 @@ def _build_incident(
         max_severity = max(member.severity_id for member in trusted)
     else:
         max_severity = 1
+    unknown_tactics = sorted(
+        {tactic for member in cluster.members for tactic in member.unknown_tactics}
+    )
     detail = _success_detail(
-        cluster, events, auth_failure_threshold, cluster.first_seen - gap_ms
+        cluster,
+        events,
+        auth_failure_threshold,
+        cluster.first_seen - gap_ms,
+        auth_index,
     )
     floor, factors = severity_floor(
         tactics, primaries, list(attack.tactic_order), max_severity, detail["fired"]
@@ -473,6 +524,18 @@ def _build_incident(
             "muted_severities": sorted({member.severity_id for member in muted}),
             "shadow_only": not trusted,
             "contribution": "muted findings never raise the incident severity",
+        }
+    if unknown_tactics:
+        factors["attack_unknown_tactics"] = {
+            "count": len(unknown_tactics),
+            "tactic_ids": unknown_tactics,
+            "contribution": "tactic ids unknown to the dictionary are ignored",
+        }
+    if skipped_uids:
+        factors["unresolved_findings"] = {
+            "count": len(skipped_uids),
+            "finding_uids": sorted(skipped_uids),
+            "contribution": "findings skipped without joining any incident",
         }
     breadth = len(primaries)
     score = round(float(floor) + SCORE_BREADTH_STEP * max(breadth - 1, 0), 2)
@@ -522,7 +585,14 @@ def correlate_findings(
 
     ``findings`` arrive in any order; they are processed in canonical
     ``(time, uid)`` order, so shuffling the input changes neither the
-    incidents nor their ``correlation_key`` values. ``events_by_uid``
+    incidents nor their ``correlation_key`` values. Duplicate finding
+    uids collapse to the first in that canonical order, so a doubled
+    input never double-counts. Each finding's signals resolve in
+    isolation: a finding that cannot be resolved (no stable uid, an
+    unreadable attack block) is skipped without aborting the batch
+    and is counted, typed, under
+    ``severity_factors["unresolved_findings"]``; only
+    ``KeyboardInterrupt`` and ``SystemExit`` propagate. ``events_by_uid``
     holds the referenced OCSF events (process lineage) plus the
     Authentication events the success-vs-attempt factor needs: rules
     rarely match each failed logon, so the caller passes those
@@ -531,6 +601,9 @@ def correlate_findings(
     considers every one whose target matches the incident inside
     ``[first_seen - session gap, last_seen]``. Findings without
     referenced events correlate on their evidence context alone.
+    Clusters are indexed by join key (each finding consults only the
+    clusters sharing one of its keys), which keeps the exact same
+    results as the old scan of every cluster at linear cost.
     """
     from corvus.live.attribution import finding_muted, learned_refs_for_uids
 
@@ -538,41 +611,102 @@ def correlate_findings(
     events: Mapping[str, OcsfEvent] = events_by_uid or {}
     gap_ms = int(session_gap.total_seconds() * 1000)
     span_ms = int(max_span.total_seconds() * 1000)
-    findings_by_uid = {finding.metadata.uid or "": finding for finding in findings}
+    canonical = sorted(findings, key=lambda item: (item.time, item.metadata.uid or ""))
+    unique: list[DetectionFinding] = []
+    seen_uids: set[str] = set()
+    for finding in canonical:
+        uid = finding.metadata.uid or ""
+        if uid:
+            if uid in seen_uids:
+                continue
+            seen_uids.add(uid)
+        unique.append(finding)
+    findings_by_uid = {finding.metadata.uid or "": finding for finding in unique}
     muted_uids = frozenset(
         uid for uid, finding in findings_by_uid.items() if finding_muted(finding)
     )
-    ordered = sorted(
-        (_signals_for(finding, events, dictionary) for finding in findings),
-        key=lambda signals: (signals.time, signals.uid),
-    )
+    ordered: list[_Signals] = []
+    skipped: list[str] = []
+    for finding in unique:
+        try:
+            ordered.append(_signals_for(finding, events, dictionary))
+        except KeyboardInterrupt, SystemExit:
+            raise
+        except Exception:
+            skipped.append(finding.metadata.uid or "")
+            continue
+    ordered.sort(key=lambda signals: (signals.time, signals.uid))
+    auth_index = _build_auth_index(events)
     clusters: list[_Cluster] = []
+    by_key: dict[str, set[int]] = {}
+    by_id: dict[int, _Cluster] = {}
+
+    def _index(cluster: _Cluster) -> None:
+        marker = id(cluster)
+        for key in cluster.keys:
+            by_key.setdefault(key, set()).add(marker)
+
+    def _unindex(cluster: _Cluster) -> None:
+        marker = id(cluster)
+        for key in cluster.keys:
+            holders = by_key.get(key)
+            if holders is not None:
+                holders.discard(marker)
+                if not holders:
+                    del by_key[key]
+        by_id.pop(marker, None)
+
     for signals in ordered:
-        candidates = [
-            cluster
-            for cluster in clusters
-            if cluster.keys & signals.join_keys
-            and signals.time - cluster.last_seen <= gap_ms
-            and signals.time - cluster.first_seen <= span_ms
-            and _cross_host_ok(signals, cluster)
-        ]
+        wanted: set[int] = set()
+        for key in signals.join_keys:
+            holders = by_key.get(key)
+            if holders:
+                wanted |= holders
+        # Look the candidates up through the index (never scan every
+        # cluster): order is irrelevant below (singletons use the only
+        # entry, merges keep the minimum by ``(first_seen, key)``).
+        # A cluster failing a time condition now fails it for every
+        # later finding too (times only advance and an unjoined
+        # cluster never changes), so it leaves the index for good;
+        # cross-host misses stay indexed (a later finding may join).
+        # Eviction keeps results identical while bounding the live set
+        # to the time window.
+        candidates = []
+        for marker in wanted:
+            candidate = by_id.get(marker)
+            if candidate is None:
+                continue
+            if (
+                signals.time - candidate.last_seen > gap_ms
+                or signals.time - candidate.first_seen > span_ms
+            ):
+                _unindex(candidate)
+                continue
+            if _cross_host_ok(signals, candidate):
+                candidates.append(candidate)
         if not candidates:
             cluster = _Cluster(key=f"corr-{signals.uid}")
             cluster.first_seen = signals.time
             cluster.add(signals)
             clusters.append(cluster)
+            by_id[id(cluster)] = cluster
+            _index(cluster)
         elif len(candidates) == 1:
             candidates[0].add(signals)
+            _index(candidates[0])
         else:
             keeper = min(candidates, key=lambda item: (item.first_seen, item.key))
             others = [item for item in candidates if item is not keeper]
             for other in others:
+                _unindex(other)
                 for member in sorted(
                     other.members, key=lambda item: (item.time, item.uid)
                 ):
                     keeper.add(member)
                 clusters.remove(other)
             keeper.add(signals)
+            _index(keeper)
+    skipped_uids = tuple(sorted(skipped))
     incidents = []
     for cluster in clusters:
         incident = _build_incident(
@@ -584,6 +718,8 @@ def correlate_findings(
             muted_uids=frozenset(
                 member.uid for member in cluster.members if member.uid in muted_uids
             ),
+            auth_index=auth_index,
+            skipped_uids=skipped_uids,
         )
         incident["learned_rules"] = learned_refs_for_uids(
             [member.uid for member in cluster.members], findings_by_uid

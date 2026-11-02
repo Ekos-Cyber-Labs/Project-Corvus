@@ -245,8 +245,10 @@ def test_wazuh_alert_huge_command_raw_data_capped() -> None:
         truncated = record.unmapped.get("wazuh.raw_data_truncated")
         assert isinstance(truncated, dict)
         assert truncated.get("$.command") == len(big)
-    # The typed command keeps its existing behavior (only raw_data caps).
-    assert event.process is not None and event.process.cmd_line == big
+    # The typed command is capped like every other typed Wazuh slot.
+    assert event.process is not None
+    assert event.process.cmd_line == big[:WAZUH_RAW_DATA_CAP]
+    assert event.unmapped.get("wazuh.command_truncated") == len(big)
 
 
 def test_wazuh_small_alert_raw_data_unchanged() -> None:

@@ -1225,7 +1225,14 @@ class Pseudonymizer:
         return self._ensure_many(pairs)
 
     def _ensure_many(self, items: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
-        """Map each (kind, canonical) pair, allocating missing numbers."""
+        """Map each (kind, canonical) pair, allocating missing numbers.
+
+        Numbers come from the monotonic per-kind counter
+        (``pseudonym_counters``, migration 0012), advanced inside the
+        existing advisory lock: deleting rows never reuses a number.
+        A kind with no counter row yet is seeded from the current
+        table maximum, so pre-counter rows keep their numbers.
+        """
         items = [
             (kind, canonical)
             for kind, canonical in items
@@ -1246,17 +1253,13 @@ class Pseudonymizer:
                 known: dict[tuple[str, str], str] = {
                     (row[0], row[1]): row[2] for row in cur.fetchall()
                 }
-                highest: dict[str, int] = {}
-                for (kind, _), pseudonym in known.items():
-                    number = _suffix_number(pseudonym)
-                    if number is not None:
-                        highest[kind] = max(highest.get(kind, 0), number)
+                counters = _load_counters(cur, kinds)
                 mapping: dict[tuple[str, str], str] = dict(known)
+                dirty: set[str] = set()
                 for kind, canonical in ordered:
                     if (kind, canonical) in mapping:
                         continue
-                    highest[kind] = highest.get(kind, 0) + 1
-                    candidate = f"{PREFIX[kind]}-{highest[kind]:04d}"
+                    candidate = f"{PREFIX[kind]}-{counters[kind]:04d}"
                     cur.execute(
                         "INSERT INTO pseudonyms (entity_kind, entity_value, pseudonym)"
                         " VALUES (%s, %s, %s)"
@@ -1276,6 +1279,14 @@ class Pseudonymizer:
                         mapping[kind, canonical] = str(found[0])
                     else:
                         mapping[kind, canonical] = str(row[0])
+                        counters[kind] += 1
+                        dirty.add(kind)
+                for kind in sorted(dirty):
+                    cur.execute(
+                        "UPDATE pseudonym_counters SET next_number = %s"
+                        " WHERE entity_kind = %s",
+                        (counters[kind], kind),
+                    )
             conn.commit()
         return {
             (kind, canonical): mapping[kind, canonical] for kind, canonical in ordered
@@ -1629,6 +1640,47 @@ class Pseudonymizer:
         )
 
 
+def _load_counters(cur: Any, kinds: list[str]) -> dict[str, int]:
+    """Return the next number per kind, reserving every existing number.
+
+    The caller must hold the ``corvus:pseudonyms`` advisory lock: rows
+    are read ``FOR UPDATE`` and every counter is advanced to at least
+    the current table maximum plus one, so pre-counter rows (and rows
+    inserted outside the allocator) keep their numbers and no later
+    run reissues a number that still exists — or that was just purged.
+    """
+    cur.execute(
+        "SELECT entity_kind, next_number FROM pseudonym_counters"
+        " WHERE entity_kind = ANY(%s) FOR UPDATE",
+        (kinds,),
+    )
+    counters: dict[str, int] = {
+        str(kind): int(next_number) for kind, next_number in cur.fetchall()
+    }
+    cur.execute(
+        "SELECT entity_kind, pseudonym FROM pseudonyms WHERE entity_kind = ANY(%s)",
+        (kinds,),
+    )
+    tops: dict[str, int] = {}
+    for kind, pseudonym in cur.fetchall():
+        number = _suffix_number(str(pseudonym))
+        if number is not None:
+            kind = str(kind)
+            tops[kind] = max(tops.get(kind, 0), number)
+    for kind in kinds:
+        wanted = max(counters.get(kind, 0), tops.get(kind, 0) + 1)
+        if counters.get(kind) != wanted:
+            counters[kind] = wanted
+            cur.execute(
+                "INSERT INTO pseudonym_counters (entity_kind, next_number)"
+                " VALUES (%s, %s)"
+                " ON CONFLICT (entity_kind) DO UPDATE SET next_number ="
+                " GREATEST(pseudonym_counters.next_number, EXCLUDED.next_number)",
+                (kind, wanted),
+            )
+    return counters
+
+
 def purge_file_pseudonyms(database_url: str, *, apply: bool = False) -> dict[str, int]:
     """One-off cleanup of wrong pseudonym rows; counts only, no values.
 
@@ -1636,19 +1688,26 @@ def purge_file_pseudonyms(database_url: str, *, apply: bool = False) -> dict[str
     (a known file extension), holds a path separator, or is a domain
     whose short label is already a registered host. A candidate whose
     pseudonym token appears in a stored analysis payload or a
-    persisted agent step is *kept* (it is referenced by stored
-    analyses, so deleting it would lose the reveal mapping); new runs
-    already ignore such rows when building the replacement table, so
-    kept rows cannot poison them. With ``apply`` the unreferenced
-    candidates are deleted in one transaction; without it nothing is
-    written. Returns candidate / referenced-kept / deleted counts.
+    persisted agent step (arguments, result summary, shown or emitted
+    pseudonyms) is *kept* (it is referenced by stored analyses, so
+    deleting it would lose the reveal mapping); new runs already
+    ignore such rows when building the replacement table, so kept rows
+    cannot poison them. With ``apply`` the unreferenced candidates are
+    deleted in one transaction; without it nothing is written. The
+    whole check-and-delete runs under the same advisory lock as
+    allocation, so a concurrent run cannot create a reference between
+    the check and the delete, and the per-kind counters are advanced
+    past every existing number first, so deleted numbers are never
+    reissued. Returns candidate / referenced-kept / deleted counts.
     """
     if not database_url:
         raise ValueError("purge_file_pseudonyms needs a database URL")
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (_LOCK_KEY,))
             cur.execute("SELECT entity_kind, entity_value, pseudonym FROM pseudonyms")
             rows = [(str(k), str(v), str(p)) for k, v, p in cur.fetchall()]
+            _load_counters(cur, sorted({kind for kind, _, _ in rows}))
             hosts = {value for kind, value, _ in rows if kind == "host"}
             candidates: list[str] = []
             for kind, value, pseudonym in rows:
@@ -1676,8 +1735,10 @@ def purge_file_pseudonyms(database_url: str, *, apply: bool = False) -> dict[str
                     " WHERE payload::text LIKE %s)"
                     " OR EXISTS(SELECT 1 FROM agent_steps"
                     " WHERE arguments::text LIKE %s"
-                    " OR COALESCE(result_summary, '') LIKE %s)",
-                    (pattern, pattern, pattern),
+                    " OR COALESCE(result_summary, '') LIKE %s"
+                    " OR shown_pseudonyms::text LIKE %s"
+                    " OR emitted_pseudonyms::text LIKE %s)",
+                    (pattern, pattern, pattern, pattern, pattern),
                 )
                 row = cur.fetchone()
                 if row is not None and bool(row[0]):

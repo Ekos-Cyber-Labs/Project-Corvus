@@ -945,3 +945,48 @@ def test_poll_future_dated_alerts_skipped_without_moving_cursor() -> None:
             assert findings_after == findings
     finally:
         _drop_database(admin_url, name)
+
+
+def test_poll_cycle_with_unknown_tactic_finding_completes_and_saves_cursor() -> None:
+    """A stored TA9999 finding is no poison pill: cycle ok, cursor saved."""
+    import copy
+    import tempfile
+
+    admin_url, name, test_url = _with_test_db()
+    try:
+        with tempfile.TemporaryDirectory(prefix="live-store") as store:
+            poison = copy.deepcopy(_doc("shadow_sudo_100000"))
+            poison["rule"]["mitre"] = {
+                "id": ["TA9999"],
+                "tactic": ["Future"],
+                "technique": [],
+            }
+            poison["id"] = "1793494032.166666"
+            fake = FakeLiveIndexer(
+                alerts=[
+                    _hit(_doc("shadow_sudo_100000"), "alert-doc-sudo"),
+                    _hit(poison, "alert-doc-ta9999"),
+                ]
+            )
+            report = _poll_cycle_for(test_url, Path(store), fake)
+            assert report.findings_written == 2, report
+            assert report.incidents_upserted >= 1, report
+            rows = _cycle_ledger(test_url)
+            assert rows[-1][2] == "ok"
+            stored = _poll_checkpoint(test_url)
+            assert stored.get("last_time") is not None
+            with psycopg.connect(test_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT severity_factors FROM incidents WHERE event_uids @> %s",
+                        (json.dumps(["1793494032.166666"]),),
+                    )
+                    row = cur.fetchone()
+            assert row is not None, "the TA9999 finding must land in an incident"
+            assert row[0]["attack_unknown_tactics"]["tactic_ids"] == ["TA9999"]
+            # The saved cursor makes the retry a clean empty page.
+            again = _poll_cycle_for(test_url, Path(store), fake)
+            assert again.findings_written == 0
+            assert _cycle_ledger(test_url)[-1][2] == "ok"
+    finally:
+        _drop_database(admin_url, name)
