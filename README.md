@@ -1,98 +1,129 @@
 # Project Corvus
 
-An on-prem AI SOC analyst that turns thousands of security alerts into a few explained attack chains, without logs leaving your network.
+On-prem AI SOC analyst for small teams: it turns Wazuh alerts into a few explained attack chains, without logs leaving the network.
 
 ## The problem
 
-Small companies run Linux servers and Windows endpoints, often with Wazuh as their only security tool and no 24/7 SOC. Existing AI SOC tools are enterprise-priced SaaS that require shipping raw logs to a vendor cloud. Real attacks stay buried in uncorrelated alerts.
+Small teams run Linux servers and Windows endpoints with Wazuh as their only security tool and no 24/7 SOC. Existing AI SOC tools are enterprise-priced SaaS that require shipping raw logs to a vendor cloud. Real attacks stay buried in uncorrelated alerts.
 
-## How it works
+## What it does
 
-Corvus is not a SIEM. It plugs into the SIEM the organization already runs (Wazuh): the SIEM detects atomic events and stores logs; Corvus consumes alerts, correlates them into attack chains, reasons over them, and pushes learned rules back. Design: `docs/architecture.md`. Threat model: `docs/threat-model.md`.
+Corvus is not a SIEM. It plugs into the Wazuh SIEM the team already runs: Wazuh detects atomic events and stores logs; Corvus consumes alerts, correlates them into attack chains, reasons over them, and pushes learned rules back.
 
-- Consume Wazuh alerts and archives through a `SiemAdapter` (paged `stream_alerts` with stable per-event uids, strict entity filters, source-grouped inventory); Linux events arrive as Wazuh data, Windows coverage via Wazuh agents and public EVTX datasets through replay. No raw log parsing in hackathon scope.
-- Normalize into OCSF events. No local event store: PostgreSQL is the system of record (checkpoints, work queue, incidents, agent steps, rules, dispositions, pseudonyms, spend, and LLM attempts; migration `0002_core_tables.sql`) and the SIEM stays the log store, queried on demand.
-- Correlate deterministically by host, user, IP, process, and time window, map to MITRE ATT&CK, and set an explainable severity floor (the database keeps `severity_id` within one level above the floor).
-- Triage each cluster on-prem with Muse Glimmer through an async batch queue. Glimmer alone sees raw evidence.
-- Pseudonymize condensed incidents before any external reasoning call.
-- Reason with Muse Spark in a bounded agent loop (`get_events`, `get_attack_technique`) for verdict, timeline, and response in English or Spanish.
-- Draft Sigma rules, backtest them, deploy to Wazuh in shadow mode, and wait for human approval.
-- Review incidents in the web UI and check changes with the eval harness.
-
+```mermaid
+flowchart LR
+    W[Wazuh alerts/archives] --> S[SiemAdapter]
+    S --> O[OCSF events]
+    O --> C[Deterministic correlation + ATT&CK<br/>explainable severity floor]
+    C --> G[Glimmer triage on-prem]
+    G --> P[Pseudonymizer]
+    P --> R[Spark reasoning<br/>bounded tool loop]
+    R --> Sigma[Sigma rule proposal]
+    Sigma --> B[Backtest]
+    B --> SH[Wazuh shadow deployment]
+    SH --> H[Human approval]
 ```
-Wazuh alerts/archives -> SiemAdapter -> OCSF -> correlation plus ATT&CK -> Glimmer triage -> pseudonymizer -> Spark reasoning -> Sigma rule -> backtest -> Wazuh shadow -> human approval
+
+```mermaid
+flowchart TB
+    subgraph onprem [On-prem network]
+        W2[Wazuh alerts, archives, raw logs]
+        G2[Glimmer triage]
+        P2[Pseudonymizer]
+    end
+    subgraph cloud [Cloud, pseudonymized only]
+        R2[Spark reasoning + rule drafting]
+    end
+    W2 --> G2 --> P2 --> R2
 ```
 
-## Why Meta models
+Pipeline, in order (`docs/architecture.md` has the module for each step):
 
-- Muse Glimmer has open weights under Apache 2.0, so high-volume triage runs on hardware the customer owns. We run it on an NVIDIA DGX Spark.
-- Glimmer is distilled from Muse Spark, so on-prem triage and cloud reasoning stay consistent.
-- Muse Spark reasons only over pseudonymized incidents, in English or Spanish.
+1. Wazuh alerts and archives enter through a `SiemAdapter` (`corvus/adapters/wazuh/`, `corvus/adapters/replay/`). No raw log parsing in hackathon scope.
+2. Alerts become OCSF events (pinned schema v1.9.0). There is no local event store: PostgreSQL is the system of record (incidents, queue, checkpoints, agent steps, rules, dispositions, pseudonyms, spend, LLM attempts; migration `corvus/state/migrations/0002_core_tables.sql`). The SIEM stays the log store, queried on demand.
+3. Deterministic correlation (host, user, IP, process, time window) plus MITRE ATT&CK mapping (`corvus/correlate/`, `corvus/attack/`) builds candidate incidents with an explainable severity floor. The database keeps `severity_id` between the floor and one level above it, so models can never silently lower or raise scores.
+4. Muse Glimmer triages each cluster on-prem through an async batch queue (`corvus/llm/triage_worker.py`). Glimmer alone sees raw evidence.
+5. A pseudonymizer (`corvus/guardrails/pseudonymizer.py`) condenses and pseudonymizes the incident before any cloud call.
+6. Muse Spark reasons over the pseudonymized incident in a bounded agent loop with two read-only tools (`get_events`, `get_attack_technique`) and returns verdict, timeline, and response in English or Spanish (`corvus/llm/agent.py`).
+7. Proposed Sigma rules are backtested (`corvus/learning/backtest.py`), deployed to Wazuh in shadow mode (`corvus/learning/wazuh_xml.py`, `corvus/learning/shadow.py`), and need human approval (`corvus rules approve`). Promotion is never a model tool.
+8. A reduced web UI (read-only API) and an eval harness sit alongside.
+
+## Where Meta models are used
+
+Stated exactly as the code does it (`corvus/llm/config.py`, `corvus/llm/prompts/triage.py`):
+
+- On-prem triage: Muse Glimmer, served as model `glimmer` via vLLM at `GLIMMER_BASE_URL` (required, no default) on the team's own hardware. Default purpose config: output cap 4500 tokens, reasoning strength medium via `TRIAGE_REASONING_STRENGTH`, up to 16 concurrent queue workers. Glimmer reads raw evidence and produces the condensed incident.
+- Reasoning and rule drafting: `muse-spark-1.3` at `META_BASE_URL` (`https://api.meta.ai/v1`) with `META_API_KEY`. Default purpose config: output cap 6000 tokens. Spark sees only condensed, pseudonymized incidents.
+- `MODEL_PROFILE` selects the backend per purpose: `hybrid` (default), `all-local` (Glimmer serves both, no cloud key needed), `all-cloud`.
 - Muse Code is the coding agent used to build this repo.
 
-## How we measure it
+## Security by design
 
-Ground truth comes from public attack datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) and Atomic Red Team chains in our own lab. Datasets are fetched reproducibly at pinned revisions with SHA-256 checksums (`scripts/fetch_datasets.py`, see `datasets/README.md`) into git-ignored `data/`; `eval/ground_truth.py` derives per-file ATT&CK labels into `data/ground_truth.json` (technique-level from OTRF metadata, tactic-level from EVTX folders). Alongside the atomic samples, one multi-stage chain (OTRF's APT29 day-1 compound file, day 2 not fetched) is evaluated at chain level only: its ground truth is the ordered 10-step chain in `eval/apt29_day1_ground_truth.json`, with per-step windows, anchors, and technique ids taken from the pinned MITRE emulation plan and resolved to current ATT&CK v20.0 ids (more-specific choices recorded as `refinements`, deprecated plan ids as dropped), because that dataset has no per-event labels and event-level precision cannot be computed on it. Step verdicts and counts reproduce with `eval/apt29_census.py` and are published in `eval/reports/apt29_day1_replay_load.md`. Metrics are attack chains detected, alert-to-incident reduction, false positives (the primary gate), rule precision, injection robustness, cost, and latency. Every published number carries its n, window, and producing script.
+Every Spark call goes through the pseudonymizer; raw events never leave the on-prem path (`corvus/llm/call.py`, `corvus/guardrails/payload.py`). Supporting guardrails:
 
-Results: TBD - published here as they are measured.
+- Secret redaction of command-line passwords and tokens before any cloud call (`corvus/guardrails/egress.py`).
+- Egress allowlist: the HTTP client only talks to the model endpoints and Wazuh; network-level egress stays the operator's firewall.
+- Injection handling: a deterministic pattern detector (`corvus/guardrails/injection.py`) records injection attempts as incident signals; security-validator failures are quarantined, never retried.
+- Spend cap (`SPEND_CAP_USD`, default 100.0) with degraded mode; every model attempt is recorded in `llm_attempts`.
+- Shadow mode: learned rules run without notifying or changing severity until a human approves; rollback is one command (`corvus/learning/shadow.py`).
+- Read-only UI/API: the API serves only `GET` routes plus the UI bundle (`corvus/api/main.py`). The UI has no login; expose it only behind your own access controls.
 
-## Status
+Details and attacker model: `docs/threat-model.md`.
 
-Work in progress, built during the Meta Global AI Developer Hackathon.
+### Known limitations
 
-Run the skeleton stack:
+- Non-service usernames join incidents across hosts (`corvus/correlate/identities.py`), so a shared account name — including a name an attacker types into a failed login — links alerts into one incident.
+- The pseudonymizer hides only entity-shaped spans of registered values; bare words with no recognizable shape pass through verbatim, as do novel encodings such as compressed payloads or short hex (`corvus/guardrails/pseudonymizer.py`).
+- The pseudonymizer registers ordinary words it finds in free text as hosts, and a pseudonym-shaped string typed by an attacker passes through unchanged (`corvus/guardrails/pseudonymizer.py`, `tests/test_pseudonymizer_single_pass.py`).
+- Values that are not mapped to a typed slot are kept whole under `unmapped` in the Windows and Wazuh normalizers; the 65536-character cap applies to typed slots and `raw_data` only (`corvus/normalize/windows.py`, `corvus/normalize/wazuh.py`).
+- The UI has no login in hackathon scope.
+- One-node PostgreSQL; no replica or failover.
 
-- Copy `.env.example` to a file outside the repository (e.g.
-  `/run/corvus/corvus.env`) and fill in secrets. Compose refuses to
-  start when `CORVUS_ENV_FILE` is unset; services read every value
-  from that file.
-- `CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose up --build -d`
-  (Postgres 18: the image stores data at `/var/lib/postgresql/18/docker`
-  and the Compose volume mounts `/var/lib/postgresql`. A volume created by
-  Postgres 16 cannot be reused by 18: recreate the development volume
-  with `docker compose down -v` before the first 18 start. Pre-release,
-  there is no data to migrate.)
-- Apply database migrations with `corvus db migrate` (reads
-  `DATABASE_URL`; idempotent plain SQL in `corvus/state/migrations/`,
-  safe to re-run, concurrent runners are serialized).
-- Health (database plus model reachability): `curl http://127.0.0.1:8000/health`
-  reports `degraded` when the database or the on-prem Glimmer model is
-  unreachable; Muse Spark reachability is informational only.
-- Settings come from the process environment only (`GLIMMER_BASE_URL`
-  is required); no `.env` file inside the repository is ever read.
-- From the dev machine Postgres is at `127.0.0.1:55432`; the test
-  recipe is under `AGENTS.md` Commands. The skeleton was verified
-  with `make lint` and the full `make test`, including the live
-  migration test.
+## Results
 
-## Web UI (read-only)
+Every number below names its producing report. Anything not yet measured is marked so explicitly.
 
-The UI shows what Corvus did — every claim is verifiable against stored
-evidence. It is read-only: there is no write endpoint.
+| What | Number | Source |
+|---|---|---|
+| Replay load, APT29 day-1 file | n=196081 records, 152491 mapped, 43590 unmapped | `eval/reports/apt29_day1_replay_load.md` |
+| Full eval, rules evaluated | n=1792 of 2240 parsed (rest skipped by logsource, status, event id, field) | `eval/reports/latest.md` |
+| Full eval, chain coverage (APT29 day-1, n=10 steps) | best incident covers 8, all incidents cover 8 | `eval/reports/latest.md` |
+| Full eval, atomic technique match | n=53 of 110 in-store files with ground truth (48 exact, 5 parent-only) | `eval/reports/latest.md` |
+| Full eval, benign false positives (declared synthetic, n=312) | n=4 incidents, 0 at Critical or above (gate) | `eval/reports/latest.md` |
+| Model path, Glimmer first-pass validity | 0.8839 over n=112 triage calls | `eval/reports/llm_latest.md` (measured on 2026-11-01 by a local run; the report is regenerated by `corvus eval llm` and is not committed) |
+| Model path, Spark cost | USD 0.043796 per resolved incident (n=5) | `eval/reports/llm_latest.md` (measured on 2026-11-01 by a local run; the report is regenerated by `corvus eval llm` and is not committed) |
+| Model path, day-1 timeline coverage | best 7 of 10 steps, all 9 of 10 | `eval/reports/llm_latest.md` (measured on 2026-11-01 by a local run; the report is regenerated by `corvus eval llm` and is not committed) |
+| Linux shipped rules measured | n=149 inventoried, 73 evaluate, 7 baseline matches on 7 events (n=55794) | `eval/reports/linux_rules_measured.md` |
+| Linux benign baseline census | n=157451 documents, no attack content | `eval/reports/linux_baseline_census.md` |
 
-- Run: `CORVUS_ENV_FILE=/path/outside/repo.env make up`, then open
-  http://127.0.0.1:8000/ . The API and UI are served by the same FastAPI
-  app (`corvus-api`); Postgres and the API bind to `127.0.0.1` only in
-  `docker-compose.yml`. To expose the API elsewhere, change the host side
-  of the `corvus-api` ports mapping (for example `0.0.0.0:8000:8000`) —
-  do this only behind your own access controls, as the UI has no login
-  in hackathon scope.
-- Local UI development: `make ui-build` builds `ui/` to `ui/dist`
-  (git-ignored; the Dockerfile builds it in a Node stage), `make ui-test`
-  runs the frontend tests. They are separate from `make test` because CI
-  may not have Node; run both where Node is available.
-- Pinned UI versions (verified live on 2026-10-30): React 19.3.1,
-  Vite 8.3.5, TypeScript 7.0.2, Vitest 5.0.5.
+Not yet measured: alert-to-incident reduction ratio on live data; injection-robustness score on the current model path; end-to-end latency per incident; live-run precision of a shadow rule promoted to active; Glimmer throughput on the deploy GPU. These rows stay empty until a committed report produces them.
 
-## Built during the hackathon
+## Quickstart
 
-All product code in this repo was written between Oct 27 and Nov 4, 2026. The commit history shows what was built when.
+`corvus version` prints the package version (verified here: `0.1.0`).
+
+From a clean clone:
+
+1. Copy `.env.example` to a file outside the repository and fill in secrets. Compose refuses to start when `CORVUS_ENV_FILE` is unset (verified here: `docker compose config` with it unset fails on all three services).
+2. `CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose up --build -d` (not verified here; needs real secrets).
+3. `corvus db migrate` applies pending SQL migrations (reads `DATABASE_URL`; verified here against scratch database `corvus_test_docsfix` on port 55432, then dropped).
+4. `curl http://127.0.0.1:8000/health` reports database and model reachability (not verified here; needs a running stack).
+5. Fetch public datasets: `python3 scripts/fetch_datasets.py`, then `python3 eval/ground_truth.py --out data/ground_truth.json` (see `datasets/README.md`; downloads pinned revisions with SHA-256 checks; not verified here; large downloads).
+6. Replay demo: `corvus replay load-linux` plus `corvus correlate replay` ran end to end here on a tiny 3-record archive built from `tests/fixtures/linux` (3 events, 3002x2 and 1007x1; correlate stored 0 incidents). Plain `corvus replay load` and `corvus replay detect` need the datasets from step 5. Help verified here: `corvus replay load -h`, `corvus replay detect -h`, `corvus correlate replay -h`, `corvus analyze -h`.
+7. `make lint` (ruff check, ruff format check, mypy; verified here, green) and `make test` (full pytest, not run in this lane; the migration test requires `DATABASE_URL=postgresql://127.0.0.1:55432/corvus_test_<name>`; test recipe in `AGENTS.md`).
+
+## Demo
+
+Three-minute judge script: `docs/demo.md`. It walks the incident list, one explained chain with its evidence, the pseudonymized view the cloud model sees, and the learned rule in shadow mode with its lineage, naming the exact screen and command for each step.
 
 ## Data policy
 
-This repo uses only public datasets or lab-generated data. It contains no customer data.
+Only public datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) or lab-generated data. No customer data, no real names. Most fixtures use reserved documentation ranges and private lab ranges with `example.com`. The Linux corpus (`tests/fixtures/linux/sshd_real_corpus.jsonl` and the tests that use it) is real traffic from our own lab and may contain public addresses of lab hosts and of the people who logged in. Datasets are fetched with checksums and never committed.
+
+## Built during the hackathon
+
+All product code in this repo has been written since Oct 26, 2026, for the Meta Global AI Developer Hackathon. The commit history shows what was built when.
 
 ## License
 
-AGPL-3.0 (see [LICENSE](LICENSE)). Maintained by Ekos Cyber Labs.
-Third-party components keep their own licenses: `httpx2` is BSD-3-Clause (see https://github.com/pydantic/httpx2).
+AGPL-3.0 (see [LICENSE](LICENSE)). Third-party notices: [NOTICE](NOTICE) (MITRE ATT&CK, SigmaHQ rules, OCSF schema).

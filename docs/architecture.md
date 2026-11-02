@@ -10,7 +10,7 @@ organization already runs.
   correlated, learns new detections, and pushes them back to the SIEM as rules.
 - Every attack Corvus catches makes the customer's SIEM better, even when
   Corvus is off.
-- Hackathon scope: Wazuh only. Splunk and Elastic adapters are roadmap.
+- Hackathon scope: Wazuh only. Adapters for other SIEMs are roadmap.
 
 Data flow (hackathon):
 
@@ -69,8 +69,9 @@ cost alone: measured on Oct 27, more reasoning is not always more accurate,
 and the model sometimes stops after reasoning with empty content
 (`finish_reason` `"stop"`). The syntax validator treats empty content as a
 failure: retry up to 3 attempts; if all are empty the cluster is stored as
-`unprocessed` and escalated, never treated as benign. Default: medium,
-`max_tokens` 4200. (Glimmer reasoning arrives in `message.reasoning`; vLLM
+`unprocessed` and escalated, never treated as benign. Default: medium
+(`TRIAGE_REASONING_STRENGTH` in `corvus/llm/prompts/triage.py`), output cap
+4500 tokens (`corvus/llm/config.py`). (Glimmer reasoning arrives in `message.reasoning`; vLLM
 reports `reasoning_tokens` 0 although the tokens are counted in
 `completion_tokens` — see token accounting below.)
 
@@ -179,7 +180,7 @@ finding, inclusive) must hold zero `llm_attempts`/`spend` rows while
 later rows stay reported, never hidden. Ground-truth lines carry
 `expected` (`detect` by default, `miss` where the rule should stay
 silent — anything else refuses) and optional `variant_specific`
-values. Output is `eval/reports/gate2.md` plus `gate2.json`, every
+values. Output is `eval/reports/gate2.md` plus `gate2.json` (written by `corvus eval gate2` and not committed), every
 number with window, n, producing command and git commit.
 
 Sigma is the source format. A stored rule's Sigma id is assigned by
@@ -301,8 +302,8 @@ or model inputs. Details: `datasets/README.md`.
   tokens by channel headers into reasoning, answer and overhead; provider
   usage is used as reported for Spark. Measured per model: first-pass
   validity, average corrections, final failure rate, correction cost.
-  `[ROADMAP]` Circuit breaker, semantic canary, `model_health`
-  (`corvus/llm/health.py`); prompt-injection classifier.
+  `[ROADMAP]` Circuit breaker, semantic canary, model health (no module
+  exists yet: there is no `corvus/llm/health.py`); prompt-injection classifier.
 - Pseudonymizer with a stable `pseudonyms` table: the same entity always maps
   to the same pseudonym within a deployment, so chains stay correlatable
   after pseudonymization. Every Spark call goes through it. For cloud
@@ -346,7 +347,7 @@ or model inputs. Details: `datasets/README.md`.
   Views: incident list, timeline, ATT&CK chain, live agent trace, rules with
   shadow/active status and approve/reject, system health (lag, model latency,
   error/correction rate, spend). Live updates by polling (no SSE/WebSocket);
-  server-side pagination for every list. `[ROADMAP]` Telegram and other
+  server-side pagination for every list. `[ROADMAP]` Chat and webhook
   notifiers.
 
 ### Interfaces, normalization, state
@@ -474,7 +475,7 @@ or model inputs. Details: `datasets/README.md`.
   read-only until alert generation exists (rule methods raise
   `NotImplementedError`; Sigma matching in DuckDB will be
   case-insensitive, `ILIKE`, like Sigma itself).
-  `[ROADMAP]` Splunk and Elastic adapters.
+  `[ROADMAP]` Adapters for other SIEMs.
 - Normalization: everything inside Corvus is OCSF (pinned v1.9.0; classes,
   activity ids, and attributes verified against the schema files,
   extensions such as win included, never written from memory). Classes:
@@ -495,7 +496,8 @@ or model inputs. Details: `datasets/README.md`.
   `work_queue`, `incidents`, `agent_steps`, `rules`, `dispositions`,
   `pseudonyms` (deployment-stable, so the same entity keeps its pseudonym
   across incidents and the UI can map back to real values), `spend`, and
-  `llm_attempts`; `0004_llm_audit.sql` adds the audit-only nullable
+  `llm_attempts`; `0003_severity_factors.sql` records the severity factors
+  behind each floor; `0004_llm_audit.sql` adds the audit-only nullable
   `llm_attempts.reasoning` (stays on-prem) and `token_source`
   (`exact_ids` / `usage` / `estimated`), the `incident_analyses` table
   (one row per incident and stage, `triage` / `analysis`), and
@@ -512,8 +514,13 @@ or model inputs. Details: `datasets/README.md`.
   silently, and native rule ids stay inside the local 100000–120000
   range; `0008_live_poll.sql` adds the read-only
   `incidents.learned_rules` attribution array and the per-cycle
-  `wazuh_poll_cycles` bookkeeping table.
-  range.
+  `wazuh_poll_cycles` bookkeeping table;
+  `0009_rules_sigma_version.sql` keeps one row per (Sigma id, version);
+  `0010_poll_cycle_status.sql` closes poll cycle rows as `failed` with the
+  exception class and counts future-dated alerts; `0011_agent_step_emitted.sql`
+  persists per-step emitted pseudonyms for the analysis verdict scope;
+  `0012_pseudonym_counters.sql` allocates pseudonym numbers from monotonic
+  per-kind counters so deleted rows never reuse a number.
 - Durable queue (`corvus/state/queue.py`, `WorkQueue` over `work_queue`;
   no migration beyond `0002` was needed). Delivery is at-least-once, so
   handlers must be idempotent. Enqueue takes an optional `dedupe_key`:
@@ -564,7 +571,7 @@ or model inputs. Details: `datasets/README.md`.
 
 Brief design notes. Do not implement (AGENTS.md rule 8).
 
-- **Circuit breaker, semantic canary, `model_health`** (`corvus/llm/health.py`):
+- **Circuit breaker, semantic canary, model health** (roadmap, no module exists yet: there is no `corvus/llm/health.py`):
   per-model transport + semantic health. A high semantic failure rate opens
   the breaker even if the endpoint still answers HTTP 200; a restarted model
   receives traffic only after a canary with a known answer (e.g.
@@ -575,7 +582,7 @@ Brief design notes. Do not implement (AGENTS.md rule 8).
 - **Operating modes with schedules**: all-local / hybrid / all-cloud plus
   time-based schedules, and "what would another model cost" estimates from
   the static `price_book`.
-- **Telegram and other notifiers**: outbound incident notifications; additive
+- **Chat and webhook notifiers**: outbound incident notifications; additive
   to the UI, never a substitute for the durable queue.
 - **Hunting in the residual**: Glimmer also reviews alerts not correlated
   into incidents, prioritized by deterministic anomalies.
@@ -588,7 +595,7 @@ Brief design notes. Do not implement (AGENTS.md rule 8).
   the rule to shadow).
 - **CDB indicator lists**: IP/hash/domain indicators go to expiring Wazuh CDB
   lists via `update_list`, never into rules.
-- **Splunk and Elastic adapters**: new `SiemAdapter` implementations; the
+- **Adapters for other SIEMs**: new `SiemAdapter` implementations; the
   core stays interface-only.
 - **Raw Linux log parsers**: auth.log, journald, auditd as direct sources
   for environments without Wazuh coverage.
