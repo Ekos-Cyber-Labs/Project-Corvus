@@ -322,10 +322,8 @@ def test_ip_match_body_covers_variant_spellings() -> None:
     registered from a typed field), so only the variant matcher can
     replace the padded, spaced and hex spellings.
     """
-    from corvus.guardrails.pseudonymizer import (
-        _ip_match_body,
-        _replace_free_text,
-    )
+    from corvus.guardrails.pseudonymizer import _ip_match_body
+    from tests.oracle_pseudonymizer import legacy_replace_free_text
 
     assert _ip_match_body("10.70.1.20") is not None
     assert _ip_match_body("::1") is None
@@ -337,5 +335,5 @@ def test_ip_match_body_covers_variant_spellings() -> None:
         "0x0A460114",
         "0x0a460114",
     ):
-        out = _replace_free_text(f"saw {spelling} today", dict(table), registered)
+        out = legacy_replace_free_text(f"saw {spelling} today", dict(table), registered)
         assert out == "saw IP-0001 today", spelling

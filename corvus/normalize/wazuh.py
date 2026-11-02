@@ -44,6 +44,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import math
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -85,6 +86,7 @@ __all__ = [
     "map_linux_doc",
     "parse_linux_time",
     "parse_wazuh_time",
+    "parse_wazuh_time_unbounded",
     "severity_for_level",
 ]
 
@@ -131,12 +133,27 @@ def parse_wazuh_time(value: str | int | float | None) -> int:
     Accepts the documented alert ``timestamp`` shape
     (``2024-05-02T12:00:00.048+0000``, ``@timestamp`` ISO with ``Z``
     or ``+00:00``) and integer epoch milliseconds. Naive datetimes
-    are read as UTC; anything unparseable raises ``ValueError``.
+    are read as UTC; anything unparseable, non-finite, before
+    2000-01-01 UTC or after 2100-01-01 UTC raises ``ValueError``
+    (never ``OverflowError``).
     """
+    from corvus.normalize.ocsf import MAX_TIME_MS, MIN_TIME_MS
+
     if isinstance(value, bool):
         raise ValueError(f"wazuh timestamp {value!r} is not a time")
     if isinstance(value, (int, float)):
-        return int(value)
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"wazuh timestamp {value!r} is not a time")
+        try:
+            ms = int(number)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError(f"wazuh timestamp {value!r} is not a time") from exc
+        if ms < MIN_TIME_MS:
+            raise ValueError(f"wazuh timestamp {value!r} is before 2000-01-01 UTC")
+        if ms > MAX_TIME_MS:
+            raise ValueError(f"wazuh timestamp {value!r} is after 2100-01-01 UTC")
+        return ms
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"wazuh timestamp {value!r} is not a time")
     text = value.strip()
@@ -151,7 +168,72 @@ def parse_wazuh_time(value: str | int | float | None) -> int:
         raise ValueError(f"wazuh timestamp {value!r} is not ISO-8601") from None
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
-    return int(moment.timestamp() * 1000)
+    try:
+        ms = int(moment.timestamp() * 1000)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError(f"wazuh timestamp {value!r} is not a time") from exc
+    if ms < MIN_TIME_MS:
+        raise ValueError(f"wazuh timestamp {value!r} is before 2000-01-01 UTC")
+    if ms > MAX_TIME_MS:
+        raise ValueError(f"wazuh timestamp {value!r} is after 2100-01-01 UTC")
+    return ms
+
+
+def parse_wazuh_time_unbounded(value: str | int | float | None) -> int:
+    """Parse a Wazuh timestamp without the 2000/2100 window checks.
+
+    Same shapes and ``ValueError``-only errors as
+    :func:`parse_wazuh_time`, but no floor or ceiling: far-future
+    alert timestamps (for example year 2999) still parse so the live
+    poll can count them as ``future_dated`` and withhold checkpoint
+    progress instead of dropping them as unmapped.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"wazuh timestamp {value!r} is not a time")
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"wazuh timestamp {value!r} is not a time")
+        try:
+            return int(number)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError(f"wazuh timestamp {value!r} is not a time") from exc
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"wazuh timestamp {value!r} is not a time")
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    match = re.match(r"^(.*)([+-])(\d{2})(\d{2})$", text)
+    if match and ":" not in text[-3:]:
+        text = f"{match.group(1)}{match.group(2)}{match.group(3)}:{match.group(4)}"
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        raise ValueError(f"wazuh timestamp {value!r} is not ISO-8601") from None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    try:
+        return int(moment.timestamp() * 1000)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError(f"wazuh timestamp {value!r} is not a time") from exc
+
+
+def _far_future_ms(value: Any) -> int:
+    """Return ``value`` as epoch ms when it is a far-future ISO timestamp.
+
+    Only ISO strings past 2100-01-01 UTC qualify (the live poll's
+    ``future_dated`` clock abuse, for example year 2999); hostile
+    numbers stay rejected so they keep counting as unmapped.
+    Raises ``ValueError`` for anything else.
+    """
+    from corvus.normalize.ocsf import MAX_TIME_MS
+
+    if not isinstance(value, str):
+        raise ValueError(f"wazuh timestamp {value!r} is not far-future ISO-8601")
+    ms = parse_wazuh_time_unbounded(value)
+    if ms <= MAX_TIME_MS:
+        raise ValueError(f"wazuh timestamp {value!r} is not past 2100-01-01 UTC")
+    return ms
 
 
 def severity_for_level(level: int) -> tuple[int, str]:
@@ -204,6 +286,61 @@ def _str(value: Any) -> str | None:
     if not text or text.lower() in ("", "-", "n/a", "unknown"):
         return None
     return text
+
+
+def _sanitize_str(value: str) -> tuple[str, bool]:
+    """Replace NUL and lone surrogates with U+FFFD.
+
+    Postgres UTF-8 text (and ``jsonb``) rejects both, so either would
+    raise on insert down the pipeline (findings, incidents, analyses).
+    Returns the cleaned string plus whether anything was replaced.
+    """
+    bad = False
+    out: list[str] = []
+    for char in value:
+        code = ord(char)
+        if code == 0 or 0xD800 <= code <= 0xDFFF:
+            out.append("\ufffd")
+            bad = True
+        else:
+            out.append(char)
+    if not bad:
+        return value, False
+    return "".join(out), True
+
+
+def _sanitize_value(value: Any) -> tuple[Any, bool]:
+    """Recursively sanitize every string leaf of ``value``."""
+    if isinstance(value, str):
+        return _sanitize_str(value)
+    if isinstance(value, dict):
+        changed = False
+        cleaned: dict[Any, Any] = {}
+        for key, item in value.items():
+            clean_key, key_bad = (
+                _sanitize_str(key) if isinstance(key, str) else (key, False)
+            )
+            clean_item, item_bad = _sanitize_value(item)
+            changed = changed or key_bad or item_bad
+            cleaned[clean_key] = clean_item
+        return cleaned, changed
+    if isinstance(value, list):
+        changed = False
+        cleaned_list: list[Any] = []
+        for item in value:
+            clean_item, item_bad = _sanitize_value(item)
+            changed = changed or item_bad
+            cleaned_list.append(clean_item)
+        return cleaned_list, changed
+    if isinstance(value, tuple):
+        changed = False
+        cleaned_items: list[Any] = []
+        for item in value:
+            clean_item, item_bad = _sanitize_value(item)
+            changed = changed or item_bad
+            cleaned_items.append(clean_item)
+        return tuple(cleaned_items), changed
+    return value, False
 
 
 def _int(value: Any) -> int | None:
@@ -313,10 +450,71 @@ def _attacks(rule: dict[str, Any]) -> list[AttackRef]:
 
 
 #: Verbatim cap on an attacker-controlled Linux user name kept in
-#: ``User.name``. Longer names truncate here (the full line stays in
-#: ``raw_data``, so the injection detector still sees the payload);
-#: the original length lands in ``unmapped["linux.username_truncated"]``.
+#: ``User.name``. Longer names truncate here; the original length
+#: lands in ``unmapped["linux.username_truncated"]`` (the full line in
+#: ``raw_data`` is itself leaf-capped by :data:`WAZUH_RAW_DATA_CAP`,
+#: so over-long values are kept nowhere — only their lengths).
 LINUX_USERNAME_CAP = 256
+
+#: Bound on string leaves kept in ``raw_data``: the same documented
+#: length as :data:`corvus.normalize.windows.WINDOWS_TEXT_CAP`
+#: (asserted equal in ``tests/test_raw_data_cap.py``; kept as a local
+#: constant so the two normalizers stay independent). Wazuh
+#: alert/archive documents were previously stored whole
+#: (``json.dumps(source)`` unbounded: a hostile ``full_log`` could
+#: grow one event without bound). Longer leaves truncate here; the
+#: original length lands in
+#: ``unmapped["wazuh.raw_data_truncated"]`` as ``{json_path: length}``.
+WAZUH_RAW_DATA_CAP = 65536
+
+
+def _cap_raw_leaves(value: Any, truncated: dict[str, int], path: str = "$") -> Any:
+    """Truncate over-long string leaves for ``raw_data``.
+
+    Every string leaf longer than :data:`WAZUH_RAW_DATA_CAP`
+    truncates there; ``truncated`` records the JSON path
+    (``$.a[0].b``) to the original length, so nothing is silently
+    lost. Dict keys are never truncated (schema, not attacker text);
+    tuple and list shapes are preserved.
+    """
+    if isinstance(value, str):
+        if len(value) > WAZUH_RAW_DATA_CAP:
+            truncated[path] = len(value)
+            return value[:WAZUH_RAW_DATA_CAP]
+        return value
+    if isinstance(value, dict):
+        return {
+            key: _cap_raw_leaves(item, truncated, f"{path}.{key}")
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _cap_raw_leaves(item, truncated, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _cap_raw_leaves(item, truncated, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        )
+    return value
+
+
+def _capped_raw(source: dict[str, Any], unmapped: dict[str, Any]) -> str:
+    """Serialize ``source`` for ``raw_data`` with long leaves capped.
+
+    Records ``{json_path: original_length}`` under
+    ``unmapped["wazuh.raw_data_truncated"]`` when anything
+    truncated. Key order and separators match the previous bare
+    ``json.dumps(source)`` exactly, so uncapped documents serialize
+    byte for byte as before.
+    """
+    truncated: dict[str, int] = {}
+    capped = _cap_raw_leaves(source, truncated)
+    if truncated:
+        unmapped["wazuh.raw_data_truncated"] = truncated
+    return json.dumps(capped, default=str)
+
 
 #: Bound on EXECVE arguments parsed from one audit blob (a corrupt
 #: ``argc`` must not balloon memory; the cap lands in ``unmapped``).
@@ -569,7 +767,7 @@ def _map_sshd(
         device=device,
         src_endpoint=endpoint,
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -618,7 +816,7 @@ def _map_sudo(
             user=User(name=effective) if effective is not None else None,
         ),
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1024,7 +1222,7 @@ def _map_audit(
             user=User(name=effective) if effective is not None else None,
         ),
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1095,7 +1293,7 @@ def _map_audit_file(
         device=device,
         file=File(path=path, type="Unknown", type_id=0),
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1155,7 +1353,7 @@ def _map_audit_net(
         device=device,
         dst_endpoint=Endpoint(ip=blob["saddr"]["ip"], port=blob["saddr"]["port"]),
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1242,7 +1440,7 @@ def _map_audit_session(
         actor=Actor(user=User(name=username), process=actor_process),
         device=device,
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1311,7 +1509,7 @@ def _map_audit_user_cmd(
             ),
         ),
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1381,7 +1579,7 @@ def _map_pam(
         actor=Actor(user=User(name=actor_name) if actor_name is not None else None),
         device=device,
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1421,7 +1619,7 @@ def _map_su(
         actor=Actor(user=User(name=invoker) if invoker is not None else None),
         device=device,
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1475,7 +1673,7 @@ def _map_syscheck(
         # The record never names the file kind, so Unknown (never a guess).
         file=File(path=path, type="Unknown", type_id=0, hashes=fingerprints or None),
         metadata=_metadata(uid, decoder, device),
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1525,7 +1723,10 @@ def _map_event(
     no syscheck path) count as unmapped rather than raising.
     ``override_time_ms`` carries the log-line event time for the raw
     archive path; the alert/archive hit paths keep the manager
-    timestamp their cursors sort on.
+    timestamp their cursors sort on. Far-future ISO timestamps past
+    2100-01-01 UTC still map (via :func:`parse_wazuh_time_unbounded`)
+    so the live poll can count them as ``future_dated`` and withhold
+    checkpoint progress; every other hostile time stays unmapped.
     """
     decoder_block = source.get("decoder")
     decoder = (
@@ -1540,12 +1741,14 @@ def _map_event(
     if override_time_ms is not None:
         time_ms = override_time_ms
     else:
+        raw_stamp = source.get("timestamp") or source.get("@timestamp")
         try:
-            time_ms = parse_wazuh_time(
-                source.get("timestamp") or source.get("@timestamp")
-            )
+            time_ms = parse_wazuh_time(raw_stamp)
         except ValueError, TypeError:
-            return None, (decoder, rule_id)
+            try:
+                time_ms = _far_future_ms(raw_stamp)
+            except ValueError, TypeError:
+                return None, (decoder, rule_id)
     device = _device(source)
     fields = _data_fields(source)
     try:
@@ -1722,7 +1925,7 @@ def _build_finding(
             related_events=related or None,
         ),
         evidences=evidences,
-        raw_data=json.dumps(source),
+        raw_data=_capped_raw(source, unmapped),
         unmapped=unmapped,
     )
 
@@ -1736,16 +1939,25 @@ def map_alert(
     is the alert ``id`` field. The finding is always built; ``event``
     is None (with ``unmapped_key`` set to ``(decoder, rule id)``) when
     the decoder has no typed mapping. Hits without a rule block or
-    without a parseable time raise ``ValueError``.
+    without a parseable time raise ``ValueError``; far-future ISO
+    timestamps past 2100-01-01 UTC still map so the live poll counts
+    them as ``future_dated`` instead of unmapped.
     """
-    source = hit.get("_source")
-    if not isinstance(source, dict):
+    raw_source = hit.get("_source")
+    if not isinstance(raw_source, dict):
         raise ValueError("wazuh hit has no _source")
+    clean_source, source_bad = _sanitize_value(dict(raw_source))
+    assert isinstance(clean_source, dict)
+    source = clean_source
     rule = _rule(source)
     alert_id = _str(source.get("id"))
     if alert_id is None:
         raise ValueError("wazuh alert has no id")
-    time_ms = parse_wazuh_time(source.get("timestamp") or source.get("@timestamp"))
+    raw_stamp = source.get("timestamp") or source.get("@timestamp")
+    try:
+        time_ms = parse_wazuh_time(raw_stamp)
+    except ValueError, TypeError:
+        time_ms = _far_future_ms(raw_stamp)
     decoder_block = source.get("decoder")
     decoder = (
         _str(decoder_block.get("name"))
@@ -1755,6 +1967,10 @@ def map_alert(
     device = _device(source)
     event, unmapped_key = _map_event(source, f"{alert_id}#event")
     finding = _build_finding(source, rule, alert_id, time_ms, device, decoder, event)
+    if source_bad:
+        finding.unmapped["wazuh.text_sanitized"] = True
+        if event is not None:
+            event.unmapped["wazuh.text_sanitized"] = True
     return finding, event, unmapped_key
 
 
@@ -1769,9 +1985,12 @@ def map_archive(
     ``id`` is kept verbatim in ``unmapped`` as ``wazuh_id``. Hits
     without a document ``_id`` count as ``("unknown", None)``.
     """
-    source = hit.get("_source")
-    if not isinstance(source, dict):
+    raw_source = hit.get("_source")
+    if not isinstance(raw_source, dict):
         raise ValueError("wazuh hit has no _source")
+    clean_source, source_bad = _sanitize_value(dict(raw_source))
+    assert isinstance(clean_source, dict)
+    source = clean_source
     doc_uid = hit.get("_id")
     if not isinstance(doc_uid, str) or not doc_uid:
         return None, ("unknown", None)
@@ -1795,6 +2014,8 @@ def map_archive(
     wazuh_id = _str(source.get("id"))
     if wazuh_id is not None:
         event.unmapped["wazuh_id"] = wazuh_id
+    if source_bad:
+        event.unmapped["wazuh.text_sanitized"] = True
     return event, None
 
 
@@ -1809,15 +2030,36 @@ def parse_linux_time(doc: dict[str, Any]) -> int:
     more than a day in the future). Documents without a parseable
     line fall back to the manager ``timestamp``/``@timestamp``.
     """
+    from corvus.normalize.ocsf import MAX_TIME_MS, MIN_TIME_MS
+
+    def _check_linux_ms(ms: int) -> int:
+        if ms < MIN_TIME_MS:
+            raise ValueError(f"linux time {ms} is before 2000-01-01 UTC")
+        if ms > MAX_TIME_MS:
+            raise ValueError(f"linux time {ms} is after 2100-01-01 UTC")
+        return ms
+
     full_log = doc.get("full_log")
     manager = doc.get("timestamp") or doc.get("@timestamp")
     if isinstance(full_log, str):
         head = _AUDIT_HEAD.search(full_log)
         if head is not None:
             try:
-                return int(float(head.group(2)) * 1000)
+                number = float(head.group(2))
             except ValueError:
                 pass
+            else:
+                if not math.isfinite(number):
+                    raise ValueError(
+                        f"linux audit time {head.group(2)!r} is not finite"
+                    )
+                try:
+                    ms = int(number * 1000)
+                except (OverflowError, ValueError) as exc:
+                    raise ValueError(
+                        f"linux audit time {head.group(2)!r} is not a time"
+                    ) from exc
+                return _check_linux_ms(ms)
         iso = _SYSLOG_ISO.match(full_log)
         if iso is not None:
             return parse_wazuh_time(iso.group(1))
@@ -1834,11 +2076,17 @@ def parse_linux_time(doc: dict[str, Any]) -> int:
                 int(short.group(5)),
                 tzinfo=UTC,
             )
-            moment_ms = int(moment.timestamp() * 1000)
+            try:
+                moment_ms = int(moment.timestamp() * 1000)
+            except (OverflowError, OSError, ValueError) as exc:
+                raise ValueError("linux syslog time is not a time") from exc
             if moment_ms > manager_ms + 86400000:
                 moment = moment.replace(year=year - 1)
-                moment_ms = int(moment.timestamp() * 1000)
-            return moment_ms
+                try:
+                    moment_ms = int(moment.timestamp() * 1000)
+                except (OverflowError, OSError, ValueError) as exc:
+                    raise ValueError("linux syslog time is not a time") from exc
+            return _check_linux_ms(moment_ms)
     return parse_wazuh_time(manager)
 
 
@@ -1928,6 +2176,9 @@ def map_linux_doc(
     """
     if not isinstance(doc, dict):
         raise ValueError("linux document is not an object")
+    clean_doc, doc_bad = _sanitize_value(dict(doc))
+    assert isinstance(clean_doc, dict)
+    doc = clean_doc
     dedupe = linux_dedup_key(doc)
     decoder_block = doc.get("decoder")
     decoder = (
@@ -1951,4 +2202,9 @@ def map_linux_doc(
         finding = _build_finding(
             doc, rule, finding_uid, time_ms, _device(doc), decoder, event
         )
+    if doc_bad:
+        if event is not None:
+            event.unmapped["wazuh.text_sanitized"] = True
+        if finding is not None:
+            finding.unmapped["wazuh.text_sanitized"] = True
     return finding, event, unmapped_key, dedupe

@@ -30,15 +30,21 @@ request parameter. Without a resolved triage the loop does not
 start (the CLI runs triage first).
 
 Each tool step is persisted to ``agent_steps`` as it happens
-(``shown_pseudonyms`` carries the pseudonyms that step showed, never
-real values). A stopped run resumes from the persisted steps plus a
+(``shown_pseudonyms`` carries the pivot-granting pseudonyms that
+step showed and ``emitted_pseudonyms`` the pseudonyms the
+pseudonymizer substituted into that step's payload, never real
+values). A stopped run resumes from the persisted steps plus a
 written summary instead of restarting: history is replayed one
 assistant turn per persisted step (intermediate prose is not stored,
 so replayed assistant content is empty and honest about it), step
 numbers continue, and the tool allowlist is rebuilt as the incident
 entities UNION the persisted shown sets — never from observation
-text, so a pivot learned before the stop stays queryable while a
-pseudonym that was never shown stays refused.
+text and never from emissions, so a pivot learned before the stop
+stays queryable while a pseudonym that was never shown stays
+refused. The verdict scope is the same union PLUS the persisted
+per-step emissions PLUS the payload's own emission (unioned by the
+call layer from the exact payload it sends); the allowlist never
+grows from emissions.
 
 Concurrency reuses the work-queue claim/lease pattern of the triage
 worker: one ``analysis`` job per incident (dedupe key), claim on
@@ -88,6 +94,7 @@ from corvus.llm.tools import (
     ToolContext,
     collect_incident_entities,
     execute_tool_calls,
+    incident_scope_pseudonyms,
 )
 from corvus.llm.transport import Attempt
 from corvus.normalize.ocsf import canonicalize_host, canonicalize_ip, canonicalize_user
@@ -190,6 +197,7 @@ class AgentStep:
     result_summary: str
     tokens: int
     shown_pseudonyms: tuple[str, ...]
+    emitted_pseudonyms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -606,7 +614,8 @@ def _load_steps(database_url: str, incident_id: int) -> list[AgentStep]:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT incident_id, step_number, tool, arguments,"
-                " result_summary, tokens, shown_pseudonyms"
+                " result_summary, tokens, shown_pseudonyms,"
+                " emitted_pseudonyms"
                 " FROM agent_steps WHERE incident_id = %s"
                 " ORDER BY step_number ASC, id ASC",
                 (incident_id,),
@@ -615,6 +624,7 @@ def _load_steps(database_url: str, incident_id: int) -> list[AgentStep]:
     steps: list[AgentStep] = []
     for row in rows:
         shown = row[6] or []
+        emitted = row[7] if len(row) > 7 and row[7] is not None else []
         steps.append(
             AgentStep(
                 incident_id=int(row[0]),
@@ -624,6 +634,7 @@ def _load_steps(database_url: str, incident_id: int) -> list[AgentStep]:
                 result_summary=str(row[4] or ""),
                 tokens=int(row[5] or 0),
                 shown_pseudonyms=tuple(str(item) for item in shown),
+                emitted_pseudonyms=tuple(str(item) for item in emitted),
             )
         )
     return steps
@@ -637,6 +648,45 @@ def _shown_union(steps: Sequence[AgentStep]) -> set[str]:
     return union
 
 
+def _emitted_union(steps: Sequence[AgentStep]) -> set[str]:
+    """Union every persisted step's tool-result emitted pseudonyms."""
+    union: set[str] = set()
+    for step in steps:
+        union.update(step.emitted_pseudonyms)
+    return union
+
+
+def _analysis_scope_pseudonyms(
+    database_url: str,
+    entities: Sequence[tuple[str, str]],
+    steps: Sequence[AgentStep],
+    emitted: Sequence[str] | set[str] | frozenset[str] | None = None,
+) -> set[str]:
+    """Return the incident-scoped pseudonyms for the analysis verdict.
+
+    Exactly the incident entities UNION the persisted shown sets UNION
+    the persisted per-step tool-result emissions UNION the pseudonyms
+    the pseudonymizer emitted into this run's model-bound payload —
+    the same single helper the tool allowlist seed uses (see
+    :func:`corvus.llm.tools.incident_scope_pseudonyms`). The allowlist
+    seed is built without any emission (see :func:`_analyze_incident`)
+    so pivoting rights stay as tight as today; ``emitted`` here
+    carries the payload's own substitution report via
+    :func:`prepare_payload` (never a regex over output text), and the
+    per-step union carries each tool result's report, so a correct
+    verdict repeating a shown pseudonym is never rejected while an
+    attacker-typed literal stays refused. A resumed run rebuilds the
+    same scope from the same persisted steps plus the recomputed
+    payload report.
+    """
+    tool_emitted = _emitted_union(steps)
+    if emitted:
+        tool_emitted = tool_emitted | set(emitted)
+    return incident_scope_pseudonyms(
+        database_url, entities, _shown_union(steps), tool_emitted or None
+    )
+
+
 def _insert_step(
     database_url: str,
     incident_id: int,
@@ -646,14 +696,16 @@ def _insert_step(
     result_summary: str,
     tokens: int,
     shown: Sequence[str],
+    emitted: Sequence[str] = (),
 ) -> None:
     """Persist one tool step as it happens (never repeated numbers)."""
     with psycopg.connect(database_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO agent_steps (incident_id, step_number, tool,"
-                " arguments, result_summary, tokens, shown_pseudonyms)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                " arguments, result_summary, tokens, shown_pseudonyms,"
+                " emitted_pseudonyms)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     incident_id,
                     step_number,
@@ -662,6 +714,7 @@ def _insert_step(
                     result_summary,
                     tokens,
                     Jsonb(sorted(set(shown))),
+                    Jsonb(sorted(set(emitted))),
                 ),
             )
 
@@ -707,7 +760,7 @@ def _resume_messages(steps: Sequence[AgentStep]) -> list[dict[str, Any]]:
     breakdown = ", ".join(
         f"{count} {name}" for name, count in sorted(tools_used.items())
     )
-    shown = sorted(_shown_union(steps))
+    shown = sorted(_shown_union(steps) | _emitted_union(steps))
     replayed.append(
         {
             "role": "user",
@@ -1002,12 +1055,19 @@ def _analyze_incident(
     }
     steps = _load_steps(database_url, incident.id)
     next_step = (steps[-1].step_number if steps else 0) + 1
-    if steps:
-        allowed: set[str] | None = set(
-            Pseudonymizer(database_url).register(entities).values()
-        ) | _shown_union(steps)
-    else:
-        allowed = None
+    # One helper seeds both the tool allowlist and the verdict scope:
+    # incident entities UNION persisted shown sets, so neither drifts.
+    # The verdict scope additionally unions the per-step tool-result
+    # emissions persisted in the same rows (see ``emitted_pseudonyms``)
+    # plus the payload's own emission, which the call layer unions
+    # into ``CallContext.valid_pseudonyms`` from the exact payload it
+    # sends (no second pseudonymization here, no silent fallback: a
+    # payload that cannot be prepared fails the run closed as a
+    # payload error). The tool allowlist seed omits every emission so
+    # pivoting rights stay as tight as today. A resumed run rebuilds
+    # the same scope from the same persisted steps.
+    tool_seed = incident_scope_pseudonyms(database_url, entities, _shown_union(steps))
+    scope = _analysis_scope_pseudonyms(database_url, entities, steps)
     # The tool context shares the call context's signal list object:
     # injection signals surfacing inside tool results reach validator
     # 5 on the final turn (steering checks; verbatim needs the scanned
@@ -1020,14 +1080,46 @@ def _analyze_incident(
         incident_entities=entities,
         incident_window=window,
         incident_signals=signals,
-        allowed_pseudonyms=allowed,
+        allowed_pseudonyms=set(tool_seed),
+    )
+    context = CallContext(
+        event_uids=list(incident.event_uids),
+        deterministic_floor=incident.severity_floor,
+        language=lang,
+        valid_techniques=_resolve_valid_techniques(incident.techniques),
+        valid_pseudonyms=set(scope),
+        injection_signals=signals,
+        payload_texts=payload_texts,
+        payload=raw_payload,
+        entities=entities,
+        deterministic_value={
+            "note": "AI analysis failed",
+            "severity_id": incident.severity_floor,
+        },
+        incident_id=incident.id,
+        database_url=database_url,
     )
     state = {"next_step": next_step}
 
     def _on_tool_calls(attempt: Attempt) -> list[dict[str, Any]]:
         """Execute one turn's calls and persist each step as it happens."""
         shown: list[set[str]] = []
-        messages = execute_tool_calls(attempt.tool_calls, tool_context, shown_out=shown)
+        emitted: list[set[str]] = []
+        messages = execute_tool_calls(
+            attempt.tool_calls, tool_context, shown_out=shown, emitted_out=emitted
+        )
+        # Keep the verdict scope in step with the tool allowlist: a
+        # pseudonym first shown by this turn becomes valid next turn.
+        # Tool-result emissions join the scope too (they never grant
+        # pivoting rights, only verdict citations); the payload's own
+        # emission is already in ``context.valid_pseudonyms`` via the
+        # call layer, so the union only ever grows.
+        if context.valid_pseudonyms is not None:
+            grown_scope = set(context.valid_pseudonyms)
+            grown_scope.update(tool_context.allowed_pseudonyms or set())
+            for emitted_set in emitted:
+                grown_scope.update(emitted_set)
+            context.valid_pseudonyms = grown_scope
         turn_total = (
             attempt.prompt_tokens
             + attempt.reasoning_tokens
@@ -1036,8 +1128,8 @@ def _analyze_incident(
         )
         width = len(attempt.tool_calls)
         base, remainder = divmod(turn_total, width)
-        for position, (call, message, shown_set) in enumerate(
-            zip(attempt.tool_calls, messages, shown, strict=True)
+        for position, (call, message, shown_set, emitted_set) in enumerate(
+            zip(attempt.tool_calls, messages, shown, emitted, strict=True)
         ):
             step_number = state["next_step"] + position
             arguments = (
@@ -1054,6 +1146,7 @@ def _analyze_incident(
                 message["content"],
                 base + (1 if position < remainder else 0),
                 sorted(shown_set),
+                sorted(emitted_set),
             )
         state["next_step"] += width
         return [dict(message) for message in messages]
@@ -1068,22 +1161,6 @@ def _analyze_incident(
             *replayed,
         ]
 
-    context = CallContext(
-        event_uids=list(incident.event_uids),
-        deterministic_floor=incident.severity_floor,
-        language=lang,
-        valid_techniques=_resolve_valid_techniques(incident.techniques),
-        injection_signals=signals,
-        payload_texts=payload_texts,
-        payload=raw_payload,
-        entities=entities,
-        deterministic_value={
-            "note": "AI analysis failed",
-            "severity_id": incident.severity_floor,
-        },
-        incident_id=incident.id,
-        database_url=database_url,
-    )
     loop_clock = clock if clock is not None else time.monotonic
     deadline: float | None = None
     if timeout_seconds is not None:

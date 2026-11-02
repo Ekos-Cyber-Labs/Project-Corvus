@@ -40,10 +40,15 @@ WIN_EXTENSION_VERSION = "1.9.0"
 #: Anything below it is almost certainly epoch seconds, not milliseconds.
 MIN_TIME_MS = 946684800000
 
+#: Latest accepted event time (2100-01-01T00:00:00Z) as UTC epoch ms.
+#: Anything after it is a hostile or corrupt timestamp, never real evidence.
+MAX_TIME_MS = 4102444800000
+
 #: Spellings that mean "no value" (compared case-insensitively).
 PLACEHOLDERS = frozenset({"", "-", "n/a", "unknown"})
 
 __all__ = [
+    "MAX_TIME_MS",
     "MIN_TIME_MS",
     "OCSF_SCHEMA_VERSION",
     "PLACEHOLDERS",

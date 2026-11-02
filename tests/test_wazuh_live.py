@@ -24,7 +24,11 @@ import pytest
 from corvus.adapters.wazuh.adapter import WazuhAdapter
 from corvus.adapters.wazuh.client import IndexerError, ReadOnlyIndexerClient
 from corvus.live.attribution import attribution_for_finding
-from corvus.normalize.wazuh import map_alert, parse_wazuh_time
+from corvus.normalize.wazuh import (
+    map_alert,
+    parse_wazuh_time,
+    parse_wazuh_time_unbounded,
+)
 from corvus.state.migrate import migrate
 from tests.conftest import _create_database, _drop_database, _test_database_urls
 
@@ -44,7 +48,7 @@ def _doc(name: str) -> dict[str, Any]:
 
 def _hit(doc: dict[str, Any], doc_id: str) -> dict[str, Any]:
     """Wrap a document as an alerts-index hit with sort values."""
-    time_ms = parse_wazuh_time(doc["timestamp"])
+    time_ms = parse_wazuh_time_unbounded(doc["timestamp"])
     return {
         "_index": "wazuh-alerts-4.x-2026-11-01",
         "_id": doc_id,
@@ -927,7 +931,7 @@ def test_poll_future_dated_alerts_skipped_without_moving_cursor() -> None:
             assert "1793494032.199999" not in findings
             stored = _poll_checkpoint(test_url)
             assert stored.get("last_time") is not None
-            far_future = parse_wazuh_time("2999-01-01T00:00:00.000+0000")
+            far_future = parse_wazuh_time_unbounded("2999-01-01T00:00:00.000+0000")
             assert int(stored["last_time"]) < far_future
             rows = _cycle_ledger(test_url)
             assert rows[-1][2] == "ok"

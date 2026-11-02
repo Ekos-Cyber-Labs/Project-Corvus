@@ -57,10 +57,17 @@ TAG_KEYS = frozenset({"tags", "rule_tags", "sigma_tags", "attack_tags"})
 
 
 class PreparedPayload(NamedTuple):
-    """A model-bound payload plus the labels mode that produced it."""
+    """A model-bound payload plus the labels mode that produced it.
+
+    ``emitted_pseudonyms`` holds every pseudonym the pseudonymizer
+    actually substituted into this payload (its own substitution
+    report, never a regex over the output text), so verdict scopes
+    can admit what the model was shown. Empty for ``onprem``.
+    """
 
     payload: Any
     labels_mode: str
+    emitted_pseudonyms: frozenset[str] = frozenset()
 
 
 def _resolve_labels_mode(labels_mode: str | None) -> str:
@@ -200,5 +207,9 @@ def prepare_payload(
     pseudonymizer = Pseudonymizer(dsn)
     if entities is not None:
         pseudonymizer.register(entities)
-    pseudonymized = pseudonymizer.pseudonymize(labeled)
-    return PreparedPayload(payload=_redact_strings(pseudonymized), labels_mode=mode)
+    pseudonymized, emitted = pseudonymizer.pseudonymize_with_report(labeled)
+    return PreparedPayload(
+        payload=_redact_strings(pseudonymized),
+        labels_mode=mode,
+        emitted_pseudonyms=emitted,
+    )

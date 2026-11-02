@@ -317,7 +317,14 @@ def _load_one(
         prov_writer: pq.ParquetWriter,
     ) -> None:
         nonlocal file_mapped
-        _finding, event, unmapped_key, dedupe = map_linux_doc(doc)
+        try:
+            _finding, event, unmapped_key, dedupe = map_linux_doc(doc)
+        except Exception:
+            summary.unmapped[("unknown", None)] = (
+                summary.unmapped.get(("unknown", None), 0) + 1
+            )
+            file_unmapped[("unknown", None)] += 1
+            return
         if dedupe in seen_dedupes or (
             event is not None
             and event.metadata.uid is not None
@@ -335,7 +342,14 @@ def _load_one(
             return
         uid = event.metadata.uid or ""
         in_band = has_in_band_technique_id(event)
-        event_rows.append(event_to_row(event))
+        try:
+            event_rows.append(event_to_row(event))
+        except Exception:
+            summary.unmapped[("unknown", None)] = (
+                summary.unmapped.get(("unknown", None), 0) + 1
+            )
+            file_unmapped[("unknown", None)] += 1
+            return
         prov_rows.append(
             {
                 "uid": uid,

@@ -80,6 +80,7 @@ __all__ = [
     "ToolError",
     "collect_incident_entities",
     "execute_tool_calls",
+    "incident_scope_pseudonyms",
 ]
 
 #: Tool names Spark may call (only these two in hackathon scope).
@@ -372,6 +373,38 @@ def _parse_tool_time(value: Any, name: str) -> int:
     return int(moment.timestamp() * 1000)
 
 
+def incident_scope_pseudonyms(
+    database_url: str,
+    incident_entities: Sequence[tuple[str, str]],
+    shown: Sequence[str] | set[str] | None = None,
+    emitted: Sequence[str] | set[str] | frozenset[str] | None = None,
+) -> set[str]:
+    """Return the incident-scoped pseudonym set for one analysis run.
+
+    The scope is exactly the pseudonyms of the incident's own
+    registered entities UNION the pseudonyms already shown to the
+    model in this run UNION the pseudonyms the pseudonymizer actually
+    emitted into this run's model-bound payload. ``shown`` holds the
+    persisted ``shown`` sets (or any later tool-result additions);
+    ``emitted`` holds the pseudonymizer's own substitution report for
+    this payload (see :func:`prepare_payload`), never a regex over
+    output text. Registering first guarantees the mapping exists.
+    Attacker-controlled free text never enters here: only typed
+    incident entities, structured-result typed fields and the
+    pseudonymizer's own emissions feed the three inputs (see
+    :func:`collect_incident_entities` and :func:`_result_pseudonyms`).
+    A literal pseudonym an attacker typed into free text passes
+    through unchanged and is never emitted, so it stays refused.
+    """
+    mapping = Pseudonymizer(database_url).register(list(incident_entities))
+    scope = set(mapping.values())
+    if shown:
+        scope.update(shown)
+    if emitted:
+        scope.update(emitted)
+    return scope
+
+
 def _ensure_allowlist(context: ToolContext) -> set[str]:
     """Return the live per-run allowlist, initializing it when needed.
 
@@ -381,10 +414,9 @@ def _ensure_allowlist(context: ToolContext) -> set[str]:
     failing open to the whole table.
     """
     if context.allowed_pseudonyms is None:
-        mapping = Pseudonymizer(context.database_url).register(
-            list(context.incident_entities)
+        context.allowed_pseudonyms = incident_scope_pseudonyms(
+            context.database_url, list(context.incident_entities)
         )
-        context.allowed_pseudonyms = set(mapping.values())
     return context.allowed_pseudonyms
 
 
@@ -482,14 +514,19 @@ def _observation_head(
 
 def _run_get_events(
     arguments: Mapping[str, Any], context: ToolContext, allowed: set[str]
-) -> tuple[str, set[str]]:
-    """Run one ``get_events`` call; return observation plus shown pseudonyms.
+) -> tuple[str, set[str], set[str]]:
+    """Run one ``get_events`` call; return observation, shown and emitted sets.
 
     ``allowed`` is the frozen turn-start allowlist: only pseudonyms
     shown before this turn may be named (strict same-turn rule). The
-    returned set holds the pivot-granting pseudonyms of the structured
+    shown set holds the pivot-granting pseudonyms of the structured
     post-payload result only (never error or gap text), so the caller
     grows the allowlist exclusively from what the server chose to show.
+    The emitted set holds every pseudonym the pseudonymizer actually
+    substituted into this result's model-bound payload (its own
+    substitution report, including free-text matches of registered
+    values in no typed field): it never grants pivoting rights, only
+    verdict citations through the verdict scope.
     """
     empty: set[str] = set()
     filters: dict[str, str] = {}
@@ -511,29 +548,34 @@ def _run_get_events(
             "(as HOST-/USER-/IP- pseudonyms); "
             f"valid pseudonyms for this run: {valid}",
             empty,
+            empty,
         )
     start = _parse_tool_time(arguments.get("start"), "start")
     end = _parse_tool_time(arguments.get("end"), "end")
     if start > end:
-        return "error: start is after end in the requested window", empty
+        return "error: start is after end in the requested window", empty, empty
     raw_classes = arguments.get("classes")
     requested: list[int] | None = None
     if raw_classes is not None:
         if not isinstance(raw_classes, list):
-            return "error: classes must be a list of OCSF class numbers", empty
+            return "error: classes must be a list of OCSF class numbers", empty, empty
         requested = []
         for entry in raw_classes:
             if isinstance(entry, bool) or not isinstance(entry, int):
-                return "error: classes must be a list of OCSF class numbers", empty
+                return (
+                    "error: classes must be a list of OCSF class numbers",
+                    empty,
+                    empty,
+                )
             if entry not in KNOWN_CLASS_NAMES:
-                return "error: unknown OCSF class number", empty
+                return "error: unknown OCSF class number", empty, empty
             if entry not in requested:
                 requested.append(entry)
     raw_limit = arguments.get("limit", 200)
     if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
-        return "error: limit must be an integer 1..200", empty
+        return "error: limit must be an integer 1..200", empty, empty
     if raw_limit < 1 or raw_limit > 200:
-        return "error: limit must be an integer 1..200", empty
+        return "error: limit must be an integer 1..200", empty, empty
     window = (start, end)
     present = _inventory_classes(context, window)
     gap_note: str | None = None
@@ -546,6 +588,7 @@ def _run_get_events(
                 f"visibility gap: no {names} telemetry in the source for "
                 "this window; report this as a gap, never as evidence of "
                 "absence of activity",
+                empty,
                 empty,
             )
         if absent:
@@ -566,13 +609,14 @@ def _run_get_events(
             "error: the resolved entity filter is invalid "
             "(placeholder or misplaced value); check the pseudonyms",
             empty,
+            empty,
         )
     try:
         events = context.adapter.query_events(
             entity, start, end, classes=effective, limit=raw_limit
         )
     except Exception as exc:
-        return f"error: adapter query failed ({type(exc).__name__})", empty
+        return f"error: adapter query failed ({type(exc).__name__})", empty, empty
     total = len(events)
     shown_events = list(events)
     rendered_all: list[str] = []
@@ -683,44 +727,50 @@ def _run_get_events(
             parts.append(f"fact: {fact}")
         content = "\n".join(parts)
     # The allowlist grows only from the structured events actually
-    # shown — never from error, gap or note text.
-    return content, _result_pseudonyms(shown_projs)
+    # shown — never from error, gap or note text. The emitted set is
+    # the pseudonymizer's own report for this result (it may hold
+    # tokens from free-text matches in no typed field) and never
+    # grants pivoting rights.
+    return content, _result_pseudonyms(shown_projs), set(prepared.emitted_pseudonyms)
 
 
 def _run_get_attack_technique(
     arguments: Mapping[str, Any], context: ToolContext
-) -> tuple[str, set[str]]:
+) -> tuple[str, set[str], set[str]]:
     """Run one ``get_attack_technique`` call.
 
-    Returns the observation plus an empty shown set: technique results
-    are public dictionary data, never incident evidence, so they grant
-    no pivot rights. The unknown-id error never echoes the supplied
-    id, so model-supplied text cannot allowlist itself through it.
+    Returns the observation plus empty shown and emitted sets:
+    technique results are public dictionary data, never incident
+    evidence, so they grant no pivot rights and emit no pseudonyms.
+    The unknown-id error never echoes the supplied id, so
+    model-supplied text cannot allowlist itself through it.
     """
     empty: set[str] = set()
     raw = arguments.get("id")
     if not isinstance(raw, str) or not raw.strip():
-        return "error: id must be a non-empty ATT&CK technique id", empty
+        return "error: id must be a non-empty ATT&CK technique id", empty, empty
     dictionary = context.dictionary
     if dictionary is None:
         try:
             dictionary = load_dictionary()
         except OSError, ValueError:
-            return "error: ATT&CK dictionary is unavailable", empty
+            return "error: ATT&CK dictionary is unavailable", empty, empty
     entry = dictionary.get(raw)
     if entry is None:
-        return "error: id is not a known ATT&CK technique", empty
+        return "error: id is not a known ATT&CK technique", empty, empty
     if entry.revoked:
         target = f", revoked by {entry.revoked_by}" if entry.revoked_by else ""
         return (
             f"error: ATT&CK technique {entry.id} is revoked{target}; "
             "look up the replacement id instead",
             empty,
+            empty,
         )
     if entry.deprecated:
         return (
             f"error: ATT&CK technique {entry.id} is deprecated with no "
             "replacement; it cannot be cited",
+            empty,
             empty,
         )
     tactics = sorted({tactic.shortname for tactic in entry.tactics})
@@ -735,6 +785,7 @@ def _run_get_attack_technique(
             },
             sort_keys=True,
         ),
+        set(),
         set(),
     )
 
@@ -786,6 +837,7 @@ def execute_tool_calls(
     context: ToolContext,
     *,
     shown_out: list[set[str]] | None = None,
+    emitted_out: list[set[str]] | None = None,
 ) -> list[dict[str, str]]:
     """Run every tool call of one turn, in order, never raising per call.
 
@@ -807,13 +859,21 @@ def execute_tool_calls(
     therefore still refused until the next turn (strict rule). Error
     observations never echo model-supplied strings: only fixed
     :class:`ToolError` messages travel to the cloud; any other error
-    maps to a fixed generic string.
+    maps to a fixed generic string. The emitted set (pseudonyms the
+    pseudonymizer substituted into a result, including free-text
+    matches in no typed field) never grows the allowlist: it only
+    feeds the verdict scope through ``emitted_out``.
 
     ``shown_out``, when given, collects one set per call with the
     pivot-granting pseudonyms that call's structured result showed
     (empty for technique results, unknown tools and every failure),
     so the agent loop can persist each step's shown scope alongside
     the step itself and rebuild the allowlist on a resumed run.
+    ``emitted_out``, when given, collects one set per call with the
+    pseudonyms the pseudonymizer emitted into that call's payload
+    (empty for technique results, unknown tools and every failure),
+    so the agent loop can union them into the verdict scope — kept
+    separate from the allowlist — and rebuild it on a resumed run.
     """
     trust = getattr(context.destination, "trust", None)
     if trust != "cloud":
@@ -822,7 +882,9 @@ def execute_tool_calls(
             "evidence is pseudonymized before the model sees it"
         )
     allowed = set(_ensure_allowlist(context))
-    handlers: dict[str, Callable[[Mapping[str, Any]], tuple[str, set[str]]]] = {
+    handlers: dict[
+        str, Callable[[Mapping[str, Any]], tuple[str, set[str], set[str]]]
+    ] = {
         GET_EVENTS_NAME: lambda arguments: _run_get_events(arguments, context, allowed),
         GET_TECHNIQUE_NAME: lambda arguments: _run_get_attack_technique(
             arguments, context
@@ -831,6 +893,7 @@ def execute_tool_calls(
     answers: list[dict[str, str]] = []
     grown: set[str] = set()
     per_call_shown: list[set[str]] = []
+    per_call_emitted: list[set[str]] = []
     for entry in message_tool_calls:
         call_id, name, arguments = _coerce_call(entry)
         if isinstance(arguments, str):
@@ -838,6 +901,7 @@ def execute_tool_calls(
                 {"role": "tool", "tool_call_id": call_id, "content": arguments}
             )
             per_call_shown.append(set())
+            per_call_emitted.append(set())
             continue
         handler = handlers.get(name)
         if handler is None:
@@ -852,22 +916,34 @@ def execute_tool_calls(
                 }
             )
             per_call_shown.append(set())
+            per_call_emitted.append(set())
             continue
         try:
-            content, shown = handler(arguments)
+            content, shown, emitted = handler(arguments)
         except ToolError as exc:
-            content, shown = f"error: {exc}", set()
+            content, shown, emitted = f"error: {exc}", set(), set()
         except ValueError:
-            content, shown = "error: invalid tool arguments", set()
+            content, shown, emitted = "error: invalid tool arguments", set(), set()
         except Exception as exc:  # never drop the rest of the turn
-            content, shown = f"error: tool {name} failed ({type(exc).__name__})", set()
+            content, shown, emitted = (
+                f"error: tool {name} failed ({type(exc).__name__})",
+                set(),
+                set(),
+            )
         if not isinstance(content, str) or not content:
-            content, shown = f"error: tool {name} returned no observation", set()
+            content, shown, emitted = (
+                f"error: tool {name} returned no observation",
+                set(),
+                set(),
+            )
         answers.append({"role": "tool", "tool_call_id": call_id, "content": content})
         grown.update(shown)
         per_call_shown.append(set(shown))
+        per_call_emitted.append(set(emitted))
     allowed.update(grown)
     context.allowed_pseudonyms = set(context.allowed_pseudonyms or set()) | allowed
     if shown_out is not None:
         shown_out.extend(per_call_shown)
+    if emitted_out is not None:
+        emitted_out.extend(per_call_emitted)
     return answers

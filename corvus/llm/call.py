@@ -88,7 +88,7 @@ import os
 import re
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -1040,6 +1040,27 @@ def _worst_case_usd(backend: BackendConfig, prices: Mapping[str, ModelPrice]) ->
     )
 
 
+def _union_payload_emitted(context: CallContext, prepared: Any) -> None:
+    """Union one prepared payload's emission into the verdict scope.
+
+    The scope admits exactly what the model was shown: the
+    pseudonymizer's own substitution report for the payload actually
+    sent (never a regex over output text), so a correct verdict
+    repeating a shown pseudonym is never rejected while an
+    attacker-typed literal stays refused. A ``None`` scope means
+    pattern-only checking and stays untouched. This runs on the
+    payload the call sends — including every shrunk resend — so the
+    analysis never pays for a second preparation to learn the set,
+    and a payload that cannot be prepared fails the run closed as a
+    payload error before anything is sent.
+    """
+    if context.valid_pseudonyms is None:
+        return
+    emitted: Collection[str] = getattr(prepared, "emitted_pseudonyms", frozenset())
+    if emitted:
+        context.valid_pseudonyms = set(context.valid_pseudonyms) | set(emitted)
+
+
 def _egress_filter_for(
     backend: BackendConfig, provided: EgressFilter | None
 ) -> EgressFilter | None:
@@ -1437,6 +1458,7 @@ def _run_backend_loop(
                 database_url=database_url,
                 entities=context.entities,
             )
+            _union_payload_emitted(context, prepared)
         except Exception as exc:
             result.fatal_code = "payload_error"
             result.fatal_errors = [_err("payload_error", "", f"{exc}")]
@@ -1610,6 +1632,7 @@ def _run_backend_loop(
                                 database_url=database_url,
                                 entities=context.entities,
                             )
+                            _union_payload_emitted(context, shrunk_prepared)
                             base_messages = _coerce_messages(
                                 messages_builder(shrunk_prepared.payload)
                             )
@@ -1668,6 +1691,7 @@ def _run_backend_loop(
                                 database_url=database_url,
                                 entities=context.entities,
                             )
+                            _union_payload_emitted(context, shrunk_prepared)
                             base_messages = _coerce_messages(
                                 messages_builder(shrunk_prepared.payload)
                             )

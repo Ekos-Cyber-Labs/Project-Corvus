@@ -1309,7 +1309,49 @@ class Pseudonymizer:
         spelling); non-string leaves pass through. Pydantic models are
         dumped first.
         """
+        return self.pseudonymize_with_report(payload)[0]
+
+    def pseudonymize_with_report(self, payload: Any) -> tuple[Any, frozenset[str]]:
+        """Replace entities like :meth:`pseudonymize`, reporting emissions.
+
+        Returns ``(payload, emitted)`` where ``emitted`` holds every
+        pseudonym this call actually substituted into the returned
+        payload (typed fields, free-text replacements, key replacements
+        and packed-integer IP hits). Pseudonym-shaped text the caller
+        already held (for example an attacker typing ``HOST-0001``
+        in a command line) passes through unchanged and is NOT
+        reported: only substitutions this call performed count.
+        """
         dumped = payload.model_dump() if hasattr(payload, "model_dump") else payload
+        table, registered, needles = self._build_table(dumped)
+        emitted: set[str] = set()
+        # One precompiled pattern per table entry, reused for every
+        # string leaf below instead of recompiling per entry per string.
+        replacer = _FreeTextReplacer(table, registered)
+        replaced = self._replace(
+            dumped,
+            table,
+            registered=registered,
+            needles=needles,
+            emitted=emitted,
+            replacer=replacer,
+        )
+        return replaced, frozenset(emitted)
+
+    def _build_table(
+        self, dumped: Any
+    ) -> tuple[dict[str, tuple[str, str]], frozenset[tuple[str, str]], set[str]]:
+        """Build the replacement table snapshot for one payload.
+
+        Returns ``(table, registered, needles)``: ``table`` maps every
+        raw spelling (canonical plus observed) to ``(pseudonym,
+        kind)``, ``registered`` holds the ``(kind, canonical)`` pairs
+        with separator treatment, and ``needles`` the blob-scan
+        spellings. One snapshot feeds exactly one
+        :class:`_FreeTextReplacer`; the differential test builds the
+        same snapshot for both implementations so only the
+        free-text pass under test can differ.
+        """
         collected: list[tuple[str, str, str]] = []
         self._collect(dumped, collected)
         collected = [
@@ -1402,7 +1444,7 @@ class Pseudonymizer:
         for kind, canonical, raw in collected:
             if (kind, canonical) in registered and len(raw) >= 2:
                 needles.add(raw)
-        return self._replace(dumped, table, registered=registered, needles=needles)
+        return table, registered, needles
 
     def _scan_strings(self, value: Any) -> list[tuple[str, str]]:
         """Run :func:`scan_entities` over every string leaf and dict key."""
@@ -1449,31 +1491,35 @@ class Pseudonymizer:
         *,
         registered: frozenset[tuple[str, str]] = frozenset(),
         needles: Collection[str] = (),
+        emitted: set[str] | None = None,
+        replacer: _FreeTextReplacer,
     ) -> Any:
         if isinstance(value, str):
-            return _replace_free_text(
-                _mask_encoded_blobs(value, needles), table, registered
-            )
+            return replacer.replace(_mask_encoded_blobs(value, needles), emitted)
         if isinstance(value, dict):
             replaced: dict[Any, Any] = {}
             for key, item in value.items():
                 lowered = key.lower() if isinstance(key, str) else ""
-                out_key = (
-                    key
-                    if not isinstance(key, str)
+                if (
+                    not isinstance(key, str)
                     or lowered in FIELD_KINDS
                     or lowered == "user"
                     or lowered in USER_DICT_NAME_KEYS
-                    else _replace_free_text(key, table, registered)
-                )
+                ):
+                    out_key = key
+                else:
+                    out_key = replacer.replace(key, emitted)
                 kind = FIELD_KINDS.get(lowered)
                 if kind is not None and isinstance(item, str):
                     canonical = _canonical(kind, item)
                     if canonical is not None and canonical in table:
-                        replaced[out_key] = table[canonical][0]
+                        pseudo = table[canonical][0]
+                        replaced[out_key] = pseudo
+                        if emitted is not None:
+                            emitted.add(pseudo)
                     else:
-                        replaced[out_key] = _replace_free_text(
-                            _mask_encoded_blobs(item, needles), table, registered
+                        replaced[out_key] = replacer.replace(
+                            _mask_encoded_blobs(item, needles), emitted
                         )
                 elif lowered == "user" and isinstance(item, dict):
                     new_user: dict[Any, Any] = {}
@@ -1485,12 +1531,13 @@ class Pseudonymizer:
                         ):
                             canonical = _canonical("user", child_value)
                             if canonical is not None and canonical in table:
-                                new_user[child_key] = table[canonical][0]
+                                pseudo = table[canonical][0]
+                                new_user[child_key] = pseudo
+                                if emitted is not None:
+                                    emitted.add(pseudo)
                             else:
-                                new_user[child_key] = _replace_free_text(
-                                    _mask_encoded_blobs(child_value, needles),
-                                    table,
-                                    registered,
+                                new_user[child_key] = replacer.replace(
+                                    _mask_encoded_blobs(child_value, needles), emitted
                                 )
                         else:
                             new_user[child_key] = self._replace(
@@ -1498,21 +1545,42 @@ class Pseudonymizer:
                                 table,
                                 registered=registered,
                                 needles=needles,
+                                emitted=emitted,
+                                replacer=replacer,
                             )
                     replaced[out_key] = new_user
                 else:
                     replaced[out_key] = self._replace(
-                        item, table, registered=registered, needles=needles
+                        item,
+                        table,
+                        registered=registered,
+                        needles=needles,
+                        emitted=emitted,
+                        replacer=replacer,
                     )
             return replaced
         if isinstance(value, list):
             return [
-                self._replace(item, table, registered=registered, needles=needles)
+                self._replace(
+                    item,
+                    table,
+                    registered=registered,
+                    needles=needles,
+                    emitted=emitted,
+                    replacer=replacer,
+                )
                 for item in value
             ]
         if isinstance(value, tuple):
             return tuple(
-                self._replace(item, table, registered=registered, needles=needles)
+                self._replace(
+                    item,
+                    table,
+                    registered=registered,
+                    needles=needles,
+                    emitted=emitted,
+                    replacer=replacer,
+                )
                 for item in value
             )
         if isinstance(value, bool):
@@ -1528,6 +1596,8 @@ class Pseudonymizer:
             # registered IPv4 maps to the same pseudonym.
             entry = table.get(_packed_dotted(value))
             if entry is not None and entry[1] == "ip":
+                if emitted is not None:
+                    emitted.add(entry[0])
                 return entry[0]
         return value
 
@@ -1652,78 +1722,117 @@ _SENTENCE_PUNCT = r"[.?!]+"
 _CLOSING_CHARS = r")\]}'\""
 
 
-def _replace_free_text(
-    text: str,
-    table: dict[str, tuple[str, str]],
-    registered: frozenset[tuple[str, str]] = frozenset(),
-) -> str:
-    """Replace known raw values inside one free-text string.
+class _FreeTextReplacer:
+    """Precompiled per-entry replacement for a table snapshot.
 
-    Percent-escapes decode for matching (``%40`` matches ``@``) and
-    the original spelling is what gets replaced. Registered values
-    additionally treat ``_`` and ``-`` as separators. IPv4 entries
-    match every spelling of their canonical quad (padded, spaced,
-    hex).
+    Built once per :meth:`Pseudonymizer.pseudonymize_with_report` call
+    and reused for every string leaf of that payload: each table
+    entry's pattern is compiled once per payload instead of once per
+    string leaf. Application is entry-major in longest-first order,
+    exactly the committed per-entry loop now frozen as the test-only
+    oracle in ``tests/oracle_pseudonymizer.py`` — every entry (the
+    current call's scan results as well as every table row, including
+    same-spelling rows of different kinds) is substituted globally in
+    turn with the same boundary, sentence-punctuation,
+    :func:`_is_path_component` and packed-integer IPv4 rules, so a
+    span one entry leaves alone (a path component for its kind) is
+    still replaceable by a later entry. Any divergence from the
+    oracle is a bug: the differential test pins the two byte for
+    byte.
     """
-    if not text or not table:
-        return text
-    for raw in sorted(table, key=len, reverse=True):
-        pseudonym, kind = table[raw]
-        if not raw or raw == pseudonym:
-            continue
-        flags = 0 if kind == "ip" else re.IGNORECASE
-        token_chars = _TOKEN_CHARS
-        if kind == "ip":
-            variant = _ip_match_body(raw)
-            if variant is not None:
-                body = variant
+
+    def __init__(
+        self,
+        table: dict[str, tuple[str, str]],
+        registered: frozenset[tuple[str, str]],
+    ) -> None:
+        # One entry per table spelling in longest-first order, each
+        # with its compiled pattern and (for IPv4) its packed-integer
+        # form: the same per-entry data the committed loop recomputed
+        # for every string leaf.
+        self._specs: list[tuple[str, str, re.Pattern[str], int | None]] = []
+        for raw in sorted(table, key=len, reverse=True):
+            pseudonym, kind = table[raw]
+            if not raw or raw == pseudonym:
+                continue
+            flags = 0 if kind == "ip" else re.IGNORECASE
+            token_chars = _TOKEN_CHARS
+            if kind == "ip":
+                variant = _ip_match_body(raw)
+                if variant is not None:
+                    body = variant
+                else:
+                    body = "".join(_encoded_char_pattern(char) for char in raw)
             else:
+                entry_canonical = _canonical(kind, raw)
+                if (
+                    entry_canonical is not None
+                    and (kind, entry_canonical) in registered
+                ):
+                    token_chars = _REGISTERED_TOKEN_CHARS
                 body = "".join(_encoded_char_pattern(char) for char in raw)
-        else:
-            entry_canonical = _canonical(kind, raw)
-            if entry_canonical is not None and (kind, entry_canonical) in registered:
-                token_chars = _REGISTERED_TOKEN_CHARS
-            body = "".join(_encoded_char_pattern(char) for char in raw)
-        if kind == "host" and "." not in raw:
-            # Longest-first ordering already prefers an earlier full
-            # spelling; the alternation tries the suffixed form first.
-            body = f"(?:{body}{_HOST_SUFFIX}|{body})"
-        pattern = re.compile(
-            r"(?<!["
-            + token_chars
-            + r"])"
-            + body
-            + r"(?:(?P<punct>"
-            + _SENTENCE_PUNCT
-            + r")(?=$|\s|["
-            + _CLOSING_CHARS
-            + r"])|(?!["
-            + token_chars
-            + r"]))",
-            flags,
-        )
-
-        def _emit(
-            match: re.Match[str],
-            pseudo: str = pseudonym,
-            kind: str = kind,
-            source: str = text,
-        ) -> str:
-            punct = match.group("punct") or ""
-            core_end = match.end() - len(punct)
-            if _is_path_component(source, match.start(), core_end, kind):
-                return match.group(0)
-            return pseudo + punct
-
-        text = pattern.sub(_emit, text)
-        if kind == "ip":
-            # Decimal-integer IPv4 (``src=173343012``): the packed
-            # 32-bit value of a registered quad maps to the same
-            # pseudonym. Short literals stay untouched (ports, counts).
-            entry_canonical = _canonical(kind, raw)
-            packed = (
-                _ip_packed(entry_canonical) if entry_canonical is not None else None
+            if kind == "host" and "." not in raw:
+                # Longest-first ordering already prefers an earlier full
+                # spelling; the entry tries the suffixed form first.
+                body = f"(?:{body}{_HOST_SUFFIX}|{body})"
+            compiled = re.compile(
+                r"(?<!["
+                + token_chars
+                + r"])"
+                + body
+                + r"(?:(?P<punct>"
+                + _SENTENCE_PUNCT
+                + r")(?=$|\s|["
+                + _CLOSING_CHARS
+                + r"])|(?!["
+                + token_chars
+                + r"]))",
+                flags,
             )
-            if packed is not None and len(str(packed)) >= _MIN_DECIMAL_IP_DIGITS:
-                text = re.sub(rf"(?<!\d){packed}(?!\d)", pseudonym, text)
-    return text
+            packed_number: int | None = None
+            if kind == "ip":
+                entry_canonical = _canonical(kind, raw)
+                candidate = (
+                    _ip_packed(entry_canonical) if entry_canonical is not None else None
+                )
+                if (
+                    candidate is not None
+                    and len(str(candidate)) >= _MIN_DECIMAL_IP_DIGITS
+                ):
+                    packed_number = candidate
+            self._specs.append((pseudonym, kind, compiled, packed_number))
+
+    def replace(self, text: str, emitted: set[str] | None = None) -> str:
+        """Replace every known raw value in ``text`` entry by entry."""
+        if not text or not self._specs:
+            return text
+        for pseudonym, kind, compiled, packed_number in self._specs:
+            source = text
+
+            def _emit(
+                match: re.Match[str],
+                pseudo: str = pseudonym,
+                match_kind: str = kind,
+                match_source: str = source,
+            ) -> str:
+                punct = match.group("punct") or ""
+                core_end = match.end() - len(punct)
+                if _is_path_component(
+                    match_source, match.start(), core_end, match_kind
+                ):
+                    return match.group(0)
+                return pseudo + punct
+
+            before = text
+            text = compiled.sub(_emit, text)
+            if text != before and emitted is not None:
+                emitted.add(pseudonym)
+            if packed_number is not None:
+                # Decimal-integer IPv4 (``src=173343012``): the packed
+                # 32-bit value of a registered quad maps to the same
+                # pseudonym. Short literals stay untouched (ports, counts).
+                before_int = text
+                text = re.sub(rf"(?<!\d){packed_number}(?!\d)", pseudonym, text)
+                if text != before_int and emitted is not None:
+                    emitted.add(pseudonym)
+        return text

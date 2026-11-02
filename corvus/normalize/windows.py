@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import tarfile
 import xml.etree.ElementTree as ET
@@ -65,6 +66,7 @@ from typing import Any
 from evtx import PyEvtxParser
 
 from corvus.normalize.ocsf import (
+    MAX_TIME_MS,
     MIN_TIME_MS,
     PLACEHOLDERS,
     Actor,
@@ -105,6 +107,7 @@ __all__ = [
     "SYSTEM_CHANNEL",
     "TASKSCHEDULER_CHANNEL",
     "WINDOWS_POWERSHELL_CHANNEL",
+    "WINDOWS_TEXT_CAP",
     "UnmappedEvent",
     "WindowsReadResult",
     "WindowsReadStats",
@@ -212,15 +215,25 @@ class WindowsReadStats:
     Pass your own instance to :func:`iter_dataset_file` to read the counts
     after the iterator is exhausted; the events themselves stream one at a
     time so the caller never holds a whole dataset in memory.
+    ``mapper_errors`` holds per-record mapper exceptions (anything
+    :func:`normalize_event` raises besides :class:`UnmappedEvent`) under
+    the same ``(channel, event id)`` key, so one hostile record never
+    aborts the file.
     """
 
     unmapped: dict[tuple[str, int], int] = field(default_factory=dict)
     unsupported: int = 0
+    mapper_errors: dict[tuple[str, int], int] = field(default_factory=dict)
 
     def count(self, channel: str, event_id: int) -> None:
         """Add one unmapped record under ``(channel, event id)``."""
         key = (channel, event_id)
         self.unmapped[key] = self.unmapped.get(key, 0) + 1
+
+    def count_mapper_error(self, channel: str, event_id: int) -> None:
+        """Add one mapper-exception record under ``(channel, event id)``."""
+        key = (channel, event_id)
+        self.mapper_errors[key] = self.mapper_errors.get(key, 0) + 1
 
 
 @dataclass
@@ -230,11 +243,17 @@ class WindowsReadResult:
     events: list[OcsfEvent] = field(default_factory=list)
     unmapped: dict[tuple[str, int], int] = field(default_factory=dict)
     unsupported: int = 0
+    mapper_errors: dict[tuple[str, int], int] = field(default_factory=dict)
 
     def count(self, channel: str, event_id: int) -> None:
         """Add one unmapped record under ``(channel, event id)``."""
         key = (channel, event_id)
         self.unmapped[key] = self.unmapped.get(key, 0) + 1
+
+    def count_mapper_error(self, channel: str, event_id: int) -> None:
+        """Add one mapper-exception record under ``(channel, event id)``."""
+        key = (channel, event_id)
+        self.mapper_errors[key] = self.mapper_errors.get(key, 0) + 1
 
 
 def make_uid(dataset_rel: str, record_id: object) -> str:
@@ -260,16 +279,26 @@ def parse_windows_time(value: object) -> int:
     Sysmon ``UtcTime``), epoch seconds or milliseconds, and strings: ISO
     8601 with ``Z``/offset or a space separator, ``YYYY-MM-DD HH:MM:SS[.fff]``
     and US ``M/D/YYYY H:MM:SS [AM/PM]``. Raises ``ValueError`` when the value
-    is missing or lands before 2000-01-01 UTC.
+    is missing, non-finite, or lands before 2000-01-01 UTC or after
+    2100-01-01 UTC (never ``OverflowError``).
     """
     if isinstance(value, bool):
         raise ValueError(f"cannot parse time from {value!r}")
     if isinstance(value, datetime):
         moment = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-        return _checked_ms(int(moment.timestamp() * 1000))
+        try:
+            ms = int(moment.timestamp() * 1000)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise ValueError(f"cannot parse time from {value!r}") from exc
+        return _checked_ms(ms)
     if isinstance(value, int | float):
         number = float(value)
-        ms = int(number) if number >= MIN_TIME_MS else int(number * 1000)
+        if not math.isfinite(number):
+            raise ValueError(f"cannot parse time from {value!r}")
+        try:
+            ms = int(number) if number >= MIN_TIME_MS else int(number * 1000)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError(f"cannot parse time from {value!r}") from exc
         return _checked_ms(ms)
     if isinstance(value, str):
         text = value.strip()
@@ -286,15 +315,156 @@ def parse_windows_time(value: object) -> int:
             parsed = _parse_non_iso(text)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
-        return _checked_ms(int(parsed.timestamp() * 1000))
+        try:
+            ms = int(parsed.timestamp() * 1000)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise ValueError(f"cannot parse time from {value!r}") from exc
+        return _checked_ms(ms)
     raise ValueError(f"cannot parse time from {value!r}")
 
 
 def _checked_ms(moment_ms: int) -> int:
-    """Reject times before the 2000-01-01 UTC floor shared with OCSF."""
+    """Reject times outside the 2000-01-01 .. 2100-01-01 UTC window."""
     if moment_ms < MIN_TIME_MS:
         raise ValueError(f"time {moment_ms} is before 2000-01-01 UTC")
+    if moment_ms > MAX_TIME_MS:
+        raise ValueError(f"time {moment_ms} is after 2100-01-01 UTC")
     return moment_ms
+
+
+#: Bound on attacker-controlled text kept in a typed Windows slot
+#: (images, users, domains, host names, file and registry paths,
+#: service names, hashes, command lines, task commands, script
+#: blocks, registry value data) and on every string leaf stored in
+#: ``raw_data`` (see :func:`_cap_raw_leaves`). Longer values truncate
+#: here and the original length lands in ``unmapped``
+#: (``windows.*_truncated`` for typed slots,
+#: ``windows.raw_data_truncated`` mapping JSON paths to lengths for
+#: ``raw_data``). Mirrors the documented
+#: :data:`corvus.normalize.wazuh.LINUX_USERNAME_CAP` pattern.
+WINDOWS_TEXT_CAP = 65536
+
+
+def _sanitize_str(value: str) -> tuple[str, bool]:
+    """Replace NUL and lone surrogates with U+FFFD.
+
+    Postgres UTF-8 text (and ``jsonb``) rejects both: a NUL byte is
+    illegal in any ``text`` value and a lone surrogate cannot encode
+    to UTF-8, so either would raise on insert all the way down the
+    pipeline (findings, incidents, analyses). Returns the cleaned
+    string plus whether anything was replaced.
+    """
+    bad = False
+    out: list[str] = []
+    for char in value:
+        code = ord(char)
+        if code == 0 or 0xD800 <= code <= 0xDFFF:
+            out.append("\ufffd")
+            bad = True
+        else:
+            out.append(char)
+    if not bad:
+        return value, False
+    return "".join(out), True
+
+
+def _sanitize_value(value: Any) -> tuple[Any, bool]:
+    """Recursively sanitize every string leaf of ``value``.
+
+    Returns the cleaned value plus whether any leaf changed. Dict
+    keys are sanitized too (keys are attacker-visible in JSON); tuple
+    and list shapes are preserved.
+    """
+    if isinstance(value, str):
+        return _sanitize_str(value)
+    if isinstance(value, dict):
+        changed = False
+        cleaned: dict[Any, Any] = {}
+        for key, item in value.items():
+            clean_key, key_bad = (
+                _sanitize_str(key) if isinstance(key, str) else (key, False)
+            )
+            clean_item, item_bad = _sanitize_value(item)
+            changed = changed or key_bad or item_bad
+            cleaned[clean_key] = clean_item
+        return cleaned, changed
+    if isinstance(value, list):
+        changed = False
+        cleaned_list: list[Any] = []
+        for item in value:
+            clean_item, item_bad = _sanitize_value(item)
+            changed = changed or item_bad
+            cleaned_list.append(clean_item)
+        return cleaned_list, changed
+    if isinstance(value, tuple):
+        changed = False
+        cleaned_items: list[Any] = []
+        for item in value:
+            clean_item, item_bad = _sanitize_value(item)
+            changed = changed or item_bad
+            cleaned_items.append(clean_item)
+        return tuple(cleaned_items), changed
+    return value, False
+
+
+def _cap_text(text: str | None, fields: dict[str, Any], key: str) -> str | None:
+    """Truncate ``text`` to :data:`WINDOWS_TEXT_CAP`, recording length.
+
+    Over-long values truncate here; the original length lands in
+    ``unmapped[key]`` (``raw_data`` string leaves are capped
+    separately by :func:`_cap_raw_leaves`, so the full value is kept
+    nowhere — only its length).
+    """
+    if text is None:
+        return None
+    if len(text) > WINDOWS_TEXT_CAP:
+        fields[key] = len(text)
+        return text[:WINDOWS_TEXT_CAP]
+    return text
+
+
+def _capped_field(fields: dict[str, Any], key: str, cap_key: str) -> str | None:
+    """Pop ``key`` as text and cap it at :data:`WINDOWS_TEXT_CAP`.
+
+    Combines :func:`_take_text` with :func:`_cap_text`: the typed
+    value truncates, the original length lands in
+    ``unmapped[cap_key]``, and placeholder values are restored to
+    ``fields`` like :func:`_take_text`. A missing key (or an explicit
+    null) stays missing.
+    """
+    return _cap_text(_take_text(fields, key), fields, cap_key)
+
+
+def _cap_raw_leaves(value: Any, truncated: dict[str, int], path: str = "$") -> Any:
+    """Truncate over-long string leaves for ``raw_data``.
+
+    Every string leaf longer than :data:`WINDOWS_TEXT_CAP` truncates
+    there; ``truncated`` records the JSON path (``$.a[0].b``) to the
+    original length, so nothing is silently lost. Dict keys are never
+    truncated (schema, not attacker text); tuple and list shapes are
+    preserved.
+    """
+    if isinstance(value, str):
+        if len(value) > WINDOWS_TEXT_CAP:
+            truncated[path] = len(value)
+            return value[:WINDOWS_TEXT_CAP]
+        return value
+    if isinstance(value, dict):
+        return {
+            key: _cap_raw_leaves(item, truncated, f"{path}.{key}")
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _cap_raw_leaves(item, truncated, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _cap_raw_leaves(item, truncated, f"{path}[{index}]")
+            for index, item in enumerate(value)
+        )
+    return value
 
 
 def _parse_non_iso(text: str) -> datetime:
@@ -675,12 +845,24 @@ def _map_sysmon_process(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
     Process Activity in the pinned OCSF 1.9.0 schema while none of the
     process object's own attributes are.
     """
-    image = _text(fields.pop("Image", None))
+    image = _cap_text(
+        _text(fields.pop("Image", None)), fields, "windows.image_truncated"
+    )
     pid = _pid(fields.pop("ProcessId", None))
-    cmd_line = _text(fields.pop("CommandLine", None))
-    parent_image = _text(fields.pop("ParentImage", None))
+    cmd_line = _cap_text(
+        _text(fields.pop("CommandLine", None)),
+        fields,
+        "windows.cmdline_truncated",
+    )
+    parent_image = _cap_text(
+        _text(fields.pop("ParentImage", None)),
+        fields,
+        "windows.parent_image_truncated",
+    )
     parent_pid = _pid(fields.pop("ParentProcessId", None))
-    user, domain = _split_account(_text(fields.pop("User", None)))
+    user, domain = _split_account(
+        _cap_text(_text(fields.pop("User", None)), fields, "windows.user_truncated")
+    )
     fields.pop("UtcTime", None)
     parent: Process | None = None
     if parent_pid is not None or parent_image is not None:
@@ -715,13 +897,21 @@ def _map_sysmon_network(fields: dict[str, Any], ctx: _Ctx) -> NetworkActivity:
     ``ProcessGuid``, ``Protocol`` and the hostname flags stay in
     ``unmapped`` (no typed OCSF slot).
     """
-    src_ip = _text(fields.pop("SourceIp", None))
+    src_ip = _cap_text(
+        _text(fields.pop("SourceIp", None)), fields, "windows.src_ip_truncated"
+    )
     src_port = _port(fields.pop("SourcePort", None))
-    dst_ip = _text(fields.pop("DestinationIp", None))
+    dst_ip = _cap_text(
+        _text(fields.pop("DestinationIp", None)), fields, "windows.dst_ip_truncated"
+    )
     dst_port = _port(fields.pop("DestinationPort", None))
-    image = _text(fields.pop("Image", None))
+    image = _cap_text(
+        _text(fields.pop("Image", None)), fields, "windows.image_truncated"
+    )
     pid = _pid(fields.pop("ProcessId", None))
-    user, domain = _split_account(_text(fields.pop("User", None)))
+    user, domain = _split_account(
+        _cap_text(_text(fields.pop("User", None)), fields, "windows.user_truncated")
+    )
     fields.pop("UtcTime", None)
     src: Endpoint | None = None
     if src_ip is not None or src_port is not None:
@@ -757,15 +947,19 @@ _HASH_ALGORITHM_CAPTIONS = {
 }
 
 
-def _parse_hashes(raw: object) -> list[Fingerprint] | None:
+def _parse_hashes(raw: object, fields: dict[str, Any]) -> list[Fingerprint] | None:
     """Split a Sysmon ``Hashes`` value into fingerprint objects.
 
     The value is comma-separated ``ALG=hex`` pairs (Sysmon 7 carries
     ``SHA1``/``MD5``/``SHA256``/``IMPHASH``). Known names map to the
     pinned OCSF 1.9.0 ``algorithm_id`` enum with the enum caption in
     ``algorithm``; anything else becomes 99 Other with the source name
-    kept verbatim in ``algorithm``. Returns None when nothing usable
-    remains; the caller then keeps the raw value in ``unmapped``.
+    kept verbatim in ``algorithm``. Digests and unknown algorithm
+    names truncate at :data:`WINDOWS_TEXT_CAP` with the original
+    length in ``unmapped`` (``windows.hash_truncated`` /
+    ``windows.hash_algorithm_truncated``). Returns None when nothing
+    usable remains; the caller then keeps the raw value in
+    ``unmapped``.
     """
     text = _text(raw)
     if text is None:
@@ -779,11 +973,21 @@ def _parse_hashes(raw: object) -> list[Fingerprint] | None:
             continue
         algorithm_id = _HASH_ALGORITHM_IDS.get(name.upper(), 99)
         if algorithm_id == 99:
-            algorithm = name
+            capped_name: str | None = _cap_text(
+                name, fields, "windows.hash_algorithm_truncated"
+            )
+            if capped_name is None:
+                continue
+            algorithm = capped_name
         else:
             algorithm = _HASH_ALGORITHM_CAPTIONS[algorithm_id]
+        capped_digest: str | None = _cap_text(digest, fields, "windows.hash_truncated")
+        if capped_digest is None:
+            continue
         pairs.append(
-            Fingerprint(algorithm=algorithm, algorithm_id=algorithm_id, value=digest)
+            Fingerprint(
+                algorithm=algorithm, algorithm_id=algorithm_id, value=capped_digest
+            )
         )
     return pairs or None
 
@@ -806,23 +1010,29 @@ def _map_sysmon_module(fields: dict[str, Any], ctx: _Ctx) -> ModuleActivity:
     in ``unmapped``, as do ``FileVersion``, ``ProcessGuid``,
     ``RuleName``, ``EventType`` and the rest.
     """
-    loaded = _take_text(fields, "ImageLoaded")
-    image = _text(fields.pop("Image", None))
+    loaded = _capped_field(fields, "ImageLoaded", "windows.image_loaded_truncated")
+    image = _cap_text(
+        _text(fields.pop("Image", None)), fields, "windows.image_truncated"
+    )
     pid = _pid(fields.pop("ProcessId", None))
-    raw_user = _text(fields.pop("User", None))
+    raw_user = _cap_text(
+        _text(fields.pop("User", None)), fields, "windows.user_truncated"
+    )
     if raw_user is not None:
         user, domain = _split_account(raw_user)
     else:
-        user = _take_text(fields, "AccountName")
-        domain = _take_text(fields, "Domain")
+        user = _capped_field(fields, "AccountName", "windows.user_truncated")
+        domain = _capped_field(fields, "Domain", "windows.domain_truncated")
     raw_hashes = fields.pop("Hashes", None)
-    hashes = _parse_hashes(raw_hashes)
+    hashes = _parse_hashes(raw_hashes, fields)
     if hashes is None and raw_hashes is not None:
         fields["Hashes"] = raw_hashes
-    desc = _take_text(fields, "Description")
-    company = _take_text(fields, "Company")
-    product_name = _take_text(fields, "Product")
-    internal = _take_text(fields, "OriginalFileName")
+    desc = _capped_field(fields, "Description", "windows.description_truncated")
+    company = _capped_field(fields, "Company", "windows.company_truncated")
+    product_name = _capped_field(fields, "Product", "windows.product_truncated")
+    internal = _capped_field(
+        fields, "OriginalFileName", "windows.original_filename_truncated"
+    )
     fields.pop("UtcTime", None)
     # A loaded image is executable code (schema file type 8); without a
     # path there is no name (required on the file object), so no typed
@@ -880,12 +1090,22 @@ def _map_sysmon_access(fields: dict[str, Any], ctx: _Ctx) -> ProcessActivity:
     in ``objects/process.json`` carries nothing like it — so it stays in
     ``unmapped``, as do the GUIDs and the source thread id.
     """
-    source_image = _text(fields.pop("SourceImage", None))
+    source_image = _cap_text(
+        _text(fields.pop("SourceImage", None)),
+        fields,
+        "windows.source_image_truncated",
+    )
     source_pid = _pid(fields.pop("SourceProcessId", None))
-    target_image = _text(fields.pop("TargetImage", None))
+    target_image = _cap_text(
+        _text(fields.pop("TargetImage", None)),
+        fields,
+        "windows.target_image_truncated",
+    )
     target_pid = _pid(fields.pop("TargetProcessId", None))
     granted = _parse_permissions(fields.pop("GrantedAccess", None), fields)
-    user, domain = _split_account(_text(fields.pop("User", None)))
+    user, domain = _split_account(
+        _cap_text(_text(fields.pop("User", None)), fields, "windows.user_truncated")
+    )
     fields.pop("UtcTime", None)
     source: Process | None = None
     if source_pid is not None or source_image is not None:
@@ -918,12 +1138,14 @@ def _script_actor(fields: dict[str, Any]) -> Actor:
     separate ``AccountName`` and ``Domain`` fields instead of one ``User``
     ``DOMAIN\\name`` string.
     """
-    raw_user = _text(fields.pop("User", None))
+    raw_user = _cap_text(
+        _text(fields.pop("User", None)), fields, "windows.user_truncated"
+    )
     if raw_user is not None:
         name, domain = _split_account(raw_user)
         return _actor(name, domain)
-    name = _text(fields.pop("AccountName", None))
-    domain = _text(fields.pop("Domain", None))
+    name = _capped_field(fields, "AccountName", "windows.user_truncated")
+    domain = _capped_field(fields, "Domain", "windows.domain_truncated")
     return _actor(name, domain)
 
 
@@ -937,6 +1159,9 @@ def _script_event(
     conformant Script Activity and is counted unmapped instead.
     """
     fields.pop("TimeCreated", None)
+    if content is None:
+        raise UnmappedEvent(ctx.channel, ctx.event_id)
+    content = _cap_text(content, fields, "windows.script_truncated")
     if content is None:
         raise UnmappedEvent(ctx.channel, ctx.event_id)
     return ScriptActivity(
@@ -972,7 +1197,11 @@ def _map_powershell_script(fields: dict[str, Any], ctx: _Ctx) -> ScriptActivity:
     content = _text(fields.pop("ScriptBlockText", None))
     if content is None:
         content = _scriptblock_message_text(_take_text(fields, "Message"))
-    block_id = _text(fields.pop("ScriptBlockId", None))
+    block_id = _cap_text(
+        _text(fields.pop("ScriptBlockId", None)),
+        fields,
+        "windows.script_uid_truncated",
+    )
     return _script_event(fields, ctx, content, block_id)
 
 
@@ -1059,12 +1288,20 @@ def _map_sysmon_file(fields: dict[str, Any], ctx: _Ctx) -> FileSystemActivity:
     no file name (required on the file object) and is counted unmapped
     instead of emitting a non-conformant event.
     """
-    target = _text(fields.pop("TargetFilename", None))
+    target = _cap_text(
+        _text(fields.pop("TargetFilename", None)),
+        fields,
+        "windows.target_filename_truncated",
+    )
     if target is None:
         raise UnmappedEvent(ctx.channel, ctx.event_id)
-    image = _text(fields.pop("Image", None))
+    image = _cap_text(
+        _text(fields.pop("Image", None)), fields, "windows.image_truncated"
+    )
     pid = _pid(fields.pop("ProcessId", None))
-    user, domain = _split_account(_text(fields.pop("User", None)))
+    user, domain = _split_account(
+        _cap_text(_text(fields.pop("User", None)), fields, "windows.user_truncated")
+    )
     fields.pop("UtcTime", None)
     return FileSystemActivity(
         time=ctx.time_ms,
@@ -1124,8 +1361,8 @@ def _registry_actor(
     (``SYSTEM`` / ``NT AUTHORITY`` on every day-1 record). ``UserID``
     (a SID) has no typed OCSF slot and stays in ``unmapped``.
     """
-    name = _take_text(fields, "AccountName")
-    domain = _take_text(fields, "Domain")
+    name = _capped_field(fields, "AccountName", "windows.user_truncated")
+    domain = _capped_field(fields, "Domain", "windows.domain_truncated")
     return _actor(name, domain, _initiating_process(image, pid))
 
 
@@ -1168,13 +1405,13 @@ def _map_sysmon_registry_key(
     ``Message`` and the rest stay in ``unmapped``.
     """
     op = _registry_op(fields)
-    target = _take_text(fields, "TargetObject")
+    target = _capped_field(fields, "TargetObject", "windows.registry_target_truncated")
     # ``reg_key``/``reg_value`` require the path (and the value name
     # derived from it); a record without a target cannot form a
     # conformant event and is counted unmapped instead.
     if target is None:
         raise UnmappedEvent(ctx.channel, ctx.event_id)
-    image = _take_text(fields, "Image")
+    image = _capped_field(fields, "Image", "windows.image_truncated")
     pid = _pid(fields.pop("ProcessId", None))
     fields.pop("UtcTime", None)
     actor = _registry_actor(fields, image, pid)
@@ -1234,13 +1471,15 @@ def _map_sysmon_registry_value(
     its last backslash component (mirroring the ``File.name``
     derivation); ``Details`` becomes ``reg_value.data`` verbatim.
     """
-    target = _take_text(fields, "TargetObject")
-    data = _take_text(fields, "Details")
+    target = _capped_field(fields, "TargetObject", "windows.registry_target_truncated")
+    data = _cap_text(
+        _take_text(fields, "Details"), fields, "windows.registry_truncated"
+    )
     # ``reg_value`` requires the path (and the name derived from it); a
     # record without a target cannot form a conformant event.
     if target is None:
         raise UnmappedEvent(ctx.channel, ctx.event_id)
-    image = _take_text(fields, "Image")
+    image = _capped_field(fields, "Image", "windows.image_truncated")
     pid = _pid(fields.pop("ProcessId", None))
     fields.pop("UtcTime", None)
     value = _registry_value(target, data)
@@ -1269,12 +1508,12 @@ def _map_sysmon_registry_rename(
     ``NewName`` the target is the key. Any ``EventType`` or NXLog
     ``EventTypeOrignal`` filler stays in ``unmapped``.
     """
-    target = _take_text(fields, "TargetObject")
-    new_name = _take_text(fields, "NewName")
+    target = _capped_field(fields, "TargetObject", "windows.registry_target_truncated")
+    new_name = _capped_field(fields, "NewName", "windows.registry_new_name_truncated")
     key = new_name if new_name is not None else target
     if key is None:
         raise UnmappedEvent(ctx.channel, ctx.event_id)
-    image = _take_text(fields, "Image")
+    image = _capped_field(fields, "Image", "windows.image_truncated")
     pid = _pid(fields.pop("ProcessId", None))
     fields.pop("UtcTime", None)
     prev = target if new_name is not None and target != new_name else None
@@ -1297,9 +1536,17 @@ def _map_logon(fields: dict[str, Any], ctx: _Ctx, *, success: bool) -> Authentic
     and its original value stays in ``unmapped``; ``WorkstationName`` and
     the remaining subject fields stay in ``unmapped`` too.
     """
-    name = _text(fields.pop("TargetUserName", None))
-    domain = _text(fields.pop("TargetDomainName", None))
-    ip = _text(fields.pop("IpAddress", None))
+    name = _cap_text(
+        _text(fields.pop("TargetUserName", None)),
+        fields,
+        "windows.user_truncated",
+    )
+    domain = _cap_text(
+        _text(fields.pop("TargetDomainName", None)),
+        fields,
+        "windows.domain_truncated",
+    )
+    ip = _cap_text(_text(fields.pop("IpAddress", None)), fields, "windows.ip_truncated")
     port = _port(fields.pop("IpPort", None))
     logon_type_id, logon_type = _logon_type_id(fields.get("LogonType"))
     fields.pop("TimeCreated", None)
@@ -1338,6 +1585,7 @@ def _task_command(task_xml: str | None) -> str | None:
     """
     if task_xml is None:
         return None
+    task_xml, _ = _sanitize_str(task_xml)
     try:
         root = ET.fromstring(task_xml)
     except ET.ParseError:
@@ -1369,10 +1617,26 @@ def _map_task_4698(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
     The raw XML stays in ``unmapped``, as do the subject SIDs. Records
     whose XML does not parse still map, with no actions.
     """
-    task_name = _text(fields.pop("TaskName", None))
-    name = _text(fields.pop("SubjectUserName", None))
-    domain = _text(fields.pop("SubjectDomainName", None))
-    command = _task_command(_text(fields.get("TaskContentNew")))
+    task_name = _cap_text(
+        _text(fields.pop("TaskName", None)),
+        fields,
+        "windows.task_name_truncated",
+    )
+    name = _cap_text(
+        _text(fields.pop("SubjectUserName", None)),
+        fields,
+        "windows.user_truncated",
+    )
+    domain = _cap_text(
+        _text(fields.pop("SubjectDomainName", None)),
+        fields,
+        "windows.domain_truncated",
+    )
+    command = _cap_text(
+        _task_command(_text(fields.get("TaskContentNew"))),
+        fields,
+        "windows.command_truncated",
+    )
     fields.pop("TimeCreated", None)
     # ``job`` is always emitted (possibly empty): it is required on
     # Scheduled Job Activity while none of the job object's own
@@ -1404,8 +1668,14 @@ def _map_task_106(fields: dict[str, Any], ctx: _Ctx) -> ScheduledJobActivity:
     deprecated since OCSF 1.9.0 and is never written). ``UserData``
     stays in ``unmapped`` (no typed OCSF slot).
     """
-    task_name = _text(fields.pop("TaskName", None))
-    name, domain = _split_account(_text(fields.pop("User", None)))
+    task_name = _cap_text(
+        _text(fields.pop("TaskName", None)),
+        fields,
+        "windows.task_name_truncated",
+    )
+    name, domain = _split_account(
+        _cap_text(_text(fields.pop("User", None)), fields, "windows.user_truncated")
+    )
     fields.pop("TimeCreated", None)
     # ``job`` is always emitted (possibly empty): it is required on
     # Scheduled Job Activity while none of the job object's own
@@ -1451,17 +1721,25 @@ def _map_service_4697(fields: dict[str, Any], ctx: _Ctx) -> WindowsServiceActivi
     values stay in ``unmapped``. ``SubjectUserName`` /
     ``SubjectDomainName`` name the installer and become the actor.
     """
-    name = _take_text(fields, "ServiceName")
+    name = _capped_field(fields, "ServiceName", "windows.service_name_truncated")
     # ``win_service`` requires the name; a nameless record cannot form a
     # conformant event and is counted unmapped instead.
     if name is None:
         raise UnmappedEvent(ctx.channel, ctx.event_id)
-    cmd_line = _take_text(fields, "ServiceFileName")
+    cmd_line = _capped_field(
+        fields, "ServiceFileName", "windows.service_cmdline_truncated"
+    )
     start_type_id, start_type = _service_start_type(fields.get("ServiceStartType"))
+    start_type = _cap_text(start_type, fields, "windows.service_start_type_truncated")
     type_id, service_type = _service_type(fields.get("ServiceType"))
-    start_name = _take_text(fields, "ServiceAccount")
-    actor_name = _take_text(fields, "SubjectUserName")
-    actor_domain = _take_text(fields, "SubjectDomainName")
+    service_type = _cap_text(service_type, fields, "windows.service_type_truncated")
+    start_name = _capped_field(
+        fields, "ServiceAccount", "windows.service_account_truncated"
+    )
+    actor_name = _capped_field(fields, "SubjectUserName", "windows.user_truncated")
+    actor_domain = _capped_field(
+        fields, "SubjectDomainName", "windows.domain_truncated"
+    )
     # ``name`` is guaranteed above, so the required ``win_service``
     # is always emitted.
     service = WinService(
@@ -1488,14 +1766,16 @@ def _map_service_7045(fields: dict[str, Any], ctx: _Ctx) -> WindowsServiceActivi
     subject (the same account as the matching 4697 installer) and
     become the actor, while ``UserID`` stays in ``unmapped``.
     """
-    name = _take_text(fields, "ServiceName")
+    name = _capped_field(fields, "ServiceName", "windows.service_name_truncated")
     if name is None:
         raise UnmappedEvent(ctx.channel, ctx.event_id)
-    cmd_line = _take_text(fields, "ImagePath")
+    cmd_line = _capped_field(fields, "ImagePath", "windows.service_cmdline_truncated")
     start_type_id, start_type = _service_start_type(fields.get("StartType"))
+    start_type = _cap_text(start_type, fields, "windows.service_start_type_truncated")
     type_id, service_type = _service_type(fields.get("ServiceType"))
-    actor_name = _take_text(fields, "AccountName")
-    actor_domain = _take_text(fields, "Domain")
+    service_type = _cap_text(service_type, fields, "windows.service_type_truncated")
+    actor_name = _capped_field(fields, "AccountName", "windows.user_truncated")
+    actor_domain = _capped_field(fields, "Domain", "windows.domain_truncated")
     service = WinService(
         name=name,
         cmd_line=cmd_line,
@@ -1551,14 +1831,33 @@ def normalize_event(
         time_ms = parse_windows_time(raw_time)
     except ValueError as exc:
         raise UnmappedEvent(channel, event_id) from exc
-    host = computer if isinstance(computer, str) else None
+    clean_fields, fields_bad = _sanitize_value(dict(fields))
+    assert isinstance(clean_fields, dict)
+    clean_computer, computer_bad = (
+        _sanitize_str(computer) if isinstance(computer, str) else (computer, False)
+    )
+    if isinstance(raw_record, dict):
+        clean_raw, raw_bad = _sanitize_value(dict(raw_record))
+    else:
+        clean_raw, raw_bad = raw_record, False
+    working = dict(clean_fields)
+    host = clean_computer if isinstance(clean_computer, str) else None
+    host = _cap_text(host, working, "windows.computer_truncated")
     ctx = _Ctx(
         uid=uid, time_ms=time_ms, channel=channel, computer=host, event_id=event_id
     )
-    working = dict(fields)
     event = mapper(working, ctx)
+    if fields_bad or computer_bad or raw_bad:
+        working.setdefault("windows.text_sanitized", True)
+        event.unmapped["windows.text_sanitized"] = True
+    raw_source = clean_raw if isinstance(clean_raw, dict) else clean_fields
+    raw_truncated: dict[str, int] = {}
+    capped_raw = _cap_raw_leaves(raw_source, raw_truncated)
+    if raw_truncated:
+        working.setdefault("windows.raw_data_truncated", raw_truncated)
+        event.unmapped["windows.raw_data_truncated"] = raw_truncated
     event.raw_data = json.dumps(
-        raw_record if raw_record is not None else fields,
+        capped_raw,
         sort_keys=True,
         default=str,
     )
@@ -1796,7 +2095,13 @@ def _normalize_parts(
     uid_base: str,
     stats: WindowsReadStats,
 ) -> OcsfEvent | None:
-    """Normalize extracted parts, counting what misses in ``stats``."""
+    """Normalize extracted parts, counting what misses in ``stats``.
+
+    :class:`UnmappedEvent` counts under ``unmapped``; any other
+    :class:`Exception` from a hostile mapper counts under the distinct
+    ``mapper_errors`` bucket and the file continues. ``BaseException``
+    (``KeyboardInterrupt``, ``SystemExit``) is never swallowed.
+    """
     channel, event_id, record_id, fields, computer, raw_time = parts
     clean_fields = sanitize_record(fields)
     clean_raw = sanitize_record(raw_record)
@@ -1812,6 +2117,9 @@ def _normalize_parts(
         )
     except UnmappedEvent as exc:
         stats.count(*exc.key)
+        return None
+    except Exception:
+        stats.count_mapper_error(channel, event_id)
         return None
 
 
@@ -1951,6 +2259,7 @@ def _drain(path: Path, dataset_rel: str | None) -> WindowsReadResult:
         events=events,
         unmapped=dict(stats.unmapped),
         unsupported=stats.unsupported,
+        mapper_errors=dict(stats.mapper_errors),
     )
 
 

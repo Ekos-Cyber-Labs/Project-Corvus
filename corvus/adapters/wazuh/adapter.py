@@ -374,7 +374,7 @@ class WazuhAdapter:
             )
             try:
                 finding, event, unmapped_key = map_alert(hit)
-            except ValueError:
+            except Exception:
                 self._count_unmapped(("unknown", None))
                 continue
             if unmapped_key is not None:
@@ -493,7 +493,7 @@ class WazuhAdapter:
                         continue
                     try:
                         event, unmapped_key = map_archive(hit)
-                    except ValueError:
+                    except Exception:
                         self._count_unmapped(("unknown", None))
                         continue
                     if unmapped_key is not None:
@@ -652,7 +652,7 @@ class WazuhAdapter:
                     continue
                 try:
                     event, unmapped_key = map_archive(sample)
-                except ValueError:
+                except Exception:
                     self._count_unmapped(("unknown", None))
                     continue
                 if unmapped_key is not None:
