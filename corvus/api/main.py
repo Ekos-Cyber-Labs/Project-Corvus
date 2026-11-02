@@ -17,9 +17,11 @@ from typing import Any
 
 import httpx2
 import psycopg
+import yaml
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
 from corvus.settings import get_settings
@@ -27,6 +29,17 @@ from corvus.settings import get_settings
 app = FastAPI(title="corvus-api")
 
 MAX_LIMIT = 100
+
+#: Largest accepted ``offset`` for paged lists. Offsets beyond this are
+#: never legitimate for this UI (tables fit in memory) and huge values
+#: would otherwise reach Postgres as an out-of-range OFFSET and surface
+#: as a 503; absurd integers now fail validation as 422 instead.
+MAX_OFFSET = 1_000_000_000
+
+#: Largest accepted ``rules.id`` (BIGSERIAL). Larger integers cannot
+#: exist and would otherwise reach Postgres as an out-of-range
+#: parameter and surface as a 503; they return 404 instead.
+MAX_RULE_ID = 9_223_372_036_854_775_807
 ADV_PREFIX = "adv-llm:"
 _SEVERITY_NAMES = {
     1: "Informational",
@@ -124,6 +137,7 @@ def _misconfigured(detail: str = "invalid configuration") -> dict[str, Any]:
 def _not_measured() -> dict[str, Any]:
     return {
         "latest_model_latency_ms": "not measured",
+        "latest_model_latency_model": "not measured",
         "model_error_rate": "not measured",
         "spend_today_usd": "not measured",
         "spend_cap_usd": "not measured",
@@ -164,12 +178,13 @@ def _self_observation(database_url: str | None) -> dict[str, Any]:
         with psycopg.connect(database_url, connect_timeout=3) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT latency_ms FROM llm_attempts"
+                    "SELECT latency_ms, model FROM llm_attempts"
                     " WHERE latency_ms IS NOT NULL"
                     " ORDER BY created_at DESC, id DESC LIMIT 1"
                 )
                 row = cur.fetchone()
                 latency: Any = int(row[0]) if row else "not measured"
+                latency_model: Any = str(row[1]) if row else "not measured"
                 cur.execute(
                     "SELECT COUNT(*), COUNT(failed_validator) FROM llm_attempts"
                 )
@@ -198,6 +213,7 @@ def _self_observation(database_url: str | None) -> dict[str, Any]:
             cap = "not measured"
         return {
             "latest_model_latency_ms": latency,
+            "latest_model_latency_model": latency_model,
             "model_error_rate": rate,
             "spend_today_usd": spend_today,
             "spend_cap_usd": cap,
@@ -367,7 +383,7 @@ def _attempt_usd(row: dict[str, Any]) -> float | None:
 @app.get("/api/incidents")
 def list_incidents(
     limit: int = Query(default=20, ge=1),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=MAX_OFFSET),
     min_floor: int | None = Query(default=None, ge=1, le=6),
     verdict: str | None = Query(default=None),
     analyzed: bool | None = Query(default=None),
@@ -649,6 +665,292 @@ def get_incident(incident_id: int) -> Any:
                 else "No persisted pseudonym mapping found; values are shown as stored."
             ),
         },
+    }
+
+
+#: Stored rule lifecycle states; the only accepted ``status`` filter values.
+ALLOWED_RULE_STATUSES = frozenset(
+    {"candidate", "shadow", "active", "archived", "rolled_back"}
+)
+
+#: Deployment modes; the only accepted ``mode`` filter values. A rule is
+#: deployed only while its status is ``shadow`` or ``active``.
+ALLOWED_RULE_MODES = frozenset({"shadow", "active"})
+
+
+def _rule_mode(status: str) -> str | None:
+    """Return the deployment mode for a row status, or None when undeployed."""
+    if status in ALLOWED_RULE_MODES:
+        return status
+    return None
+
+
+def _sigma_summary(sigma_text: Any) -> tuple[str | None, list[str]]:
+    """Return (level, technique tags) parsed from Sigma YAML, never raising.
+
+    Anything unparseable yields ``(None, [])``: the API reports what the
+    stored text says without validating it.
+    """
+    try:
+        doc = yaml.safe_load(str(sigma_text or ""))
+    except Exception:
+        return None, []
+    if not isinstance(doc, dict):
+        return None, []
+    raw_level = doc.get("level")
+    level = str(raw_level) if isinstance(raw_level, str) and raw_level else None
+    raw_tags = doc.get("tags")
+    techniques: set[str] = set()
+    if isinstance(raw_tags, list):
+        for tag in raw_tags:
+            if not isinstance(tag, str):
+                continue
+            lowered = tag.strip().lower()
+            if not lowered.startswith("attack.t"):
+                continue
+            tid = lowered.removeprefix("attack.").upper()
+            head = tid.split(".")[0]
+            if len(head) == 5 and head[1:].isdigit():
+                techniques.add(tid)
+    return level, sorted(techniques)
+
+
+def _rule_list_item(row: Any) -> dict[str, Any]:
+    (
+        rule_id,
+        title,
+        sigma_text,
+        _native_text,
+        _native_rule_id,
+        version,
+        status,
+        _lineage,
+        incident_id,
+        hits,
+        false_positives,
+        created_at,
+        _updated_at,
+        _deployed_at,
+    ) = row
+    status_text = str(status)
+    level, techniques = _sigma_summary(sigma_text)
+    return {
+        "id": int(rule_id),
+        "title": str(title or ""),
+        "status": status_text,
+        "mode": _rule_mode(status_text),
+        "version": int(version),
+        "level": level,
+        "techniques": techniques,
+        "hits": int(hits or 0),
+        "false_positives": int(false_positives or 0),
+        "created_at": _iso(created_at),
+        "source_incident_id": int(incident_id) if incident_id is not None else None,
+    }
+
+
+@app.get("/api/rules")
+def list_rules(
+    limit: int = Query(default=20, ge=1),
+    offset: int = Query(default=0, ge=0, le=MAX_OFFSET),
+    status: str | None = Query(default=None),
+    mode: str | None = Query(default=None),
+) -> Any:
+    capped = min(limit, MAX_LIMIT)
+    if status is not None and status not in ALLOWED_RULE_STATUSES:
+        return JSONResponse(status_code=422, content=dict(INVALID_QUERY))
+    if mode is not None and mode not in ALLOWED_RULE_MODES:
+        return JSONResponse(status_code=422, content=dict(INVALID_QUERY))
+    url = _database_url()
+    if not url:
+        return JSONResponse(status_code=503, content={"detail": "database unavailable"})
+    try:
+        with psycopg.connect(url, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                where = ""
+                params: list[Any] = []
+                if status is not None:
+                    where += " WHERE status = %s"
+                    params.append(status)
+                if mode is not None:
+                    where += " AND" if where else " WHERE"
+                    where += " status = %s"
+                    params.append(mode)
+                cur.execute(f"SELECT COUNT(*) FROM rules{where}", params)
+                count_row = cur.fetchone()
+                total = int(count_row[0]) if count_row else 0
+                cur.execute(
+                    "SELECT id, title, sigma_text, native_text, native_rule_id,"
+                    " version, status, lineage, incident_id, hits,"
+                    " false_positives, created_at, updated_at, deployed_at"
+                    f" FROM rules{where} ORDER BY id DESC LIMIT %s OFFSET %s",
+                    [*params, capped, offset],
+                )
+                items = [_rule_list_item(r) for r in cur.fetchall()]
+        return {"items": items, "total": total, "limit": capped, "offset": offset}
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "database unavailable"})
+
+
+def _lineage_dict(raw: Any) -> tuple[dict[str, Any], str | None]:
+    """Return (lineage mapping, note); broken storage degrades to ``{}``."""
+    if isinstance(raw, dict):
+        if not raw:
+            return {}, "no lineage recorded"
+        return dict(raw), None
+    return {}, "stored lineage is not an object; shown as empty"
+
+
+@app.get("/api/rules/{rule_id}")
+def get_rule(rule_id: int) -> Any:
+    if rule_id < 1 or rule_id > MAX_RULE_ID:
+        return JSONResponse(status_code=404, content={"detail": "rule not found"})
+    url = _database_url()
+    if not url:
+        return JSONResponse(status_code=503, content={"detail": "database unavailable"})
+    try:
+        with psycopg.connect(url, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, title, sigma_text, native_text, native_rule_id,"
+                    " version, status, lineage, incident_id, hits,"
+                    " false_positives, created_at, updated_at, deployed_at"
+                    " FROM rules WHERE id = %s",
+                    (rule_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return JSONResponse(
+                        status_code=404, content={"detail": "rule not found"}
+                    )
+                (
+                    rid,
+                    title,
+                    sigma_text,
+                    _native_text,
+                    native_rule_id,
+                    version,
+                    status,
+                    raw_lineage,
+                    incident_id,
+                    hits,
+                    false_positives,
+                    created_at,
+                    updated_at,
+                    deployed_at,
+                ) = row
+                lineage, lineage_note = _lineage_dict(raw_lineage)
+                sigma_id_raw = lineage.get("sigma_rule_id")
+                sigma_id = str(sigma_id_raw) if sigma_id_raw else None
+                lineage_source = lineage.get("source_incident")
+                source_id = (
+                    int(lineage_source)
+                    if isinstance(lineage_source, int)
+                    and not isinstance(lineage_source, bool)
+                    else int(incident_id)
+                    if incident_id is not None
+                    else None
+                )
+                source: dict[str, Any] | None = None
+                if source_id is not None:
+                    cur.execute(
+                        "SELECT id, title FROM incidents WHERE id = %s", (source_id,)
+                    )
+                    srow = cur.fetchone()
+                    source = {
+                        "id": source_id,
+                        "exists": srow is not None,
+                        "title": str(srow[1] or "") if srow is not None else None,
+                    }
+                raw_backtest = lineage.get("backtest")
+                backtest = (
+                    dict(raw_backtest) if isinstance(raw_backtest, dict) else None
+                )
+                raw_history = lineage.get("history")
+                history = list(raw_history) if isinstance(raw_history, list) else []
+                raw_ledger = lineage.get("ledger_ids")
+                ledger_ids = list(raw_ledger) if isinstance(raw_ledger, list) else []
+                raw_cited = lineage.get("cited_uids")
+                cited_uids = (
+                    [str(u) for u in raw_cited] if isinstance(raw_cited, list) else []
+                )
+                cur.execute(
+                    "SELECT id, title, learned_rules FROM incidents"
+                    " WHERE learned_rules @> %s"
+                    " AND correlation_key NOT LIKE 'adv-llm:%%'"
+                    " ORDER BY id ASC",
+                    (Jsonb([{"rule_db_id": int(rid)}]),),
+                )
+                findings = []
+                for frow in cur.fetchall():
+                    refs = frow[2] or []
+                    for ref in refs if isinstance(refs, list) else []:
+                        if isinstance(ref, dict) and ref.get("rule_db_id") == int(rid):
+                            findings.append(
+                                {
+                                    "incident_id": int(frow[0]),
+                                    "incident_title": str(frow[1] or ""),
+                                    "mode": ref.get("mode"),
+                                    "shadow": bool(ref.get("shadow", False)),
+                                    "version": ref.get("version"),
+                                    "findings": ref.get("findings"),
+                                }
+                            )
+                            break
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "database unavailable"})
+
+    status_text = str(status)
+    mode = _rule_mode(status_text)
+    level, techniques = _sigma_summary(sigma_text)
+    anchor = (
+        int(native_rule_id)
+        if isinstance(native_rule_id, int) and not isinstance(native_rule_id, bool)
+        else None
+    )
+    rounds_raw = lineage.get("rounds_used")
+    model_raw = lineage.get("model")
+    prompt_raw = lineage.get("prompt_version")
+    return {
+        "id": int(rid),
+        "title": str(title or ""),
+        "status": status_text,
+        "mode": mode,
+        "version": int(version),
+        "level": level,
+        "techniques": techniques,
+        "sigma_text": str(sigma_text or ""),
+        "wazuh": {
+            "native_rule_id": anchor,
+            "native_rule_ids": [anchor] if anchor is not None else [],
+            "group": f"corvus_{sigma_id}" if sigma_id else None,
+            "mode": mode,
+            "pair_note": (
+                "Deployed as a sudo/auditd pair: the pair-secondary id is the"
+                " next free id above the anchor at export time and is not stored."
+            ),
+        },
+        "hits": int(hits or 0),
+        "false_positives": int(false_positives or 0),
+        "created_at": _iso(created_at),
+        "updated_at": _iso(updated_at),
+        "deployed_at": _iso(deployed_at),
+        "source_incident_id": int(incident_id) if incident_id is not None else None,
+        "lineage": {
+            "sigma_rule_id": sigma_id,
+            "source_incident": source,
+            "cited_uids": cited_uids,
+            "backtest": backtest,
+            "rounds_used": int(rounds_raw)
+            if isinstance(rounds_raw, int) and not isinstance(rounds_raw, bool)
+            else None,
+            "model": str(model_raw) if isinstance(model_raw, str) else None,
+            "prompt_version": str(prompt_raw) if isinstance(prompt_raw, str) else None,
+            "ledger_ids": ledger_ids,
+            "lineage_note": lineage_note,
+        },
+        "transitions": history,
+        "findings": findings,
     }
 
 

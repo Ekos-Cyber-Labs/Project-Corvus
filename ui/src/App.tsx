@@ -6,6 +6,30 @@ export type IncidentListItem = {
   first_seen?: string | null; last_seen?: string | null; event_count: number; has_injection: boolean;
   analyzed?: boolean | null;
 };
+export type LearnedRuleRef = {
+  rule_db_id?: number | null; sigma_rule_id?: string | null; version?: number | null;
+  mode?: string | null; lineage_id?: string | null; native_rule_id?: number | string | null;
+  shadow?: boolean | null; unknown?: boolean | null; findings?: number | null;
+};
+export type RuleListItem = {
+  id: number; title: string; status: string; mode: string | null; version: number;
+  level?: string | null; techniques?: string[]; hits: number; false_positives: number;
+  created_at?: string | null; source_incident_id?: number | null;
+};
+export type RuleDetail = RuleListItem & {
+  sigma_text: string;
+  wazuh?: { native_rule_id?: number | null; native_rule_ids?: number[]; group?: string | null; mode?: string | null; pair_note?: string } | null;
+  updated_at?: string | null; deployed_at?: string | null;
+  lineage?: {
+    sigma_rule_id?: string | null;
+    source_incident?: { id: number; exists: boolean; title?: string | null } | null;
+    cited_uids?: string[]; backtest?: Record<string, unknown> | null;
+    rounds_used?: number | null; model?: string | null; prompt_version?: string | null;
+    ledger_ids?: unknown[]; lineage_note?: string | null;
+  } | null;
+  transitions?: { from?: string | null; to?: string | null; approver?: string | null; reason?: string | null; at?: string | null }[];
+  findings?: { incident_id: number; incident_title?: string | null; mode?: string | null; shadow?: boolean | null; version?: number | null; findings?: number | null }[];
+};
 export type IncidentDetail = {
   id: number; title: string; severity_floor: number; severity_id: number;
   severity_floor_name?: string | null; severity_name?: string | null; ai_status: string;
@@ -23,6 +47,7 @@ export type IncidentDetail = {
   reasoning_unverified?: { text: string; unverified: boolean; label?: string } | null;
   pseudonym_resolution?: { resolved: boolean; note: string };
   event_count?: number;
+  learned_rules?: LearnedRuleRef[] | null;
 };
 export type Health = { status: string; self_observation?: Record<string, unknown> };
 
@@ -43,7 +68,25 @@ export type ListFilters = {
 export type Route =
   | { view: "list" } & ListFilters
   | { view: "detail"; id: string }
+  | { view: "rules" } & RuleFilters
+  | { view: "rule"; id: string }
   | { view: "unknown" };
+
+export const RULE_STATUSES = new Set([
+  "candidate",
+  "shadow",
+  "active",
+  "archived",
+  "rolled_back",
+]);
+
+export const RULE_MODES = new Set(["shadow", "active"]);
+
+export type RuleFilters = {
+  page: number;
+  status: string | null;
+  mode: string | null;
+};
 
 function parseNonNegativeInt(raw: string | null): number {
   if (raw === null || raw === "") return 0;
@@ -88,6 +131,27 @@ export function parseHash(hash: string): Route {
     }
     return { view: "detail", id };
   }
+  if (pathPart === "/rules") {
+    const params = new URLSearchParams(queryPart);
+    const statusRaw = params.get("status");
+    const modeRaw = params.get("mode");
+    return {
+      view: "rules",
+      page: parseNonNegativeInt(params.get("page")),
+      status: statusRaw !== null && RULE_STATUSES.has(statusRaw) ? statusRaw : null,
+      mode: modeRaw !== null && RULE_MODES.has(modeRaw) ? modeRaw : null,
+    };
+  }
+  const ruleMatch = /^\/rules\/([^/]+)$/.exec(pathPart);
+  if (ruleMatch) {
+    let id = ruleMatch[1];
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      id = "";
+    }
+    return { view: "rule", id };
+  }
   return { view: "unknown" };
 }
 
@@ -107,6 +171,19 @@ export function buildListHash(filters: ListFilters): string {
 
 export function buildDetailHash(id: number): string {
   return `#/incidents/${id}`;
+}
+
+export function buildRulesHash(filters: RuleFilters): string {
+  const params = new URLSearchParams();
+  if (filters.page > 0) params.set("page", String(filters.page));
+  if (filters.status !== null) params.set("status", filters.status);
+  if (filters.mode !== null) params.set("mode", filters.mode);
+  const query = params.toString();
+  return query ? `#/rules?${query}` : "#/rules";
+}
+
+export function buildRuleHash(id: number): string {
+  return `#/rules/${id}`;
 }
 
 export function verdictKind(
@@ -134,14 +211,339 @@ export function buildListQuery(filters: ListFilters, pageSize: number): string {
   return `/api/incidents?${params.toString()}`;
 }
 
+export function buildRulesQuery(filters: RuleFilters, pageSize: number): string {
+  const params = new URLSearchParams();
+  params.set("limit", String(pageSize));
+  params.set("offset", String(filters.page * pageSize));
+  if (filters.status !== null) params.set("status", filters.status);
+  if (filters.mode !== null) params.set("mode", filters.mode);
+  return `/api/rules?${params.toString()}`;
+}
+
+export function RulesBanner() {
+  return (
+    <section className="panel banner" aria-label="About shadow mode">
+      <h3>Shadow mode</h3>
+      <p>
+        Shadow rules never change alerts: matching events keep their existing
+        alerts and gain the <span className="mono">corvus_shadow</span> tag for
+        review. Learning here means stored detection rules only — no model
+        weights are updated.
+      </p>
+    </section>
+  );
+}
+
+export function RuleStatusBadge({ status }: { status: string }) {
+  if (!RULE_STATUSES.has(status)) {
+    return <span className="badge rule-unknown">{status || "unknown"}</span>;
+  }
+  return <span className={`badge rule-${status}`}>{status}</span>;
+}
+
+export function RuleModeBadge({ mode }: { mode: string | null | undefined }) {
+  if (mode === null || mode === undefined) {
+    return <span className="badge mode-none">not deployed</span>;
+  }
+  if (!RULE_MODES.has(mode)) {
+    return <span className="badge mode-unknown">{mode}</span>;
+  }
+  return <span className={`badge mode-${mode}`}>{mode}</span>;
+}
+
+export function RuleFilterBar({
+  filters, onChange,
+}: {
+  filters: RuleFilters;
+  onChange: (next: RuleFilters) => void;
+}) {
+  return (
+    <form
+      className="filterbar"
+      aria-label="Rule filters"
+      onSubmit={(e) => e.preventDefault()}
+    >
+      <label>
+        Status
+        <select
+          aria-label="Status"
+          value={filters.status ?? ""}
+          onChange={(e) => {
+            const v = e.target.value;
+            onChange({ ...filters, page: 0, status: v === "" ? null : v });
+          }}
+        >
+          <option value="">Any</option>
+          <option value="candidate">candidate</option>
+          <option value="shadow">shadow</option>
+          <option value="active">active</option>
+          <option value="archived">archived</option>
+          <option value="rolled_back">rolled_back</option>
+        </select>
+      </label>
+      <label>
+        Mode
+        <select
+          aria-label="Mode"
+          value={filters.mode ?? ""}
+          onChange={(e) => {
+            const v = e.target.value;
+            onChange({ ...filters, page: 0, mode: v === "" ? null : v });
+          }}
+        >
+          <option value="">Any</option>
+          <option value="shadow">shadow</option>
+          <option value="active">active</option>
+        </select>
+      </label>
+    </form>
+  );
+}
+
+export function RulesList({ items, total, page, setPage, pageSize, onSelect }: {
+  items: RuleListItem[]; total: number; page: number; setPage: (n: number) => void; pageSize: number; onSelect: (id: number) => void;
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (!items.length) return <p>No learned rules found.</p>;
+  const open = useCallback((id: number) => onSelect(id), [onSelect]);
+  return (
+    <div className="table-wrap">
+      <table className="rules" aria-label="Learned rules">
+        <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Mode</th><th>Version</th><th>Level</th><th>Techniques</th><th>Hits</th><th>FP</th></tr></thead>
+        <tbody>
+          {items.map((it) => (
+            <tr
+              key={it.id}
+              className="rowlink"
+              tabIndex={0}
+              onClick={() => open(it.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  open(it.id);
+                }
+              }}
+            >
+              <td className="mono">{it.id}</td>
+              <td><a className="title-link" href={buildRuleHash(it.id)}>{it.title || `Rule ${it.id}`}</a></td>
+              <td><RuleStatusBadge status={it.status} /></td>
+              <td><RuleModeBadge mode={it.mode} /></td>
+              <td className="mono">v{it.version}</td>
+              <td>{it.level ?? "—"}</td>
+              <td className="mono">{it.techniques?.length ? it.techniques.join(", ") : "—"}</td>
+              <td>{it.hits}</td>
+              <td>{it.false_positives}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p>
+        <button type="button" disabled={page <= 0} onClick={() => setPage(page - 1)}>Previous</button>{" "}
+        Page {page + 1} of {pages} ({total} total){" "}
+        <button type="button" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>Next</button>
+      </p>
+    </div>
+  );
+}
+
+export function LearnedRuleRefs({ refs }: { refs: LearnedRuleRef[] }) {
+  if (!refs.length) return null;
+  return (
+    <section className="panel" aria-label="Learned-rule findings">
+      <h3>Learned-rule findings</h3>
+      <ul className="plain">
+        {refs.map((r, i) => {
+          if (r.unknown || r.rule_db_id === null || r.rule_db_id === undefined) {
+            return (
+              <li key={i}>
+                <span className="badge learned-unknown">unknown learned rule (unresolved)</span>
+              </li>
+            );
+          }
+          const id = Number(r.rule_db_id);
+          if (!Number.isInteger(id)) {
+            return (
+              <li key={i}>
+                <span className="badge learned-unknown">unknown learned rule (unresolved)</span>
+              </li>
+            );
+          }
+          const mode = typeof r.mode === "string" && r.mode ? r.mode : "unknown mode";
+          const modeClass = mode === "shadow" ? "learned-shadow" : mode === "active" ? "learned-active" : "learned-other";
+          return (
+            <li key={i}>
+              <a className={`badge learned-rule ${modeClass}`} href={buildRuleHash(id)}>
+                learned rule v{r.version ?? "?"} ({mode})
+              </a>
+              {typeof r.findings === "number" ? <> · {r.findings} finding{r.findings === 1 ? "" : "s"}</> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+export function RuleDetailView({ detail }: { detail: RuleDetail }) {
+  const [copied, setCopied] = useState(false);
+  const lineage = detail.lineage ?? null;
+  const source = lineage?.source_incident ?? null;
+  const backtest = lineage?.backtest ?? null;
+  const transitions = detail.transitions ?? [];
+  const findings = detail.findings ?? [];
+  const cited = lineage?.cited_uids ?? [];
+  const copySigma = async () => {
+    try {
+      const clipboard = navigator.clipboard;
+      if (!clipboard) {
+        setCopied(false);
+        return;
+      }
+      await clipboard.writeText(detail.sigma_text);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <article>
+      <h2>{detail.title || `Rule ${detail.id}`}</h2>
+      <p>
+        <RuleStatusBadge status={detail.status} />{" "}
+        <RuleModeBadge mode={detail.mode} />{" "}
+        <span className="mono">v{detail.version}</span>
+        {detail.level ? <> · Level: {detail.level}</> : null}
+        {detail.techniques?.length ? <> · Techniques: <span className="mono">{detail.techniques.join(", ")}</span></> : null}
+      </p>
+      <p className="muted">
+        Hits: {detail.hits} · False positives: {detail.false_positives}
+        {detail.wazuh?.native_rule_id != null ? <> · Wazuh native id: <span className="mono">{detail.wazuh.native_rule_id}</span></> : null}
+        {detail.wazuh?.group ? <> · Group: <span className="mono">{detail.wazuh.group}</span></> : null}
+      </p>
+      {detail.wazuh?.pair_note ? <p className="muted">{detail.wazuh.pair_note}</p> : null}
+
+      <h3>Sigma rule (text only)</h3>
+      <p>
+        <button type="button" onClick={copySigma}>
+          {copied ? "Copied" : "Copy Sigma text"}
+        </button>
+      </p>
+      <pre className="payload"><code>{detail.sigma_text}</code></pre>
+
+      <h3>Lineage</h3>
+      {lineage?.lineage_note ? <p className="muted">{lineage.lineage_note}</p> : null}
+      <dl className="args">
+        <div>
+          <dt className="mono">source_incident</dt>
+          <dd>
+            {source === null || source === undefined ? (
+              "none recorded"
+            ) : source.exists ? (
+              <a href={buildDetailHash(source.id)}>Incident {source.id}{source.title ? ` — ${source.title}` : ""}</a>
+            ) : (
+              <>Incident {source.id} (deleted)</>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="mono">cited_uids</dt>
+          <dd className="mono">{cited.length ? cited.join(", ") : "none"}</dd>
+        </div>
+        <div>
+          <dt className="mono">rounds_used</dt>
+          <dd>{lineage?.rounds_used ?? "not recorded"}</dd>
+        </div>
+        <div>
+          <dt className="mono">model</dt>
+          <dd className="mono">{lineage?.model ?? "not recorded"}</dd>
+        </div>
+        <div>
+          <dt className="mono">prompt_version</dt>
+          <dd className="mono">{lineage?.prompt_version ?? "not recorded"}</dd>
+        </div>
+        <div>
+          <dt className="mono">ledger_ids</dt>
+          <dd className="mono">{lineage?.ledger_ids?.length ? JSON.stringify(lineage.ledger_ids) : "none"}</dd>
+        </div>
+      </dl>
+
+      <h3>Accepted backtest</h3>
+      {backtest ? (
+        <dl className="args">
+          <div>
+            <dt className="mono">codes</dt>
+            <dd className="mono">{JSON.stringify(backtest.codes ?? null)}</dd>
+          </div>
+          <div>
+            <dt className="mono">target_matches</dt>
+            <dd>
+              {Array.isArray(backtest.target_matched) ? `${backtest.target_matched.length} of ${String(backtest.target_total ?? "?")}` : "not recorded"}
+            </dd>
+          </div>
+          <div>
+            <dt className="mono">baseline_count</dt>
+            <dd>{String(backtest.baseline_count ?? "not recorded")}</dd>
+          </div>
+          <div>
+            <dt className="mono">group</dt>
+            <dd className="mono">{typeof backtest.group === "string" ? backtest.group : "not recorded"}</dd>
+          </div>
+        </dl>
+      ) : <p>No accepted backtest recorded.</p>}
+      {Array.isArray(backtest?.target_matched) && (backtest.target_matched as unknown[]).length ? (
+        <details>
+          <summary>Matched target events (text only)</summary>
+          <pre className="payload mono">{JSON.stringify(backtest.target_matched, null, 2)}</pre>
+        </details>
+      ) : null}
+
+      <h3>Transitions</h3>
+      {transitions.length ? (
+        <table className="cost" aria-label="Rule transitions">
+          <thead><tr><th>From</th><th>To</th><th>Approver</th><th>Reason</th><th>At</th></tr></thead>
+          <tbody>
+            {transitions.map((t, i) => (
+              <tr key={i}>
+                <td>{t.from ?? "—"}</td>
+                <td><RuleStatusBadge status={t.to ?? ""} /></td>
+                <td>{t.approver ?? "—"}</td>
+                <td>{t.reason ?? "—"}</td>
+                <td className="mono">{t.at ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p>No transitions recorded.</p>}
+
+      <h3>Fired in</h3>
+      {findings.length ? (
+        <ul className="plain">
+          {findings.map((f) => (
+            <li key={f.incident_id}>
+              <a href={buildDetailHash(f.incident_id)}>Incident {f.incident_id}{f.incident_title ? ` — ${f.incident_title}` : ""}</a>
+              {typeof f.findings === "number" ? <> · {f.findings} finding{f.findings === 1 ? "" : "s"}</> : null}
+            </li>
+          ))}
+        </ul>
+      ) : <p>This rule has not fired in any incident.</p>}
+    </article>
+  );
+}
+
 export function HealthStrip({ health, error }: { health: Health | null; error?: string | null }) {
   if (error) return <p role="alert">Health: unavailable — {error}</p>;
   if (!health) return <p className="health muted">Health: loading…</p>;
   const o = health.self_observation ?? {};
   const fmt = (v: unknown) => (v === undefined || v === null ? "not measured" : String(v));
+  const latency = o.latest_model_latency_ms;
+  const latencyModel = o.latest_model_latency_model;
+  const latencyText =
+    latency === undefined || latency === null || latency === "not measured"
+      ? "Latest model latency: not measured"
+      : `Latest model latency (model ${fmt(latencyModel)}): ${fmt(latency)} ms`;
   return (
     <p className="health" aria-label="System health">
-      Status: <strong>{health.status}</strong> · Latest model latency: {fmt(o.latest_model_latency_ms)} ms · Model error rate: {fmt(o.model_error_rate)} · Spend today: {fmt(o.spend_today_usd)} / cap {fmt(o.spend_cap_usd)} USD · Queue depth: {fmt(o.queue_depth)}
+      Status: <strong>{health.status}</strong> · {latencyText} · Model error rate: {fmt(o.model_error_rate)} · Spend today: {fmt(o.spend_today_usd)} / cap {fmt(o.spend_cap_usd)} USD · Queue depth: {fmt(o.queue_depth)}
     </p>
   );
 }
@@ -330,6 +732,7 @@ export function IncidentView({ detail }: { detail: IncidentDetail }) {
       </p>
       {detail.pseudonym_resolution ? <p className="muted">{detail.pseudonym_resolution.note} {detail.pseudonym_resolution.resolved ? "(resolved locally)" : ""}</p> : null}
       {detail.triage?.summary ? <section className="panel"><h3>Triage summary</h3><p>{detail.triage.summary}</p></section> : null}
+      {detail.learned_rules?.length ? <LearnedRuleRefs refs={detail.learned_rules} /> : null}
 
       <h3>Timeline (every claim cites an event)</h3>
       {timeline.length ? (
@@ -471,7 +874,13 @@ export default function App() {
   const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [detail, setDetail] = useState<IncidentDetail | null>(null);
   const [detailState, setDetailState] = useState<"idle" | "loading" | "ready" | "error" | "invalid" | "missing">("idle");
+  const [ruleItems, setRuleItems] = useState<RuleListItem[]>([]);
+  const [ruleTotal, setRuleTotal] = useState(0);
+  const [ruleListState, setRuleListState] = useState<"loading" | "ready" | "error">("loading");
+  const [ruleDetail, setRuleDetail] = useState<RuleDetail | null>(null);
+  const [ruleDetailState, setRuleDetailState] = useState<"idle" | "loading" | "ready" | "error" | "invalid">("idle");
   const lastListHash = useRef<string>("#/");
+  const lastRulesHash = useRef<string>("#/rules");
   const pageSize = 20;
 
   const go = useCallback((hash: string) => {
@@ -511,6 +920,25 @@ export default function App() {
       getJson<IncidentDetail>(`/api/incidents/${route.id}`)
         .then((d) => { setDetail(d); setDetailState("ready"); })
         .catch(() => setDetailState("error"));
+    } else if (route.view === "rules") {
+      lastRulesHash.current = buildRulesHash(route);
+      setRuleListState("loading");
+      getJson<{ items: RuleListItem[]; total: number }>(buildRulesQuery(route, pageSize))
+        .then((d) => { setRuleItems(d.items); setRuleTotal(d.total); setRuleListState("ready"); })
+        .catch(() => setRuleListState("error"));
+      setRuleDetail(null);
+      setRuleDetailState("idle");
+    } else if (route.view === "rule") {
+      if (!isNumericId(route.id)) {
+        setRuleDetail(null);
+        setRuleDetailState("invalid");
+        return;
+      }
+      setRuleDetailState("loading");
+      setRuleDetail(null);
+      getJson<RuleDetail>(`/api/rules/${route.id}`)
+        .then((d) => { setRuleDetail(d); setRuleDetailState("ready"); })
+        .catch(() => setRuleDetailState("error"));
     }
   }, [route, pageSize]);
 
@@ -518,26 +946,64 @@ export default function App() {
     go(buildListHash(next));
   }, [go]);
 
+  const setRuleFilters = useCallback((next: RuleFilters) => {
+    go(buildRulesHash(next));
+  }, [go]);
+
   const open = useCallback((id: number) => {
     go(buildDetailHash(id));
+  }, [go]);
+
+  const openRule = useCallback((id: number) => {
+    go(buildRuleHash(id));
   }, [go]);
 
   return (
     <div className="wrap">
       <header className="top">
         <div><h1>Corvus</h1><p className="muted">Every claim is verifiable: severity, timeline, trace, and cost cite stored evidence.</p></div>
+        <nav aria-label="Sections">
+          <a href="#/">Incidents</a>{" · "}<a href="#/rules">Rules</a>
+        </nav>
         <button type="button" aria-label="Toggle color theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
       </header>
       <HealthStrip health={health} error={healthError} />
-      {route.view === "detail" || route.view === "unknown" ? (
+      {route.view === "detail" || route.view === "rule" || route.view === "unknown" ? (
         <main>
-          <button type="button" onClick={() => go(lastListHash.current)}>Back to incidents</button>
-          {route.view === "unknown" ? (
-            <p role="alert">Page not found. <a href={lastListHash.current}>Back to incidents</a></p>
-          ) : detailState === "loading" ? <p>Loading incident…</p>
-            : detailState === "invalid" ? <p role="alert">Invalid incident id: the URL must be #/incidents/&lt;number&gt;.</p>
-            : detailState === "error" || detailState === "missing" ? <p role="alert">Could not load this incident. It may not exist.</p>
-            : detail ? <IncidentView detail={detail} /> : null}
+          {route.view === "rule" ? (
+            <>
+              <button type="button" onClick={() => go(lastRulesHash.current)}>Back to rules</button>
+              {ruleDetailState === "loading" ? <p>Loading rule…</p>
+                : ruleDetailState === "invalid" ? <p role="alert">Invalid rule id: the URL must be #/rules/&lt;number&gt;.</p>
+                : ruleDetailState === "error" ? <p role="alert">Could not load this rule. It may not exist.</p>
+                : ruleDetail ? <RuleDetailView detail={ruleDetail} /> : null}
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={() => go(lastListHash.current)}>Back to incidents</button>
+              {route.view === "unknown" ? (
+                <p role="alert">Page not found. <a href={lastListHash.current}>Back to incidents</a></p>
+              ) : detailState === "loading" ? <p>Loading incident…</p>
+                : detailState === "invalid" ? <p role="alert">Invalid incident id: the URL must be #/incidents/&lt;number&gt;.</p>
+                : detailState === "error" || detailState === "missing" ? <p role="alert">Could not load this incident. It may not exist.</p>
+                : detail ? <IncidentView detail={detail} /> : null}
+            </>
+          )}
+        </main>
+      ) : route.view === "rules" ? (
+        <main><h2>Learned rules</h2>
+          <RulesBanner />
+          <RuleFilterBar filters={route} onChange={setRuleFilters} />
+          {ruleListState === "loading" ? <p>Loading rules…</p> : ruleListState === "error" ? <p role="alert">Could not load rules. Check that the API and database are running, then reload.</p> : (
+            <RulesList
+              items={ruleItems}
+              total={ruleTotal}
+              page={route.page}
+              setPage={(n) => setRuleFilters({ ...route, page: n })}
+              pageSize={pageSize}
+              onSelect={openRule}
+            />
+          )}
         </main>
       ) : (
         <main><h2>Incidents</h2>
