@@ -80,7 +80,7 @@ Details and attacker model: `docs/threat-model.md`.
 - Values that are not mapped to a typed slot are kept whole under `unmapped` in the Windows and Wazuh normalizers; the 65536-character cap applies to typed slots and `raw_data` only (`corvus/normalize/windows.py`, `corvus/normalize/wazuh.py`).
 - The UI has no login in hackathon scope.
 - One-node PostgreSQL; no replica or failover.
-- One model output repeated an attacker's markdown image and link into the stored verdict (fixture `v2-render-username-persist`); inert in the React UI, which renders text (`ui/src/App.tsx` has no HTML rendering path); the stored value is not sanitized.
+- One model output repeated an attacker's markdown image and link into the stored verdict (fixture `v2-render-username-persist`); inert in the React UI, which renders text (`ui/src/` has no HTML rendering path); the stored value is not sanitized.
 - Gate 2 covers 1 step of 8 in the variant chain (step 7); the other 7 steps are missed, which the report calls the rule's confirmed limit (`eval/reports/gate2_variant_2026-11-01.md`).
 - Gate 2 tested a single rule on a single variant (n = 1 run, 1 rule, 1 variant); this does not show the system learning to detect whole chains.
 - The lab data behind Gate 2 is not committed (`data/` is git-ignored), so only the committed report is reproducible here, not the run.
@@ -120,23 +120,396 @@ Reproduce: `python -m eval.llm_harness --render-from eval/reports/adversarial_v2
 
 Not yet measured: alert-to-incident reduction ratio on live data; end-to-end latency per incident; live-run precision of a shadow rule promoted to active. These rows stay empty until a committed report produces them. What the adversarial run does not show: a single run per attack fixture, 3 to 7 fixtures per class, a model that is not deterministic (the clean twins agree with the ground truth 21 of 25 times), a leak counter that cannot see an answer that was quarantined, synthetic incidents only, and the detector is a signal and misses every fixture marked "evade" (0 of 35 flagged).
 
-## Quickstart
+## Run it yourself
 
-`corvus version` prints the package version (verified here: `0.1.0`).
+A complete guide from a fresh clone to a running console, with and
+without Wazuh. Commands are copy-pasteable as written. Each part says
+what was **verified here** (run in this environment, against a scratch
+database and scratch directories, with no secrets and no paid calls)
+and what is **not verified here** and why. `corvus version` prints
+`0.1.0` (verified here).
 
-From a clean clone:
+### 1. Requirements
 
-1. Copy `.env.example` to a file outside the repository and fill in secrets. Compose refuses to start when `CORVUS_ENV_FILE` is unset (verified here: `docker compose config` with it unset fails on all three services).
-2. `CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose up --build -d` (not verified here; needs real secrets).
-3. `corvus db migrate` applies pending SQL migrations (reads `DATABASE_URL`; verified here against scratch database `corvus_test_docsfix` on port 55432, then dropped).
-4. `curl http://127.0.0.1:8000/health` reports database and model reachability (not verified here; needs a running stack).
-5. Fetch public datasets: `python3 scripts/fetch_datasets.py`, then `python3 eval/ground_truth.py --out data/ground_truth.json` (see `datasets/README.md`; downloads pinned revisions with SHA-256 checks; not verified here; large downloads).
-6. Replay demo: `corvus replay load-linux` plus `corvus correlate replay` ran end to end here on a tiny 3-record archive built from `tests/fixtures/linux` (3 events, 3002x2 and 1007x1; correlate stored 0 incidents). Plain `corvus replay load` and `corvus replay detect` need the datasets from step 5. Help verified here: `corvus replay load -h`, `corvus replay detect -h`, `corvus correlate replay -h`, `corvus analyze -h`.
-7. `make lint` (ruff check, ruff format check, mypy; verified here, green) and `make test` (full pytest, not run in this lane; the migration test requires `DATABASE_URL=postgresql://127.0.0.1:55432/corvus_test_<name>`; test recipe in `AGENTS.md`).
+| You need | For what | Without it |
+|---|---|---|
+| Docker with Compose | Postgres 18, the API, and the worker as one stack (`docker-compose.yml`: `postgres`, `corvus-api`, `corvus-worker`) | Run the API and CLI directly on the host (part 4); you still need a Postgres 18 reachable at `DATABASE_URL` |
+| Python 3.14 with `uv` | The `corvus` CLI, migrations, polls, sweeps, tests. `pyproject.toml` requires Python >= 3.14; `uv` provides it | Nothing Python-side runs |
+| Node 22 | Building the console (`ui/package.json`; the Docker build uses `node:22` too) | The Docker stack still works (it builds the UI itself); only host-side UI development stops |
+| A Meta API key | The reasoning model under the default `hybrid` profile | Use `MODEL_PROFILE=all-local` (part 5); correlation, polls, and the console still work, analysis runs on the on-prem model |
+| An NVIDIA GPU host (optional) | Serving the on-prem triage model yourself | Point `GLIMMER_BASE_URL` at any OpenAI-compatible endpoint you already have; without any triage endpoint, polls and correlation still work and analysis fails safe (part 5) |
+| A Wazuh 4.x indexer you can read | Live alerts (part 7, `docs/wazuh.md`) | Use the public replay path instead (part 6); everything except live polling works |
+
+Postgres 18 comes from the compose file; you do not install it
+separately. Host versions verified here: Docker with Compose
+(`docker compose config`), Node 22, and `uv` running the CLI on
+Python 3.14.
+
+### 2. Get the code and install
+
+```bash
+git clone <this-repository-url>
+cd Project-Corvus
+uv sync --group dev
+cd ui && npm ci && npm run build && cd ..
+```
+
+- `uv sync --group dev` installs the package and the dev tools
+  (equivalently `make install`, which runs exactly that).
+- `npm ci && npm run build` builds the console into `ui/dist`, which
+  the API serves. The Docker build does this step itself; on the host
+  it is what keeps the console from showing a blank page.
+- Check the CLI: `uv run corvus version` prints `0.1.0` (verified
+  here). Other `make` targets that exist: `make lint`, `make test`,
+  `make ui-build`, `make ui-test`, `make up`, `make down`.
+
+Verified here: `uv run corvus -h` and every subcommand help cited
+below, `npm test` in `ui/`, and `npm run build`. Not verified here:
+a cold `uv sync` and `npm ci` on an empty cache (this machine's
+caches were warm); both need network access to the package indexes.
+
+### 3. Configure
+
+Keep the env file **outside the repository**. Compose refuses to
+start when `CORVUS_ENV_FILE` is unset (verified here:
+`docker compose config` with it unset fails on all three services).
+
+```bash
+cp .env.example /run/corvus/corvus.env
+chmod 600 /run/corvus/corvus.env
+```
+
+Then edit `/run/corvus/corvus.env`. Every variable in
+`.env.example`, in one line. **Secret** means: never commit it, never
+paste it into an issue, never let it reach a log.
+
+| Variable | One line |
+|---|---|
+| `POSTGRES_PASSWORD` | **Secret.** Password for the Corvus Postgres user; also embedded in `DATABASE_URL`. |
+| `POSTGRES_USER`, `POSTGRES_DB` | Postgres role and database the compose service creates (defaults `corvus` / `corvus`). |
+| `DATABASE_URL` | Postgres URL. Inside Compose use host `postgres`; on the dev machine use `postgresql://corvus:<password>@127.0.0.1:55432/corvus`. Compose publishes Postgres on `127.0.0.1:55432` only. |
+| `GLIMMER_BASE_URL` | On-prem triage endpoint (OpenAI-compatible). Required, no default; not itself a secret. |
+| `META_BASE_URL` | Reasoning-model endpoint (default `https://api.meta.ai/v1`). |
+| `META_API_KEY` | **Secret.** Meta API key. Optional only with `MODEL_PROFILE=all-local`. |
+| `MODEL_PROFILE` | `hybrid` (default), `all-local`, or `all-cloud`; selects which backend serves triage and analysis (part 5). |
+| `WAZUH_INDEXER_URL` | Indexer base URL, `https` only. Blank until part 7. |
+| `WAZUH_INDEXER_USER` | Dedicated read-only indexer user (never the indexer admin). Blank until part 7. |
+| `WAZUH_INDEXER_PASSWORD` | **Secret.** That user's password. Blank until part 7. |
+| `WAZUH_INDEXER_CA` | Path to the indexer CA bundle (`root-ca.pem` copy). Verification is always on; there is no disable option. |
+| `WAZUH_API_URL`, `WAZUH_API_USER`, `WAZUH_API_PASSWORD` | Reserved names, declared in `corvus/settings.py` but **not read by any current code path**. Leave blank. |
+
+Optional, with defaults (also commented in `.env.example`):
+
+- `SPEND_CAP_USD` (default 100): the spend ceiling in USD. Recorded
+  spend reaching the cap degrades model calls and makes the sweep
+  record `skipped_budget` instead of analyzing (part 8).
+- `SWEEP_INTERVAL_SECONDS` (default 300, minimum 30),
+  `SWEEP_MIN_FLOOR` (default `high`), `SWEEP_MAX_ANALYSES` (default
+  5, allowed 0 to 50), `SWEEP_ALWAYS_INJECTION` (default on): the
+  `SWEEP_*` variables set the automatic-sweep policy; `corvus sweep`
+  flags override them, and Settings shows the effective values.
+- Per-purpose overrides (`TRIAGE_*` / `ANALYSIS_*`: model, base URL,
+  API key, trust, concurrency, token caps, timeouts) live in
+  `corvus/llm/config.py`; most operators never set them.
+
+Permissions: the env file holds secrets, so keep it at `chmod 600`,
+owned by the operator, outside the repository. The Wazuh CA file is
+a public certificate; `chmod 644` is fine.
+
+### 4. Start the stack
+
+```bash
+CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose up --build -d
+export DATABASE_URL=postgresql://corvus:<password>@127.0.0.1:55432/corvus
+export GLIMMER_BASE_URL=http://<glimmer-host>:<port>/v1
+uv run corvus db migrate
+curl http://127.0.0.1:8000/health
+```
+
+- `docker compose up --build -d` starts Postgres, `corvus-api` on
+  `127.0.0.1:8000`, and `corvus-worker`. The `corvus-api` image build
+  was verified here on 2026-11-03: `docker compose build corvus-api`
+  with `CORVUS_ENV_FILE` pointing at a scratch copy of `.env.example`
+  outside the repository built cleanly (only the build was run, not
+  `up`, with no secrets and no paid calls). **Not verified here:
+  `docker compose up` itself and the models; `up` still needs your
+  env file and reachable endpoints.** `docker compose config` with
+  and without `CORVUS_ENV_FILE` was verified here.
+- `corvus db migrate` applies pending SQL migrations (reads
+  `$DATABASE_URL`, or `--database-url`). Verified here against a
+  scratch database on port 55432 (all migrations applied, database
+  dropped afterwards). Run it once before the first poll or sweep;
+  the poll and sweep also migrate on each cycle.
+- `curl http://127.0.0.1:8000/health` returns database and model
+  reachability plus spend and queue self-observation. Verified here
+  against the same API app run on the host: with the triage endpoint
+  unreachable it returns `"status": "degraded"` with the database
+  reachable — degraded is the expected first-run answer, not an
+  error. `/api/health` returns the same body.
+- Open the console at `http://127.0.0.1:8000/`. Verified here: the
+  API served the built console and `/api/dashboard`,
+  `/api/settings`, and `/api/sweep/status` on the host. The UI has
+  no login; keep it on localhost or behind your own access controls.
+
+Without Docker (development): run the API on the host and the UI dev
+server, which proxies `/api` to `127.0.0.1:8000`
+(`ui/vite.config.ts`).
+
+```bash
+DATABASE_URL=postgresql://corvus:<password>@127.0.0.1:55432/corvus GLIMMER_BASE_URL=http://<glimmer-host>:<port>/v1 uv run uvicorn corvus.api.main:app --host 127.0.0.1 --port 8000
+cd ui && npm run dev
+```
+
+Verified here: the `uvicorn` command above (health, dashboard,
+settings, sweep status, and the console all answered). Not verified
+here: `npm run dev` itself (the production build and the test suite
+were run instead); it needs the API running first, and serves the UI
+on the Vite port it prints.
+
+### 5. Models
+
+**On-prem triage (Glimmer).** Corvus expects an OpenAI-compatible
+endpoint at `GLIMMER_BASE_URL` (required, no default) serving the
+model name `glimmer` (override with `TRIAGE_MODEL`). That is the
+whole contract: any server that speaks the OpenAI chat API under
+that name works. In our tests the model is Muse Glimmer 30B, FP8,
+served by vLLM on the team's own hardware. This repository pins no
+vLLM version and no serve flags, and measures no GPU memory figure,
+so treat any specific `vllm serve` command as your own deployment
+choice, sized by the model you serve; nothing about vLLM here is
+verified beyond the client contract. Default triage limits
+(`corvus/llm/config.py`): output cap 4500 tokens, reasoning strength
+medium (`TRIAGE_REASONING_STRENGTH`), up to 16 concurrent queue
+workers, and a read timeout derived for a slow single GPU (about
+1275 s by default). Keep `max_tokens` high: both models reason by
+default, reasoning tokens count against the cap, and a low cap
+returns HTTP 200 with empty content, which Corvus treats as an
+error.
+
+When the triage endpoint is unreachable, Corvus fails safe, by
+design (`corvus/llm/call.py`): `/health` reports `degraded`; triage
+and analysis attempts are recorded in `llm_attempts`; validation
+retries (up to 3, security failures never) and then falls back to
+the deterministic result marked "AI analysis failed" (`ai_failed`).
+Incidents, severity floors, polls, and the console keep working; no
+score is ever invented by a fallback.
+
+**Reasoning (Spark).** `muse-spark-1.3` at `META_BASE_URL`
+(default `https://api.meta.ai/v1`) with `META_API_KEY`. Spark sees
+only condensed, pseudonymized incidents — never raw events. Every
+attempt is priced from `config/price_book.yaml` and recorded in
+`llm_attempts` and the `spend` ledger; `SPEND_CAP_USD` (default
+100) caps recorded spend, past which the system degrades instead of
+spending. Not verified here: any live model call (needs the Meta
+API key and, for triage quality, a served Glimmer); no paid call was
+made for this guide.
+
+**`MODEL_PROFILE`** (`corvus/llm/config.py`): `hybrid` (default —
+Glimmer triages on-prem, Spark reasons in the cloud), `all-local`
+(Glimmer serves both, no cloud key needed), `all-cloud` (Spark
+serves both). Per-purpose `TRIAGE_*` / `ANALYSIS_*` variables can
+override model, endpoint, key, trust, and limits for either profile.
+
+### 6. Try it without Wazuh: the public replay path
+
+No Wazuh, no model key needed for load, detect, and correlate.
+Analysis (`corvus analyze`) is the only step that calls a model.
+
+```bash
+python3 scripts/fetch_datasets.py
+python3 eval/ground_truth.py --out data/ground_truth.json
+uv run corvus attack build
+uv run corvus replay load <dataset-file-or-directory>
+uv run corvus replay detect
+uv run corvus correlate replay
+uv run corvus analyze --incident <id>
+```
+
+- `scripts/fetch_datasets.py` downloads the pinned public datasets
+  into git-ignored `data/` and verifies every file's SHA-256
+  (`datasets/README.md`). Sizes to expect: the APT29 day-1 zip is
+  13,944,973 bytes (one 385 MB JSON-lines member, 196,081 records);
+  the ATT&CK STIX bundle is about 49 MB; plus the EVTX samples and
+  the Sigma rules zip. **Not verified here: needs network access and
+  large downloads**; this machine's `data/` was already populated.
+- `corvus attack build` turns the STIX bundle into the compact
+  `data/attack/enterprise.json` the correlator reads (default path
+  for `--attack`). Not run here against a fresh download; the
+  dictionary already built under `data/` was used instead.
+- `corvus replay load <path>` normalizes dataset files into Parquet
+  under `data/replay/` (flags: `--replay-dir`, `--data-dir`,
+  `--batch-size`). `corvus replay detect` evaluates the shipped Sigma
+  rules over that store (defaults: rules `data/sigma/rules`, store
+  `data/replay`). Both need the fetched datasets.
+- `corvus correlate replay` correlates the store into Postgres
+  incidents (needs `DATABASE_URL` and `GLIMMER_BASE_URL` set; it
+  calls no model). Verified here on a tiny Linux store (below):
+  0 incidents stored, as expected for 3 events.
+- Linux without any download: `corvus replay load-linux <archive>`
+  loads Wazuh Linux archives (`.json.gz`) into `data/replay-linux/`.
+  Verified here end to end: a 4-document archive built from
+  `tests/fixtures/linux` (one malformed line, one duplicate) loaded
+  as 3 events (3002 x2, 1007 x1), and `corvus correlate replay` over
+  that scratch store stored 0 incidents. Exactly what a first run
+  should show: the mechanics work before the data is interesting.
+- `corvus analyze --incident <id>` runs triage if missing, then the
+  bounded reasoning loop (`--lang en|es`). **Not verified here:
+  needs a reachable triage model and, under `hybrid`, the Meta API
+  key; it spends money under the spend cap.** Help verified here for
+  every command above (`-h`).
+
+### 7. Connect to your Wazuh
+
+Follow `docs/wazuh.md`: create the read-only indexer user, copy the
+CA, set the four `WAZUH_INDEXER_*` variables, prove access with the
+read-only `curl`, then poll. The short version, once configured:
+
+```bash
+corvus wazuh poll --once --since 2026-11-01T00:00:00Z --max-docs 500 --store data/live
+```
+
+Polling calls no model; it writes Parquet to `--store` and incidents,
+checkpoints, and one `wazuh_poll_cycles` row per cycle to Postgres.
+Add `--with-archives` only after archive indexing is enabled in
+Wazuh. **Not verified here: needs your Wazuh indexer, its read-only
+user, and its CA.** Every flag, the checkpoint and resume behavior,
+and the troubleshooting table live in `docs/wazuh.md`.
+
+### 8. Run the automatic sweep and read the console
+
+One trial cycle, then the loop:
+
+```bash
+corvus sweep --once --store data/live
+corvus sweep --store data/live
+```
+
+Each cycle polls Wazuh, selects the pending incidents the policy
+picks (the Automatic sweep section below), triages on-prem, and
+reasons over the pseudonymized incident. One failure never stops the
+cycle; nothing is ever re-analyzed once resolved. **Not verified
+here: needs your Wazuh plus reachable models.** Then read the
+console at `http://127.0.0.1:8000/`:
+
+- **Dashboard** (`#/`): stat cards (incidents, pending, analyzed,
+  failed, quarantined), severity bars, 24 hourly activity buckets
+  with sweep markers, the five latest verdicts, and sweep status
+  with the next run. Empty until the first poll or sweep; the page
+  names the command instead of inventing numbers.
+- **Incidents** (`#/incidents`, detail `#/incidents/<id>`): the
+  correlated chains. The list preview triages without opening; the
+  detail explains one chain — severity floor with its factors,
+  ATT&CK techniques, a timeline citing event ids, the evidence, the
+  agent trace with token costs, the pseudonym view the cloud model
+  saw, and the Model attempts panel. Failed and quarantined
+  incidents are labeled as such, never counted as analyzed.
+- **Rules** (`#/rules`, detail `#/rules/<id>`): learned rules in a
+  split view with the shadow banner ("shadow rules never change
+  alerts"), the Sigma text, lineage to the source incident and
+  backtest, the lifecycle stepper, and the transitions table with
+  the named human approver for every move.
+- **Settings** (`#/settings`): the effective sweep policy and every
+  connection (database, Wazuh indexer, triage model, reasoning
+  model) as connected, unreachable, or not configured — addresses
+  only (`scheme://host[:port]`), secrets never shown, nothing
+  editable. Change policy on the host and restart.
+
+### 9. Rules: propose, backtest, approve to shadow, export, logtest
+
+```bash
+corvus rules propose --incident <id>
+corvus rules backtest <candidate.yml> --event-uid <uid>
+corvus rules add <candidate.yml> --incident <id> --event-uid <uid> --producer <name> --producer-version <version>
+corvus rules approve <rule-id> --to shadow --approver <name> --reason <text>
+corvus rules export-wazuh <rule-id> --out <bundle-dir>
+corvus rules logtest <rule-id> --bundle <bundle-dir>
+```
+
+- `propose` drafts one Sigma rule from an incident with the
+  reasoning model. **Not verified here: paid model call.** `backtest`
+  evaluates a candidate file against the Linux baseline and chain
+  stores and prints a JSON verdict; a rejected candidate stores
+  nothing. `add` re-runs that backtest against the incident's stored
+  events and stores only an accepted rule. `approve` moves a stored
+  rule (`--to shadow|active|archived`) and requires a named approver
+  and reason; when `CORVUS_RULE_APPROVERS` is set, the approver must
+  be listed. `rollback` silences a shadow or active rule instantly.
+- `export-wazuh` writes an offline bundle (`wazuh_rule.xml`, logtest
+  inputs, `expected.json`, `deploy_plan.txt`); a refusal writes
+  nothing. `logtest` runs the bundle through `wazuh-logtest` via
+  `CORVUS_WAZUH_LOGTEST_CMD` and writes a parity report. **Not
+  verified here: needs a Wazuh manager and `wazuh-logtest`.**
+- The guarantee: **nothing is deployed without a human.** Exporting
+  never touches a manager; deploying means an operator pasting the
+  bundle's XML, running `wazuh-analysisd -t`, and restarting the
+  manager (`docs/wazuh.md`, section 10). Shadow rules never change
+  alerts; promotion to active is a separate, named approval. Command
+  help verified here for the whole `corvus rules` surface.
+
+### 10. Run the tests and the evals
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache make lint
+DATABASE_URL=postgresql://127.0.0.1:55432/corvus_test_<name> UV_CACHE_DIR=/tmp/uv-cache make test
+cd ui && npm test && npm run build
+```
+
+- `make lint` is `ruff check`, `ruff format --check`, and `mypy`
+  (verified here, green). The `UV_CACHE_DIR` prefix keeps the cache
+  writable in sandboxes that forbid `~/.cache/uv`; harmless elsewhere.
+- `make test` is the full pytest suite. The migration test requires
+  `DATABASE_URL=postgresql://127.0.0.1:55432/corvus_test_<name>` —
+  wrong port or database prefix fails, never skips. Point it at a
+  scratch database you may drop (part 11); the full-suite result for
+  this guide is in the checklist at the end of this change (run
+  against a scratch database, then dropped).
+- `npm test` in `ui/` runs the console tests (verified here); `npm
+  run build` type-checks and builds `ui/dist` (verified here).
+- Evals write under `eval/reports/`: `corvus eval run` (load, detect,
+  correlate; writes `latest.md` / `latest.json`), `corvus eval llm`
+  (the paid model-path eval; writes `llm_latest.*`; **not verified
+  here, paid**), and `corvus eval gate2` (learned-rule variant
+  evidence; needs stored rules and variant exports). Numbers already
+  measured live in the Results table above; this guide adds none.
+
+### 11. Stop, reset, and clean up
+
+```bash
+CORVUS_ENV_FILE=/run/corvus/corvus.env docker compose down
+```
+
+- `docker compose down` stops the stack and keeps the Postgres
+  volume. Add `-v` only when you mean to delete the Corvus database
+  volume and everything in it.
+- Drop a scratch test database (example name from part 10) with your
+  own Postgres admin path, for example:
+  `docker exec <postgres-container> psql -U corvus -d postgres -c "DROP DATABASE corvus_test_<name>;"`
+- Delete replay and live stores only when you mean to re-read from
+  scratch: `rm -rf data/live data/replay data/replay-linux`. With the
+  store gone, also expect the next poll to need `--since` again,
+  because the checkpoint still points past the deleted window.
+- The env file and the Wazuh CA copy live outside the repository by
+  design; deleting the clone never deletes them, and deleting them
+  never affects the clone.
+
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
+|---|---|
+| `connection refused` or Postgres unreachable from the CLI | The stack is down or `DATABASE_URL` points at the wrong port. Start it (part 4); on the host the port is `127.0.0.1:55432`, inside Compose it is `postgres:5432`. |
+| Port 8000 already in use | Another process owns `127.0.0.1:8000`. Stop it, or run the host API on another port and open that port instead; the compose mapping is fixed at `127.0.0.1:8000`. |
+| Console shows a blank page | `ui/dist` is missing (the API serves the built console). Run `cd ui && npm ci && npm run build`, or use the Docker stack, which builds it. |
+| `/health` says `degraded`, model unreachable | Expected without a triage endpoint. Polls, correlation, and the console still work; analysis fails safe to the deterministic result marked "AI analysis failed". Set `GLIMMER_BASE_URL` (and `META_API_KEY` under `hybrid`) and restart. |
+| Wazuh certificate, 401, 403, or empty-poll errors | See the troubleshooting table in `docs/wazuh.md`, section 9. Verification cannot be disabled; fix the CA, the read-only role, or the time window instead. |
+| `corvus sweep` or `wazuh poll` refuses to start, naming environment variables | A required variable is missing from the environment (not just the env file). Export it or run through Compose so the env file is loaded. |
 
 ## Demo
 
-Three-minute judge script: `docs/demo.md`. It walks the incident list, one explained chain with its evidence, the pseudonymized view the cloud model sees, and the learned rule in shadow mode with its lineage, naming the exact screen and command for each step.
+Three-minute script: `docs/demo.md`. It opens on the Dashboard,
+walks Incidents with one explained chain and the pseudonym view, the
+quarantined injection example, the Rules split view in shadow with
+its lineage, and Settings — naming the exact route and host command
+for each screen.
 
 ## Automatic sweep
 
