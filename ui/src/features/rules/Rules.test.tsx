@@ -7,28 +7,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // @ts-ignore: node core types are intentionally not installed (no new deps)
 declare const process: { cwd(): string };
-import App, {
-  HealthStrip,
-  IncidentView,
-  LearnedRuleRefs,
-  RuleDetailView,
-  RuleFilterBar,
-  RuleModeBadge,
-  RuleStatusBadge,
-  RulesBanner,
-  RulesList,
-  backtestCodesText,
-  buildRuleHash,
-  buildRulesHash,
-  buildRulesQuery,
-  parseHash,
-  ruleAltersAlertsText,
-  ruleCountLine,
-  type IncidentDetail,
-  type RuleDetail,
-  type RuleListItem,
-} from "./App";
-import { BacktestBars, LifecycleStepper, backtestFigures } from "./visuals";
+import { App } from "../../app/App";
+import { HealthStrip } from "../../components/layout/StatusPill";
+import { IncidentDetailView as IncidentView } from "../incidents/components/IncidentDetail";
+import { LearnedRuleRefs } from "./components/LearnedRuleRefs";
+import { RuleDetailView } from "./components/RuleDetail";
+import { RuleFilterBar } from "./components/RuleFilterBar";
+import { RuleModeBadge } from "./components/RuleModeBadge";
+import { RuleStatusBadge } from "./components/RuleStatusBadge";
+import { RulesBanner } from "./components/RulesBanner";
+import { RulesList } from "./components/RulesList";
+import { backtestCodesText, ruleAltersAlertsText, ruleCountLine } from "./utils/rules";
+import { buildRuleHash, buildRulesHash, parseHash } from "../../lib/hash";
+import { buildRulesQuery } from "../../api/rules";
+import type { IncidentDetail, RuleDetail, RuleListItem } from "../../api/types";
+import { BacktestBars, backtestFigures } from "../../components/charts/BacktestBars";
+import { LifecycleStepper } from "../../components/charts/LifecycleStepper";
 
 const IMG = "<img src=x onerror=alert(1)>";
 const SCRIPT = "</scr" + "ipt>";
@@ -401,7 +395,7 @@ describe("badge color contrast", () => {
   }
 
   it("every badge text color reaches 4.5:1 on the badge background in both themes", () => {
-    const css = readFileSync(join(process.cwd(), "src", "styles.css"), "utf-8");
+    const css = (readFileSync(join(process.cwd(), "src", "styles", "tokens.css"), "utf-8") + readFileSync(join(process.cwd(), "src", "styles", "utilities.css"), "utf-8"));
     const theme = (name: "dark" | "light") => {
       const pattern = name === "dark"
         ? /:root,\s*\[data-theme="dark"\]\s*\{([^}]*)\}/
@@ -489,7 +483,6 @@ describe("part 2 rules polish", () => {
     expect(terms).toContain("Hits");
     expect(terms).toContain("False positives");
     expect(terms).toContain("Source incident id");
-    // The heading and header chips still carry name, status, mode, version.
     expect(container.querySelector("h2")?.textContent).toBe(evilDetail.title);
     expect(container.querySelector(".hero-badges")?.textContent).toContain("shadow");
     expect(container.querySelector(".hero-badges")?.textContent).toContain("v2");
@@ -514,7 +507,6 @@ describe("part 2 rules polish", () => {
     const { container: bare } = render(<RuleDetailView detail={noCodes} />);
     expect(screen.getAllByText("no codes recorded").length).toBeGreaterThan(0);
     expect(bare.textContent).not.toMatch(/\bnull\b/);
-    // The backtest table below still shows its figures.
     expect(bare.querySelector(".backtest-table")?.textContent).toContain("Target events matched");
   });
 
@@ -539,7 +531,7 @@ describe("part 2 rules polish", () => {
   });
 
   it("carried-over layout guards are in the stylesheet", () => {
-    const css = readFileSync(join(process.cwd(), "src", "styles.css"), "utf-8");
+    const css = (readFileSync(join(process.cwd(), "src", "styles", "tokens.css"), "utf-8") + readFileSync(join(process.cwd(), "src", "styles", "utilities.css"), "utf-8"));
     expect(css).toContain("table.incidents tr.rowlink");
     expect(css).toMatch(/\.col-usd[^{]*\{[^}]*white-space:nowrap/);
     expect(css).toContain("scroll-margin-top:5rem");

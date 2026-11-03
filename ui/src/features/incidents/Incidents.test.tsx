@@ -1,18 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App, {
-  IncidentList,
-  IncidentView,
-  attemptOutcomeKind,
-  attemptOutcomeText,
-  buildListHash,
-  isNumericId,
-  parseHash,
-  verdictKind,
-  VerdictBadge,
-  type IncidentDetail,
-  type IncidentListItem,
-} from "./App";
+import { App } from "../../app/App";
+import { IncidentList } from "./components/IncidentList";
+import { IncidentDetailView as IncidentView } from "./components/IncidentDetail";
+import { attemptOutcomeKind, attemptOutcomeText, verdictKind } from "./utils/incidents";
+import { buildListHash, isNumericId, parseHash } from "../../lib/hash";
+import { VerdictBadge } from "./components/VerdictBadge";
+import type { IncidentDetail, IncidentListItem } from "../../api/types";
 
 const PAYLOAD = "<img src=x onerror=alert(1)>";
 const detail: IncidentDetail = {
@@ -55,7 +49,6 @@ describe("IncidentView renders untrusted text as text only", () => {
     expect(container.querySelector("script")).toBeNull();
     expect(container.querySelector("[onerror]")).toBeNull();
     expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
-    // Only in-page section-nav anchors are allowed; none is built from event data.
     const anchors = Array.from(container.querySelectorAll("a"));
     expect(anchors.length).toBeGreaterThan(0);
     for (const a of anchors) expect(a.getAttribute("href")).toMatch(/^#section-/);
@@ -347,7 +340,6 @@ describe("stat tiles name the field they count", () => {
     expect(tiles?.textContent).toContain("511");
     expect(tiles?.textContent).toContain("events (event_count)");
     expect(tiles?.textContent).not.toContain("findings");
-    // The cited count is the evidence length (2), not the title/event_count number.
     const citedTile = Array.from(container.querySelectorAll(".stat-tiles li")).find((li) => li.textContent?.includes("cited events"));
     expect(citedTile?.querySelector("strong")?.textContent).toBe("2");
     expect(container.querySelector(".hero-meta")).toBeNull();
@@ -394,7 +386,6 @@ describe("stat tiles name the field they count", () => {
     expect(screen.getByText(/neutral: no technique tied/)).toBeTruthy();
     expect(screen.getByText(/A dot is one timeline claim/)).toBeTruthy();
     expect(screen.getByText(/break symbol means a gap/)).toBeTruthy();
-    // First, three intermediate, and last axis ticks are rendered as svg text.
     const ticks = Array.from(container.querySelectorAll(".svg-tick")).map((t) => t.textContent);
     expect(ticks).toHaveLength(5);
     expect(ticks[0]).toContain("2026-10-30 00:00:00");
@@ -441,7 +432,6 @@ describe("model attempt outcomes use real outcome strings", () => {
     expect(kinds.filter((c) => c.includes("outcome-neutral"))).toHaveLength(2);
     expect(kinds.filter((c) => c.includes("outcome-quarantined"))).toHaveLength(1);
     expect(kinds.filter((c) => c.includes("outcome-invalid"))).toHaveLength(1);
-    // Unknown outcome keeps its raw text and is not labelled invalid.
     expect(screen.getAllByText(/weird_new_outcome/).length).toBeGreaterThan(0);
     const sr = Array.from(container.querySelectorAll(".sr-only")).map((e) => e.textContent ?? "");
     expect(sr.some((t) => t.includes("weird_new_outcome") && t.includes("invalid"))).toBe(false);

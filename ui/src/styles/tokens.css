@@ -1,0 +1,31 @@
+:root, [data-theme="dark"] {
+  --ground:#0d1117; --sidebar:#10161d; --surface:#151c25; --raised:#1a2630; --border:#222b36;
+  --text:#e6edf3; --muted:#8b98a6; --accent:#4cc9bd; --accent-ink:#0d1117;
+  --critical:#ff6b6b; --high:#ff9f43; --medium:#f2c94c; --low:#5aa9e6;
+  --success:#4cc9bd; --warning:#f2b84b; --danger:#ff6b6b;
+  --bg:#0d1117; --panel:#151c25; --panel2:#1a2630; --line:#222b36;
+  --accent2:#4cc9bd; --ok:#4cc9bd;
+  --sev1:#a8b8c8; --sev2:#5aa9e6; --sev3:#f2c94c; --sev4:#ff9f43; --sev5:#ff6b6b; --sev6:#ff6b9a;
+  --sev-ink:#0d1117; --chart-ink:#0d1117;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px; --space-7:48px;
+  --radius:12px; --radius-sm:8px;
+  --text-sm:.85rem; --text-base:1rem; --text-lg:1.15rem; --text-xl:1.6rem;
+  --shadow:0 1px 3px rgba(0,0,0,.35), 0 4px 14px rgba(0,0,0,.22);
+  --inner:inset 0 1px 0 rgba(255,255,255,.06);
+  --font-text:"Inter Variable", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-mono:"JetBrains Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+  color-scheme:dark;
+}
+[data-theme="light"] {
+  --ground:#f2f4f7; --sidebar:#e8edf2; --surface:#ffffff; --raised:#eef1f5; --border:#d3dae2;
+  --text:#16202a; --muted:#4a5a6a; --accent:#0f6b60; --accent-ink:#ffffff;
+  --critical:#9e2b25; --high:#8a3f00; --medium:#7a5c00; --low:#1a5a8a;
+  --success:#1e6b2e; --warning:#7a5c00; --danger:#9e2b25;
+  --bg:#f2f4f7; --panel:#ffffff; --panel2:#eef1f5; --line:#d3dae2;
+  --accent2:#0f6b60; --ok:#1e6b2e;
+  --sev1:#475569; --sev2:#1e7a4c; --sev3:#7a5c00; --sev4:#8a3f00; --sev5:#9e2b25; --sev6:#8a1040;
+  --sev-ink:#ffffff; --chart-ink:#ffffff;
+  --shadow:0 1px 2px rgba(28,35,32,.08), 0 6px 18px rgba(28,35,32,.08);
+  --inner:inset 0 0 0 transparent;
+  color-scheme:light;
+}
