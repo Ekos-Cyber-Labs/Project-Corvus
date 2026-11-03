@@ -334,6 +334,29 @@ def _record_decisions(
         conn.commit()
 
 
+def _mark_abandoned_runs(database_url: str, exclude_id: int) -> int:
+    """Fail older rows still ``running`` whose lease long expired.
+
+    The sweep holds a Postgres advisory lock, so when this process
+    starts no other sweep is alive: any other row still in status
+    ``running`` whose ``started_at`` is older than three times its
+    own stored interval is an orphan from a crashed run. Mark those
+    ``failed`` with ``error_code='abandoned'`` and return the count.
+    """
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE sweep_runs SET finished_at = NOW(), status = 'failed',"
+                " error_code = 'abandoned' WHERE id != %s AND status = 'running'"
+                " AND started_at < NOW() -"
+                " (COALESCE(interval_seconds, 300) * INTERVAL '1 second' * 3)",
+                (exclude_id,),
+            )
+            count = cur.rowcount or 0
+        conn.commit()
+    return int(count)
+
+
 def _record_sweep_end(
     database_url: str,
     sweep_run_id: int,
@@ -431,7 +454,7 @@ def sweep_once(
     *,
     database_url: str,
     store_dir: str | Path,
-    replay_dir: str | Path = "data/replay",
+    replay_dir: str | Path | None = None,
     policy: SweepPolicy,
     adapter_factory: Callable[[], Any] | None = None,
     triage_runner: Callable[..., str] | None = None,
@@ -446,20 +469,36 @@ def sweep_once(
 ) -> dict[str, Any]:
     """Run one sweep cycle; return the recorded counts.
 
+    ``replay_dir`` defaults to ``store_dir`` when not given, so the
+    analysis reads the same store the poll writes; an explicit
+    ``replay_dir`` wins. ``analyzed`` counts only analyses that ended
+    ``resolved``; ``failed_analyses`` counts the rest; attempts
+    (``analyzed + failed_analyses``) drive ``max_analyses``.
+
     Raises the poll exception after recording a failed sweep row, so
     the loop can log one redacted line and continue. Per-incident
-    analysis failures are recorded, never raised.
+    analysis failures are recorded, never raised. Any other exception
+    after the start record also ends the row as ``failed`` with the
+    exception class name, so no exit path leaves it ``running``.
     """
     from corvus.llm.spend import spent_usd
 
     sweep_run_id = _record_sweep_start(database_url, policy)
-    before = _snapshot_incidents(database_url)
-    adapter = (
-        adapter_factory()
-        if adapter_factory is not None
-        else _default_adapter(database_url)
-    )
     try:
+        _mark_abandoned_runs(database_url, sweep_run_id)
+    except Exception:
+        pass
+    effective_replay: str | Path = replay_dir if replay_dir is not None else store_dir
+    adapter: Any = None
+    analyzed = failed = skipped_policy = skipped_budget = attempts = 0
+    candidates: list[Candidate] = []
+    try:
+        before = _snapshot_incidents(database_url)
+        adapter = (
+            adapter_factory()
+            if adapter_factory is not None
+            else _default_adapter(database_url)
+        )
         run_poll_cycle(
             adapter=adapter,
             database_url=database_url,
@@ -472,13 +511,69 @@ def sweep_once(
             archives_limit=archives_limit,
             now_ms=now_ms,
         )
-    except Exception as exc:
+        candidates = _pending_candidates(database_url, before)
+        decisions: list[tuple[int, str, str]] = []
+        for candidate in candidates:
+            if _already_analyzed(database_url, candidate.incident_id):
+                decisions.append(
+                    (candidate.incident_id, "skipped_policy", "already_analyzed")
+                )
+                skipped_policy += 1
+                continue
+            try:
+                spent = spent_usd(database_url)
+            except Exception:
+                spent = 0.0
+            decision, reason = decide(candidate, policy, spent, attempts)
+            decisions.append((candidate.incident_id, decision, reason))
+            if decision != "analyze":
+                if decision == "skipped_budget":
+                    skipped_budget += 1
+                else:
+                    skipped_policy += 1
+                continue
+            attempts += 1
+            result = _analyze_one(
+                database_url,
+                candidate.incident_id,
+                policy.lang,
+                effective_replay,
+                adapter_factory=adapter_factory,
+                triage_runner=triage_runner,
+                analysis_runner=analysis_runner,
+            )
+            if result == "resolved":
+                analyzed += 1
+            else:
+                failed += 1
+        _record_decisions(database_url, sweep_run_id, decisions)
         _record_sweep_end(
-            database_url, sweep_run_id, "failed", type(exc).__name__, 0, 0, 0, 0
+            database_url,
+            sweep_run_id,
+            "ok",
+            "",
+            analyzed,
+            failed,
+            skipped_policy,
+            skipped_budget,
         )
+    except Exception as exc:
+        try:
+            _record_sweep_end(
+                database_url,
+                sweep_run_id,
+                "failed",
+                type(exc).__name__,
+                analyzed,
+                failed,
+                skipped_policy,
+                skipped_budget,
+            )
+        except Exception:
+            pass
         raise
     finally:
-        if adapter_factory is None:
+        if adapter_factory is None and adapter is not None:
             try:
                 client = getattr(adapter, "_client", None)
                 close = getattr(client, "close", None)
@@ -486,53 +581,6 @@ def sweep_once(
                     close()
             except Exception:
                 pass
-    candidates = _pending_candidates(database_url, before)
-    decisions: list[tuple[int, str, str]] = []
-    analyzed = failed = skipped_policy = skipped_budget = 0
-    for candidate in candidates:
-        if _already_analyzed(database_url, candidate.incident_id):
-            decisions.append(
-                (candidate.incident_id, "skipped_policy", "already_analyzed")
-            )
-            skipped_policy += 1
-            continue
-        try:
-            spent = spent_usd(database_url)
-        except Exception:
-            spent = 0.0
-        decision, reason = decide(candidate, policy, spent, analyzed)
-        decisions.append((candidate.incident_id, decision, reason))
-        if decision != "analyze":
-            if decision == "skipped_budget":
-                skipped_budget += 1
-            else:
-                skipped_policy += 1
-            continue
-        result = _analyze_one(
-            database_url,
-            candidate.incident_id,
-            policy.lang,
-            replay_dir,
-            adapter_factory=adapter_factory,
-            triage_runner=triage_runner,
-            analysis_runner=analysis_runner,
-        )
-        analyzed += 1
-        if result == "resolved":
-            pass
-        elif result.startswith("backend_unavailable") or result.startswith("failed"):
-            failed += 1
-    _record_decisions(database_url, sweep_run_id, decisions)
-    _record_sweep_end(
-        database_url,
-        sweep_run_id,
-        "ok",
-        "",
-        analyzed,
-        failed,
-        skipped_policy,
-        skipped_budget,
-    )
     poll_id = _latest_poll_cycle_id(database_url)
     return {
         "sweep_run_id": sweep_run_id,
@@ -601,7 +649,7 @@ def run_sweep_loop(
     *,
     database_url: str,
     store_dir: str | Path,
-    replay_dir: str | Path = "data/replay",
+    replay_dir: str | Path | None = None,
     policy: SweepPolicy,
     once: bool = False,
     attack_path: str | Path = "data/attack/enterprise.json",
@@ -655,8 +703,10 @@ def run_sweep_loop(
                     return 1
                 _interruptible_sleep(policy.interval_seconds, stop)
                 continue
+            attempted = int(summary["analyzed"]) + int(summary["failed_analyses"])
             print(
                 f"sweep cycle: candidates={summary['candidates']}"
+                f" attempted={attempted}"
                 f" analyzed={summary['analyzed']}"
                 f" failed={summary['failed_analyses']}"
                 f" skipped_policy={summary['skipped_policy']}"

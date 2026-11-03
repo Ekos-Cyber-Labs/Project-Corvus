@@ -271,3 +271,158 @@ def test_only_get_routes_for_sweep_dashboard(
         assert client.post(path).status_code in (404, 405)
         assert client.put(path).status_code in (404, 405)
         assert client.delete(path).status_code in (404, 405)
+
+
+def test_dashboard_window_anchors_to_now_when_recent(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_incident(
+        sweep_api_db,
+        "now-1",
+        4,
+        4,
+        "true_positive",
+        "done",
+        "Now one",
+        analysed=True,
+    )
+    client = _client(sweep_api_db, monkeypatch)
+    body = client.get("/api/dashboard").json()
+    assert body["window"]["anchored_to"] == "now"
+    assert body["window"]["start"] and body["window"]["end"]
+    assert len(body["activity"]) == 24
+    assert sum(b["incidents"] for b in body["activity"]) == 1
+
+
+def test_dashboard_window_anchors_to_latest_data_when_old(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with psycopg.connect(sweep_api_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, title, severity_floor,"
+                " severity_id, ai_status, techniques, event_uids, first_seen)"
+                " VALUES ('old-1', 'Old one', 4, 4, 'pending', %s, %s,"
+                " NOW() - INTERVAL '5 days')",
+                (Jsonb(["T1059"]), Jsonb(["evt-old"])),
+            )
+        conn.commit()
+    client = _client(sweep_api_db, monkeypatch)
+    body = client.get("/api/dashboard").json()
+    assert body["window"]["anchored_to"] == "latest_data"
+    assert sum(b["incidents"] for b in body["activity"]) == 1
+    assert body["activity"][-1]["incidents"] == 1
+
+
+def test_dashboard_window_empty_database(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(sweep_api_db, monkeypatch)
+    body = client.get("/api/dashboard").json()
+    assert body["window"]["anchored_to"] == "now"
+    assert body["window"]["start"] and body["window"]["end"]
+    assert len(body["activity"]) == 24
+    assert all(b["incidents"] == 0 for b in body["activity"])
+    assert body["sweep_runs"] == []
+
+
+def test_dashboard_analyzed_counts_only_resolved(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolved_id = _seed_incident(
+        sweep_api_db,
+        "res-1",
+        4,
+        4,
+        "true_positive",
+        "done",
+        "Resolved one",
+        analysed=True,
+    )
+    with psycopg.connect(sweep_api_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, title, severity_floor,"
+                " severity_id, ai_status, techniques, event_uids, first_seen)"
+                " VALUES ('fail-1', 'Failed one', 4, 4, 'failed', %s, %s, NOW())"
+                " RETURNING id",
+                (Jsonb(["T1059"]), Jsonb(["evt-f"])),
+            )
+            failed_row = cur.fetchone()
+            failed_id = int(failed_row[0]) if failed_row else 0
+            cur.execute(
+                "INSERT INTO incidents (correlation_key, title, severity_floor,"
+                " severity_id, ai_status, techniques, event_uids, first_seen)"
+                " VALUES ('quar-1', 'Quarantined one', 4, 4, 'pending',"
+                " %s, %s, NOW()) RETURNING id",
+                (Jsonb(["T1059"]), Jsonb(["evt-q"])),
+            )
+            quar_row = cur.fetchone()
+            quar_id = int(quar_row[0]) if quar_row else 0
+            cur.execute(
+                "INSERT INTO llm_attempts (call_id, incident_id, model, purpose,"
+                " attempt_number, outcome) VALUES"
+                " ('q1', %s, 'glimmer', 'triage', 1, 'quarantined')",
+                (quar_id,),
+            )
+        conn.commit()
+    assert resolved_id and failed_id and quar_id
+    client = _client(sweep_api_db, monkeypatch)
+    body = client.get("/api/dashboard").json()
+    assert body["totals"]["incidents"] == 3
+    assert body["totals"]["analyzed"] == 1
+    assert body["totals"]["failed"] == 1
+    assert body["totals"]["quarantined"] == 1
+    assert len(body["recent"]) == 1
+
+
+def test_settings_uses_backend_resolver(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(sweep_api_db, monkeypatch)
+    by_name = {e["name"]: e for e in client.get("/api/settings").json()["connections"]}
+    assert by_name["triage_model"]["address"] == "http://127.0.0.1:9"
+    assert by_name["reasoning_model"]["address"] == "http://127.0.0.1:9"
+    assert by_name["triage_model"]["state"] != "not_configured"
+    assert by_name["reasoning_model"]["state"] != "not_configured"
+
+
+def test_settings_default_meta_url_without_env(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", sweep_api_db)
+    monkeypatch.setenv("GLIMMER_BASE_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("META_API_KEY", "test-key-value-that-must-not-leak")
+    monkeypatch.delenv("META_BASE_URL", raising=False)
+    monkeypatch.delenv("ANALYSIS_BASE_URL", raising=False)
+    monkeypatch.delenv("TRIAGE_BASE_URL", raising=False)
+    monkeypatch.setenv("WAZUH_INDEXER_URL", "https://wazuh.example.com:9200")
+    from fastapi.testclient import TestClient as _TC
+
+    from corvus.api.main import app as _app
+
+    body = _TC(_app, raise_server_exceptions=False).get("/api/settings").json()
+    by_name = {e["name"]: e for e in body["connections"]}
+    assert by_name["reasoning_model"]["address"] == "https://api.meta.ai"
+    assert by_name["reasoning_model"]["state"] != "not_configured"
+
+
+def test_settings_all_local_routing_shares_triage_address(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", sweep_api_db)
+    monkeypatch.setenv("GLIMMER_BASE_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("MODEL_PROFILE", "all-local")
+    monkeypatch.delenv("META_BASE_URL", raising=False)
+    monkeypatch.delenv("ANALYSIS_BASE_URL", raising=False)
+    monkeypatch.delenv("META_API_KEY", raising=False)
+    monkeypatch.delenv("ANALYSIS_API_KEY", raising=False)
+    monkeypatch.delenv("TRIAGE_BASE_URL", raising=False)
+    from fastapi.testclient import TestClient as _TC
+
+    from corvus.api.main import app as _app
+
+    body = _TC(_app, raise_server_exceptions=False).get("/api/settings").json()
+    by_name = {e["name"]: e for e in body["connections"]}
+    assert by_name["triage_model"]["address"] == "http://127.0.0.1:9"
+    assert by_name["reasoning_model"]["address"] == "http://127.0.0.1:9"

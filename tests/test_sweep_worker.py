@@ -266,9 +266,12 @@ def test_one_backend_failure_never_stops_cycle(
         triage_runner=triage,
         analysis_runner=analysis,
     )
-    assert summary["analyzed"] == 2
+    assert summary["analyzed"] == 1
     assert summary["failed_analyses"] == 1
+    assert summary["analyzed"] + summary["failed_analyses"] == 2
     assert len(seen) == 2
+    row = _sweep_row(sweep_db)
+    assert row[0] == "ok" and row[1] == 1 and row[2] == 1
 
 
 def test_no_double_analysis(sweep_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -455,3 +458,175 @@ def test_effective_policy_env_flag_precedence_cli_shape(
 ) -> None:
     monkeypatch.setenv("SWEEP_MIN_FLOOR", "low")
     assert effective_policy(min_floor="critical").min_floor == 5
+
+
+def test_replay_dir_defaults_to_store_dir(
+    sweep_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    calls: list[str] = []
+    _fake_poll(monkeypatch, [{"key": "ev-1", "floor": 5, "uids": ["u1"]}], calls)
+    seen: dict[str, Any] = {}
+
+    def triage(database_url: str, incident_id: int, **kwargs: Any) -> str:
+        seen["triage_replay"] = str(kwargs.get("replay_dir"))
+        return "resolved"
+
+    class _Outcome:
+        status = "resolved"
+
+    def analysis(incident_id: int, **kwargs: Any) -> Any:
+        seen["analysis_replay"] = str(kwargs.get("replay_dir"))
+        return _Outcome()
+
+    store = tmp_path / "live-store"
+    store.mkdir()
+    summary = sweep_once(
+        database_url=sweep_db,
+        store_dir=store,
+        policy=_policy(),
+        adapter_factory=lambda: object(),
+        triage_runner=triage,
+        analysis_runner=analysis,
+    )
+    assert summary["analyzed"] == 1
+    assert seen["triage_replay"] == str(store)
+    assert seen["analysis_replay"] == str(store)
+
+
+def test_explicit_replay_dir_wins(
+    sweep_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    calls: list[str] = []
+    _fake_poll(monkeypatch, [{"key": "ev-2", "floor": 5, "uids": ["u1"]}], calls)
+    seen: dict[str, Any] = {}
+
+    def triage(database_url: str, incident_id: int, **kwargs: Any) -> str:
+        seen["triage_replay"] = str(kwargs.get("replay_dir"))
+        return "resolved"
+
+    class _Outcome:
+        status = "resolved"
+
+    def analysis(incident_id: int, **kwargs: Any) -> Any:
+        seen["analysis_replay"] = str(kwargs.get("replay_dir"))
+        return _Outcome()
+
+    store = tmp_path / "live-store"
+    store.mkdir()
+    explicit = tmp_path / "explicit-replay"
+    explicit.mkdir()
+    summary = sweep_once(
+        database_url=sweep_db,
+        store_dir=store,
+        replay_dir=explicit,
+        policy=_policy(),
+        adapter_factory=lambda: object(),
+        triage_runner=triage,
+        analysis_runner=analysis,
+    )
+    assert summary["analyzed"] == 1
+    assert seen["triage_replay"] == str(explicit)
+    assert seen["analysis_replay"] == str(explicit)
+
+
+def test_adapter_construction_failure_ends_row_failed(
+    sweep_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom() -> Any:
+        raise RuntimeError("no adapter today")
+
+    ran: list[tuple[str, int]] = []
+    triage, analysis = _ok_runners(ran)
+    with pytest.raises(RuntimeError):
+        sweep_once(
+            database_url=sweep_db,
+            store_dir="/tmp/sweep-test-store",
+            policy=_policy(),
+            adapter_factory=_boom,
+            triage_runner=triage,
+            analysis_runner=analysis,
+        )
+    with psycopg.connect(sweep_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, error_code FROM sweep_runs ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+    assert row is not None and row[0] == "failed" and row[1] == "RuntimeError"
+
+
+def test_candidate_selection_failure_ends_row_failed(
+    sweep_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    _fake_poll(monkeypatch, [{"key": "cs-1", "floor": 5, "uids": ["u1"]}], calls)
+
+    def _boom(database_url: str, before: dict[int, int]) -> Any:
+        raise ValueError("bad snapshot join")
+
+    monkeypatch.setattr(sweep_mod, "_pending_candidates", _boom)
+    ran: list[tuple[str, int]] = []
+    triage, analysis = _ok_runners(ran)
+    with pytest.raises(ValueError):
+        sweep_once(
+            database_url=sweep_db,
+            store_dir="/tmp/sweep-test-store",
+            policy=_policy(),
+            adapter_factory=lambda: object(),
+            triage_runner=triage,
+            analysis_runner=analysis,
+        )
+    with psycopg.connect(sweep_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, error_code FROM sweep_runs ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+    assert row is not None and row[0] == "failed" and row[1] == "ValueError"
+    assert ran == []
+
+
+def test_stale_running_rows_marked_abandoned(
+    sweep_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    _fake_poll(monkeypatch, [{"key": "ab-1", "floor": 5, "uids": ["u1"]}], calls)
+    with psycopg.connect(sweep_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO sweep_runs (status, error_code, policy,"
+                " interval_seconds, started_at) VALUES"
+                " ('running', '', %s, 300, NOW() - INTERVAL '10 hours')"
+                " RETURNING id",
+                (Jsonb({"min_floor": 4}),),
+            )
+            stale_id = int(cur.fetchone()[0])  # type: ignore[index]
+            cur.execute(
+                "INSERT INTO sweep_runs (status, error_code, policy,"
+                " interval_seconds, started_at) VALUES"
+                " ('running', '', %s, 300, NOW()) RETURNING id",
+                (Jsonb({"min_floor": 4}),),
+            )
+            fresh_id = int(cur.fetchone()[0])  # type: ignore[index]
+        conn.commit()
+    ran: list[tuple[str, int]] = []
+    triage, analysis = _ok_runners(ran)
+    summary = sweep_once(
+        database_url=sweep_db,
+        store_dir="/tmp/sweep-test-store",
+        policy=_policy(),
+        adapter_factory=lambda: object(),
+        triage_runner=triage,
+        analysis_runner=analysis,
+    )
+    assert summary["analyzed"] == 1
+    with psycopg.connect(sweep_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, status, error_code FROM sweep_runs WHERE id IN (%s, %s)"
+                " ORDER BY id",
+                (stale_id, fresh_id),
+            )
+            rows = {int(r[0]): (str(r[1]), str(r[2])) for r in cur.fetchall()}
+    assert rows[stale_id] == ("failed", "abandoned")
+    assert rows[fresh_id][0] == "running"

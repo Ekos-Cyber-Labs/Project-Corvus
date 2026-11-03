@@ -1020,7 +1020,13 @@ def _sweep_tables_exist(cur: Any) -> bool:
 
 @app.get("/api/dashboard")
 def get_dashboard() -> Any:
-    """Totals, 24 hourly buckets (by ``first_seen``), sweep markers, recent."""
+    """Totals, 24 hourly buckets (by ``first_seen``), sweep markers, recent.
+
+    The 24 buckets normally cover the last 24 hours; when those hold
+    no incidents the window anchors to the most recent ``first_seen``
+    instead (``window.anchored_to`` reports ``now`` or
+    ``latest_data``). Sweep markers use the same window.
+    """
     url = _database_url()
     if not url:
         return JSONResponse(status_code=503, content={"detail": "database unavailable"})
@@ -1066,7 +1072,8 @@ def get_dashboard() -> Any:
                 cur.execute(
                     "SELECT COUNT(*) FROM incidents i"
                     f" {scope} AND EXISTS(SELECT 1 FROM incident_analyses a"
-                    " WHERE a.incident_id = i.id AND a.stage = 'analysis')"
+                    " WHERE a.incident_id = i.id AND a.stage = 'analysis'"
+                    " AND a.status = 'resolved')"
                 )
                 analyzed_row = cur.fetchone()
                 analyzed = int(analyzed_row[0]) if analyzed_row else 0
@@ -1094,11 +1101,36 @@ def get_dashboard() -> Any:
                     cap: Any = get_spend_cap()
                 except Exception:
                     cap = None
+                cur.execute(f"SELECT MAX(first_seen) FROM incidents {scope}")
+                latest_row = cur.fetchone()
+                latest = latest_row[0] if latest_row else None
+                if isinstance(latest, datetime) and latest.tzinfo is None:
+                    latest = latest.replace(tzinfo=UTC)
+                cur.execute(
+                    f"SELECT COUNT(*) FROM incidents {scope}"
+                    " AND first_seen >= NOW() - INTERVAL '24 hours'"
+                )
+                recent_count_row = cur.fetchone()
+                recent_count = int(recent_count_row[0]) if recent_count_row else 0
+                cur.execute("SELECT NOW()")
+                now_row = cur.fetchone()
+                now = now_row[0] if now_row else datetime.now(UTC)
+                if now.tzinfo is None:
+                    now = now.replace(tzinfo=UTC)
+                if latest is None or recent_count > 0:
+                    base = now.replace(minute=0, second=0, microsecond=0)
+                    anchored_to = "now"
+                else:
+                    base = latest.replace(minute=0, second=0, microsecond=0)
+                    anchored_to = "latest_data"
+                window_start = base - timedelta(hours=23)
+                window_end = base + timedelta(hours=1)
                 cur.execute(
                     "SELECT date_trunc('hour', first_seen), COUNT(*)"
                     " FROM incidents"
-                    f" {scope} AND first_seen >= NOW() - INTERVAL '24 hours'"
-                    " GROUP BY 1"
+                    f" {scope} AND first_seen >= %s AND first_seen < %s"
+                    " GROUP BY 1",
+                    (window_start, window_end),
                 )
                 bucket_counts: dict[str, int] = {}
                 for r in cur.fetchall():
@@ -1109,12 +1141,6 @@ def get_dashboard() -> Any:
                         bucket_counts[
                             moment.astimezone(UTC).strftime("%Y-%m-%dT%H:00:00Z")
                         ] = int(r[1])
-                cur.execute("SELECT NOW()")
-                now_row = cur.fetchone()
-                now = now_row[0] if now_row else datetime.now(UTC)
-                if now.tzinfo is None:
-                    now = now.replace(tzinfo=UTC)
-                base = now.replace(minute=0, second=0, microsecond=0)
                 activity = []
                 for back in range(23, -1, -1):
                     hour = base - timedelta(hours=back)
@@ -1128,8 +1154,9 @@ def get_dashboard() -> Any:
                         "SELECT id, started_at, finished_at, status, analyzed,"
                         " failed_analyses, skipped_policy, skipped_budget"
                         " FROM sweep_runs"
-                        " WHERE started_at >= NOW() - INTERVAL '24 hours'"
-                        " ORDER BY started_at ASC"
+                        " WHERE started_at >= %s AND started_at < %s"
+                        " ORDER BY started_at ASC",
+                        (window_start, window_end),
                     )
                     markers = [
                         {
@@ -1152,6 +1179,7 @@ def get_dashboard() -> Any:
                     " AND t.outcome LIKE '%quarantin%')"
                     " FROM incidents i JOIN incident_analyses a"
                     " ON a.incident_id = i.id AND a.stage = 'analysis'"
+                    " AND a.status = 'resolved'"
                     f" {scope} ORDER BY a.created_at DESC, i.id DESC LIMIT 5"
                 )
                 recent = [
@@ -1178,6 +1206,11 @@ def get_dashboard() -> Any:
             "spend": {"total_usd": spend_total, "cap_usd": cap},
             "activity": activity,
             "activity_bucket": "first_seen hour (UTC); empty hours are 0",
+            "window": {
+                "start": _iso(window_start),
+                "end": _iso(window_end),
+                "anchored_to": anchored_to,
+            },
             "sweep_runs": markers,
             "recent": recent,
         }
@@ -1281,6 +1314,22 @@ def get_sweep_status() -> Any:
         return JSONResponse(status_code=503, content={"detail": "database unavailable"})
 
 
+def _llm_base_url(purpose: str) -> str | None:
+    """Return the backend address from the same resolver backends use.
+
+    Uses :func:`corvus.llm.config.get_backend` so defaults, the
+    ``TRIAGE_``/``ANALYSIS_`` overrides and ``MODEL_PROFILE`` routing
+    match what actually serves. Any resolver failure yields None
+    (``not_configured``); only the redacted address ever leaves here.
+    """
+    try:
+        from corvus.llm.config import get_backend
+
+        return get_backend(purpose).base_url
+    except Exception:
+        return None
+
+
 def _endpoint_entry(name: str, url: str | None, kind: str) -> dict[str, Any]:
     """One settings connection entry reusing the health checks."""
     if kind == "database":
@@ -1312,10 +1361,8 @@ def get_settings_view() -> Any:
     except ValueError as exc:
         policy_body = {"source": "configured", "policy": None, "error": str(exc)}
     wazuh_url = os.environ.get("WAZUH_INDEXER_URL")
-    triage_url = os.environ.get("TRIAGE_BASE_URL") or os.environ.get("GLIMMER_BASE_URL")
-    analysis_url = os.environ.get("ANALYSIS_BASE_URL") or os.environ.get(
-        "META_BASE_URL"
-    )
+    triage_url = _llm_base_url("triage")
+    analysis_url = _llm_base_url("analysis")
     database_url = _database_url()
     entries = [
         _endpoint_entry("database", database_url, "database"),

@@ -291,8 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sweep.add_argument(
         "--replay-dir",
-        default="data/replay",
-        help="Replay Parquet store for incident evidence (default: data/replay).",
+        default=None,
+        help="Replay Parquet store for incident evidence"
+        " (default: the --store directory).",
     )
     sweep.add_argument(
         "--since",

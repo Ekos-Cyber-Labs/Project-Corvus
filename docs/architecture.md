@@ -482,12 +482,19 @@ or model inputs. Details: `datasets/README.md`.
   Sweep rows (`sweep_runs` plus per-incident `sweep_decisions`,
   migration `0013_sweep_runs.sql`) carry counts and the effective
   policy only — no credentials, raw events, or model text — and three
-  read-only routes expose them: `GET /api/dashboard` (totals, hourly
-  `first_seen` buckets for the last 24 hours, sweep markers, five most
-  recent analyzed incidents), `GET /api/sweep/status` (last run, next
+  read-only routes expose them: `GET /api/dashboard` (totals with
+  `analyzed` meaning resolved analyses only, 24 hourly `first_seen`
+  buckets anchored to now or to the latest data with
+  `window.anchored_to`, sweep markers for the same window, five most
+  recent resolved analyses), `GET /api/sweep/status` (last run, next
   estimate from last start plus stored interval, running flag, last
   policy), and `GET /api/settings` (effective policy, redacted
-  `scheme://host[:port]` connection states, spend cap, versions). The
+  `scheme://host[:port]` connection states with model addresses from
+  `corvus.llm.config`, spend cap, versions). Evidence defaults to the
+  poll store (`--replay-dir` falls back to `--store`); attempts derive
+  as `analyzed + failed_analyses` with no new column; post-start
+  failures record `failed` with the class name and stale `running`
+  rows become `failed`/`abandoned`. The
   sweep never proposes, deploys, or approves rules, so the shadow and
   approval guarantees are unchanged.
 - `ReplayAdapter`: public datasets normalized with `corvus replay load`
