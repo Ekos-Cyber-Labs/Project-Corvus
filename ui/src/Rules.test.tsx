@@ -269,6 +269,16 @@ describe("health strip names the model", () => {
     render(<HealthStrip health={{ status: "degraded", self_observation: {} }} />);
     expect(screen.getByText(/Latest model latency: not measured/)).toBeTruthy();
   });
+
+  it("keeps the status line only as hidden text and chip tooltips, not a visible duplicate", () => {
+    const { container } = render(
+      <HealthStrip health={{ status: "ok", self_observation: { latest_model_latency_ms: 123, latest_model_latency_model: "muse-spark-1.3" } }} />,
+    );
+    expect(container.querySelector(".health-line")).toBeNull();
+    const chip = container.querySelector(".chip");
+    expect(chip?.getAttribute("title")).toContain("API");
+    expect(container.querySelector(".health > p.sr-only")?.textContent).toContain("Latest model latency");
+  });
 });
 
 describe("App rules routing", () => {

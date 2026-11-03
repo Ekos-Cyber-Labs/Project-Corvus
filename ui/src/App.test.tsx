@@ -51,8 +51,10 @@ describe("IncidentView renders untrusted text as text only", () => {
     expect(container.querySelector("script")).toBeNull();
     expect(container.querySelector("[onerror]")).toBeNull();
     expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
-    // No anchor is built from event data at all in this view.
-    expect(container.querySelector("a")).toBeNull();
+    // Only in-page section-nav anchors are allowed; none is built from event data.
+    const anchors = Array.from(container.querySelectorAll("a"));
+    expect(anchors.length).toBeGreaterThan(0);
+    for (const a of anchors) expect(a.getAttribute("href")).toMatch(/^#section-/);
   });
 
   it("reports a missing cited event as missing (a11y: summary is focusable button-like)", () => {
@@ -286,7 +288,7 @@ describe("IncidentView readability and guards", () => {
     };
     const { container } = render(<IncidentView detail={withLong} />);
     expect(screen.getByText("As seen by the cloud model (pseudonymized).")).toBeTruthy();
-    expect(container.querySelector("dt")?.textContent).toBe("q");
+    expect(Array.from(container.querySelectorAll("dl.args dt")).some((dt) => dt.textContent === "q")).toBe(true);
     expect(screen.getByText("Full result (text only)")).toBeTruthy();
     expect(screen.getByText(/Result truncated to 4000 characters/)).toBeTruthy();
     expect(screen.getAllByText(PAYLOAD).length).toBeGreaterThan(0);
@@ -321,6 +323,117 @@ describe("IncidentView readability and guards", () => {
       <IncidentView detail={{ ...detail, reasoning_unverified: { text: "   ", unverified: true } }} />,
     );
     expect(screen.queryByText("Unverified reasoning")).toBeNull();
+  });
+});
+
+describe("stat tiles name the field they count", () => {
+  it("labels evidence entries as cited events, never as findings", () => {
+    const fixture: IncidentDetail = {
+      ...detail,
+      title: "Incident with 511 findings in its name",
+      event_count: 511,
+      evidence: [
+        { event_uid: "evt-1", found: true, event: { id: "evt-1" } },
+        { event_uid: "evt-2", found: false },
+      ],
+    };
+    const { container } = render(<IncidentView detail={fixture} />);
+    const tiles = container.querySelector(".stat-tiles");
+    expect(tiles?.textContent).toContain("cited events (evidence)");
+    expect(tiles?.textContent).toContain("511");
+    expect(tiles?.textContent).toContain("events (event_count)");
+    expect(tiles?.textContent).not.toContain("findings");
+    // The cited count is the evidence length (2), not the title/event_count number.
+    const citedTile = Array.from(container.querySelectorAll(".stat-tiles li")).find((li) => li.textContent?.includes("cited events"));
+    expect(citedTile?.querySelector("strong")?.textContent).toBe("2");
+    expect(container.querySelector(".hero-meta")).toBeNull();
+    expect(container.querySelectorAll(".gauge .sev-scale")).toHaveLength(1);
+    expect(container.querySelector(".gauge-segs")).toBeNull();
+  });
+
+  it("clamps a one-paragraph 1300-character triage summary with an expanded toggle", () => {
+    const summary = "triage ".repeat(186).slice(0, 1300);
+    expect(summary).toHaveLength(1300);
+    expect(summary).not.toContain("\n");
+    const { container } = render(<IncidentView detail={{ ...detail, triage: { summary } }} />);
+    const para = container.querySelector(".triage-text");
+    expect(para?.textContent).toBe(summary);
+    expect(para?.className).toContain("clamped");
+    const toggle = screen.getByRole("button", { name: /Show full summary/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: /Show less/ }).getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector(".triage-text")?.className).toContain("expanded");
+    expect(container.querySelector(".triage-text")?.textContent).toBe(summary);
+  });
+
+  it("clusters activity markers within 6 px into a count badge with ticks and a legend", () => {
+    const clustered: IncidentDetail = {
+      ...detail,
+      first_seen: "2026-10-30T00:00:00Z",
+      last_seen: "2026-10-30T10:00:00Z",
+      analysis: {
+        ...detail.analysis,
+        timeline: [
+          { time: "2026-10-30T00:00:00Z", event_uid: "evt-a", description: "first claim" },
+          { time: "2026-10-30T00:00:01Z", event_uid: "evt-b", description: "second claim" },
+          { time: "2026-10-30T00:00:02Z", event_uid: "evt-c", description: "third claim" },
+          { time: "2026-10-30T10:00:00Z", event_uid: "evt-d", description: "last claim" },
+        ],
+      },
+      evidence: [{ event_uid: "evt-a", found: true, event: { technique: "T1059" } }],
+      techniques: [{ id: "T1059", name: "Command and Scripting Interpreter" }],
+    };
+    const { container } = render(<IncidentView detail={clustered} />);
+    expect(screen.getByLabelText(/3 claims clustered/)).toBeTruthy();
+    expect(container.querySelector(".svg-count")?.textContent).toBe("3");
+    expect(screen.getByText(/neutral: no technique tied/)).toBeTruthy();
+    expect(screen.getByText(/A dot is one timeline claim/)).toBeTruthy();
+    expect(screen.getByText(/break symbol means a gap/)).toBeTruthy();
+    // First, three intermediate, and last axis ticks are rendered as svg text.
+    const ticks = Array.from(container.querySelectorAll(".svg-tick")).map((t) => t.textContent);
+    expect(ticks).toHaveLength(5);
+    expect(ticks[0]).toContain("2026-10-30 00:00:00");
+    expect(ticks[4]).toContain("2026-10-30 10:00:00");
+  });
+});
+
+describe("hostile layout inputs do not break or throw", () => {
+  it("renders a 200-character title with no spaces as text", () => {
+    const title = "A".repeat(200);
+    const { container } = render(<IncidentView detail={{ ...detail, title }} />);
+    expect(screen.getByText(title)).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it("renders a 5000-character timeline claim as text", () => {
+    const claim = "claim ".repeat(1000).slice(0, 5000);
+    expect(claim).toHaveLength(5000);
+    const hostile: IncidentDetail = {
+      ...detail,
+      analysis: {
+        ...detail.analysis,
+        timeline: [{ time: "2026-10-30T00:00:00Z", event_uid: "evt-1", description: claim }],
+      },
+    };
+    const { container } = render(<IncidentView detail={hostile} />);
+    expect(screen.getByText(claim)).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it("groups a payload with an unknown tactic id under Other without throwing", () => {
+    const hostile: IncidentDetail = {
+      ...detail,
+      techniques: [{ id: "T9999", name: "Unknown technique" }, { id: "not-a-technique", name: PAYLOAD }],
+    };
+    const { container } = render(<IncidentView detail={hostile} />);
+    expect(screen.getByText(/Other \(2\)/)).toBeTruthy();
+    expect(screen.getByText("T9999")).toBeTruthy();
+    expect(screen.getByText("not-a-technique")).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("script")).toBeNull();
   });
 });
 
