@@ -186,6 +186,37 @@ button.dist-seg { cursor:pointer; }
 .response-plan { list-style:none; padding:0; display:grid; gap:var(--space-2); }
 .response-plan li { display:flex; gap:var(--space-3); background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-sm); padding:var(--space-3); }
 .resp-num { font-weight:800; color:var(--accent); font-variant-numeric:tabular-nums; }
+.banner-compact { padding:var(--space-3) var(--space-4); }
+.banner-compact p { margin:0; }
+.rule-rail-candidate { background:var(--muted); }
+.rule-rail-shadow { background:var(--accent2); }
+.rule-rail-active { background:var(--ok); }
+.rule-rail-archived { background:var(--muted); }
+.rule-rail-rolled_back { background:var(--danger); }
+.rule-rail-unknown { background:var(--muted); }
+.cell-title { min-width:12rem; }
+.does-line { font-weight:600; margin:var(--space-3) 0; }
+.lifecycle { margin:var(--space-3) 0; }
+.lc-main, .lc-sides { list-style:none; display:flex; flex-wrap:wrap; gap:var(--space-2); padding:0; margin:0 0 var(--space-2); }
+.lc-step { display:grid; gap:.15rem; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel2); padding:var(--space-2) var(--space-3); min-width:8rem; }
+.lc-step.lc-side { opacity:.85; }
+.lc-dot { width:.65rem; height:.65rem; border-radius:50%; background:var(--muted); }
+.lc-current { outline:3px solid var(--accent); outline-offset:1px; }
+.lc-current .lc-dot { background:var(--accent); }
+.lc-name { font-weight:700; }
+.lc-date { color:var(--muted); font-size:var(--text-sm); }
+.lc-here { font-size:var(--text-sm); font-weight:700; color:var(--accent); }
+.summary-grid, .lineage-grid { grid-template-columns:minmax(9rem,auto) 1fr; }
+pre.payload.sigma, pre.payload.sigma code { font-family:ui-monospace, "Cascadia Mono", Menlo, monospace; }
+.backtest-bars { display:grid; gap:var(--space-2); margin:var(--space-3) 0; max-width:52rem; }
+.bt-row { display:grid; grid-template-columns:minmax(9rem,14rem) 1fr minmax(8rem,auto); gap:var(--space-3); align-items:center; }
+.bt-track { display:block; height:.55rem; background:var(--panel); border:1px solid var(--line); border-radius:999px; overflow:hidden; }
+.bt-fill { display:block; height:100%; background:var(--accent2); }
+.bt-value { text-align:right; }
+.reserve { min-height:10rem; }
+.num, td.num, .col-usd { white-space:nowrap; }
+table.cost td.num, table.cost th { white-space:nowrap; }
+.detail section[id], .detail section[aria-label] { scroll-margin-top:5rem; }
 .skeleton { display:grid; gap:.5rem; margin:var(--space-3) 0; }
 .skeleton span { display:block; height:1rem; border-radius:6px; background:var(--panel2); }
 .pager { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
@@ -200,7 +231,20 @@ svg { flex:none; vertical-align:-.15em; }
   .section-select { display:block; }
   .section-select select { width:100%; }
   header.top { align-items:flex-start; }
-  table.incidents th:nth-child(1), table th:nth-child(1) { }
+  .detail section[id], .detail section[aria-label] { scroll-margin-top:6.5rem; }
+  .bt-row { grid-template-columns:1fr; gap:.25rem; }
+  .bt-value { text-align:left; }
+  .summary-grid, .lineage-grid { grid-template-columns:1fr; }
+  table.incidents thead { display:none; }
+  table.incidents, table.incidents tbody { display:block; }
+  table.incidents tr.rowlink { display:flex; flex-wrap:wrap; gap:.35rem .75rem; align-items:center; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel); padding:var(--space-3); margin:0 0 var(--space-2); }
+  table.incidents tr.rowlink td { display:block; border-bottom:0; padding:.15rem 0; }
+  table.incidents td:nth-child(2) { order:-1; flex:1 0 100%; min-width:0; }
+  table.incidents td:nth-child(2) .title-link { overflow-wrap:anywhere; }
+  table.incidents .cell-sev, table.incidents .cell-verdict, table.incidents .cell-inj { width:auto; white-space:normal; }
+  table.incidents .cell-events { min-width:0; display:flex; gap:.5rem; align-items:center; }
+  table.incidents .event-bar { width:4rem; margin-top:0; }
+  table.rules td.cell-title { min-width:12rem; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition:none !important; animation:none !important; }

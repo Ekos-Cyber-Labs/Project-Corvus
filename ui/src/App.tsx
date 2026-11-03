@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TACTIC_NAMES, TACTIC_ORDER, parentForTechnique, tacticForTechnique } from "./attackMap";
-import { ActivityStrip, ConfidenceMeter, KillChainStrip, SeverityChip, SeverityGauge, SeverityScale } from "./visuals";
+import { ActivityStrip, BacktestBars, ConfidenceMeter, KillChainStrip, LifecycleStepper, SeverityChip, SeverityGauge, SeverityScale, backtestFigures } from "./visuals";
 import { IconAlert, IconCheck, IconChevron, IconClock, IconCopy, IconHost, IconShield, IconSpark } from "./icons";
 
 export type IncidentListItem = {
@@ -201,16 +201,33 @@ export function groupTechniques(techniques: { id: string; name?: string | null }
 
 export function RulesBanner() {
   return (
-    <section className="panel banner" aria-label="About shadow mode">
-      <h3>Shadow mode</h3>
-      <p>
-        Shadow rules never change alerts: matching events keep their existing
-        alerts and gain the <span className="mono">corvus_shadow</span> tag for
-        review. Learning here means stored detection rules only — no model
-        weights are updated.
-      </p>
+    <section className="panel banner banner-compact" aria-label="About shadow mode">
+      <p><strong>Shadow mode:</strong> shadow rules never change alerts — matching events keep their existing alerts and gain the <span className="mono">corvus_shadow</span> tag for review. Learning here means stored detection rules only — no model weights are updated.</p>
     </section>
   );
+}
+export function ruleCountLine(items: RuleListItem[], total: number): string {
+  const count = (s: string) => items.filter((it) => it.status === s).length;
+  const parts = ["shadow", "candidate", "active", "archived", "rolled_back"].map((s) => `${count(s)} ${s}`);
+  const scope = items.length < total ? ` (status counts from this page, n=${items.length})` : "";
+  return `${total} rules: ${parts.join(", ")}${scope}`;
+}
+export function ruleAltersAlertsText(detail: Pick<RuleDetail, "status" | "mode">): string {
+  if (detail.mode === "shadow" || detail.status === "shadow") return "What this rule does: shadow — it does not alter alerts. Matching events keep their existing alerts and gain the corvus_shadow tag for review.";
+  if (detail.mode === "active" || detail.status === "active") return "What this rule does: active — deployed active, so matching events can raise an alert; it alters alerts.";
+  if (detail.status === "candidate") return "What this rule does: candidate — not deployed, so it does not alter alerts.";
+  if (detail.status === "archived" || detail.status === "rolled_back") return `What this rule does: ${detail.status} — not deployed, so it does not alter alerts.`;
+  return "What this rule does: not deployed, so it does not alter alerts.";
+}
+export function backtestCodesText(backtest: Record<string, unknown> | null | undefined): string {
+  if (!backtest) return "none recorded";
+  const codes = backtest.codes;
+  if (typeof codes === "string") return codes.trim() ? codes : "no codes recorded";
+  if (Array.isArray(codes)) {
+    const parts = codes.map((c) => String(c)).filter((c) => c.trim());
+    return parts.length ? parts.join(", ") : "no codes recorded";
+  }
+  return "no codes recorded";
 }
 export function RuleStatusBadge({ status }: { status: string }) {
   if (!RULE_STATUSES.has(status)) return <span className="badge rule-unknown">{status || "unknown"}</span>;
@@ -253,6 +270,8 @@ export function RulesList({ items, total, page, setPage, pageSize, onSelect }: {
   if (!items.length) return <p>No learned rules found.</p>;
   const open = useCallback((id: number) => onSelect(id), [onSelect]);
   return (
+    <div>
+      <p className="summary-count">{ruleCountLine(items, total)}</p>
     <div className="table-wrap">
       <table className="rules" aria-label="Learned rules">
         <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Mode</th><th>Version</th><th>Level</th><th>Techniques</th><th>Hits</th><th>FP</th></tr></thead>
@@ -260,8 +279,8 @@ export function RulesList({ items, total, page, setPage, pageSize, onSelect }: {
           {items.map((it) => (
             <tr key={it.id} className="rowlink" tabIndex={0} onClick={() => open(it.id)}
               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(it.id); } }}>
-              <td className="mono">{it.id}</td>
-              <td><a className="title-link" href={buildRuleHash(it.id)}>{it.title || `Rule ${it.id}`}</a></td>
+              <td className="mono cell-id"><span className={`rail rule-rail-${RULE_STATUSES.has(it.status) ? it.status : "unknown"}`} aria-hidden="true" />{it.id}</td>
+              <td className="cell-title"><a className="title-link" href={buildRuleHash(it.id)}>{it.title || `Rule ${it.id}`}</a></td>
               <td><RuleStatusBadge status={it.status} /></td>
               <td><RuleModeBadge mode={it.mode} /></td>
               <td className="mono">v{it.version}</td>
@@ -278,6 +297,7 @@ export function RulesList({ items, total, page, setPage, pageSize, onSelect }: {
         Page {page + 1} of {pages} ({total} total){" "}
         <button type="button" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>Next</button>
       </p>
+    </div>
     </div>
   );
 }
@@ -323,56 +343,90 @@ export function RuleDetailView({ detail }: { detail: RuleDetail }) {
       setCopied(true);
     } catch { setCopied(false); }
   };
+  const lastTransition = transitions.length ? transitions[transitions.length - 1] : null;
+  const figures = backtestFigures(backtest);
+  const nativeId = detail.wazuh?.native_rule_id ?? null;
   return (
-    <article>
-      <h2>{detail.title || `Rule ${detail.id}`}</h2>
-      <p>
-        <RuleStatusBadge status={detail.status} /> <RuleModeBadge mode={detail.mode} /> <span className="mono">v{detail.version}</span>
-        {detail.level ? <> · Level: {detail.level}</> : null}
-        {detail.techniques?.length ? <> · Techniques: <span className="mono">{detail.techniques.join(", ")}</span></> : null}
-      </p>
-      <p className="muted">
-        Hits: {detail.hits} · False positives: {detail.false_positives}
-        {detail.wazuh?.native_rule_id != null ? <> · Wazuh native id: <span className="mono">{detail.wazuh.native_rule_id}</span></> : null}
-        {detail.wazuh?.group ? <> · Group: <span className="mono">{detail.wazuh.group}</span></> : null}
-      </p>
-      {detail.wazuh?.pair_note ? <p className="muted">{detail.wazuh.pair_note}</p> : null}
-      <h3>Sigma rule (text only)</h3>
-      <p><button type="button" onClick={copySigma}><IconCopy /> {copied ? "Copied" : "Copy Sigma text"}</button></p>
-      <pre className="payload"><code>{detail.sigma_text}</code></pre>
-      <h3>Lineage</h3>
-      {lineage?.lineage_note ? <p className="muted">{lineage.lineage_note}</p> : null}
-      <dl className="args">
-        <div><dt className="mono">source_incident</dt><dd>{source === null || source === undefined ? "none recorded" : source.exists ? (<a href={buildDetailHash(source.id)}>Incident {source.id}{source.title ? ` — ${source.title}` : ""}</a>) : (<>Incident {source.id} (deleted)</>)}</dd></div>
-        <div><dt className="mono">cited_uids</dt><dd className="mono">{cited.length ? cited.join(", ") : "none"}</dd></div>
-        <div><dt className="mono">rounds_used</dt><dd>{lineage?.rounds_used ?? "not recorded"}</dd></div>
-        <div><dt className="mono">model</dt><dd className="mono">{lineage?.model ?? "not recorded"}</dd></div>
-        <div><dt className="mono">prompt_version</dt><dd className="mono">{lineage?.prompt_version ?? "not recorded"}</dd></div>
-        <div><dt className="mono">ledger_ids</dt><dd className="mono">{lineage?.ledger_ids?.length ? JSON.stringify(lineage.ledger_ids) : "none"}</dd></div>
-      </dl>
-      <h3>Accepted backtest</h3>
-      {backtest ? (
-        <dl className="args">
-          <div><dt className="mono">codes</dt><dd className="mono">{JSON.stringify(backtest.codes ?? null)}</dd></div>
-          <div><dt className="mono">target_matches</dt><dd>{Array.isArray(backtest.target_matched) ? `${backtest.target_matched.length} of ${String(backtest.target_total ?? "?")}` : "not recorded"}</dd></div>
-          <div><dt className="mono">baseline_count</dt><dd>{String(backtest.baseline_count ?? "not recorded")}</dd></div>
-          <div><dt className="mono">group</dt><dd className="mono">{typeof backtest.group === "string" ? backtest.group : "not recorded"}</dd></div>
+    <article className="detail rule-detail">
+      <section className="panel hero" aria-label="Rule summary">
+        <h2>{detail.title || `Rule ${detail.id}`}</h2>
+        <p className="hero-badges">
+          <RuleStatusBadge status={detail.status} /> <RuleModeBadge mode={detail.mode} /> <span className="mono">v{detail.version}</span>
+          {detail.level ? <> · Level: {detail.level}</> : null}
+          {detail.techniques?.length ? <> · Techniques: <span className="mono">{detail.techniques.join(", ")}</span></> : null}
+        </p>
+        <p className="does-line">{ruleAltersAlertsText(detail)}</p>
+        <LifecycleStepper status={detail.status} transitions={transitions} />
+        <dl className="args summary-grid">
+          {nativeId != null ? <div><dt>Native rule id</dt><dd className="mono">{nativeId}</dd></div> : null}
+          {detail.wazuh?.native_rule_ids?.length && detail.wazuh.native_rule_ids.length > 1 ? <div><dt>Native rule ids</dt><dd className="mono">{detail.wazuh.native_rule_ids.join(", ")}</dd></div> : null}
+          {detail.wazuh?.group ? <div><dt>Group</dt><dd className="mono">{detail.wazuh.group}</dd></div> : null}
+          <div><dt>Last transition approver</dt><dd>{lastTransition?.approver ?? "not recorded"}</dd></div>
+          <div><dt>Last transition date</dt><dd className="mono">{lastTransition?.at ?? "not recorded"}</dd></div>
+          <div><dt>Hits</dt><dd className="num">{detail.hits}</dd></div>
+          <div><dt>False positives</dt><dd className="num">{detail.false_positives}</dd></div>
+          {detail.created_at ? <div><dt>Created</dt><dd className="mono">{detail.created_at}</dd></div> : null}
+          {detail.updated_at ? <div><dt>Updated</dt><dd className="mono">{detail.updated_at}</dd></div> : null}
+          {detail.deployed_at ? <div><dt>Deployed</dt><dd className="mono">{detail.deployed_at}</dd></div> : null}
+          {detail.source_incident_id != null ? <div><dt>Source incident id</dt><dd className="mono">{detail.source_incident_id}</dd></div> : null}
         </dl>
-      ) : <p>No accepted backtest recorded.</p>}
-      {Array.isArray(backtest?.target_matched) && (backtest.target_matched as unknown[]).length ? (
-        <details><summary>Matched target events (text only)</summary><pre className="payload mono">{JSON.stringify(backtest.target_matched, null, 2)}</pre></details>
-      ) : null}
-      <h3>Transitions</h3>
-      {transitions.length ? (
-        <div className="table-wrap"><table className="cost" aria-label="Rule transitions">
-          <thead><tr><th>From</th><th>To</th><th>Approver</th><th>Reason</th><th>At</th></tr></thead>
-          <tbody>{transitions.map((t, i) => (<tr key={i}><td>{t.from ?? "—"}</td><td><RuleStatusBadge status={t.to ?? ""} /></td><td>{t.approver ?? "—"}</td><td>{t.reason ?? "—"}</td><td className="mono">{t.at ?? "—"}</td></tr>))}</tbody>
-        </table></div>
-      ) : <p>No transitions recorded.</p>}
-      <h3>Fired in</h3>
-      {findings.length ? (
-        <ul className="plain">{findings.map((f) => (<li key={f.incident_id}><a href={buildDetailHash(f.incident_id)}>Incident {f.incident_id}{f.incident_title ? ` — ${f.incident_title}` : ""}</a>{typeof f.findings === "number" ? <> · {f.findings} finding{f.findings === 1 ? "" : "s"}</> : null}</li>))}</ul>
-      ) : <p>This rule has not fired in any incident.</p>}
+        {detail.wazuh?.pair_note ? <p className="muted">{detail.wazuh.pair_note}</p> : null}
+      </section>
+      <section className="panel" aria-label="Sigma rule">
+        <h3>Sigma rule (text only)</h3>
+        <p><button type="button" onClick={copySigma}><IconCopy /> {copied ? "Copied" : "Copy"}</button></p>
+        <pre className="payload sigma"><code>{detail.sigma_text}</code></pre>
+      </section>
+      <section className="panel" aria-label="Lineage">
+        <h3>Lineage</h3>
+        {lineage?.lineage_note ? <p className="muted">{lineage.lineage_note}</p> : null}
+        <dl className="args lineage-grid">
+          <div><dt>Source incident</dt><dd>{source === null || source === undefined ? "none recorded" : source.exists ? (<a href={buildDetailHash(source.id)}>Incident {source.id}{source.title ? ` — ${source.title}` : ""}</a>) : (<>Incident {source.id} (deleted)</>)}</dd></div>
+          <div><dt>Cited event uids</dt><dd className="mono">{cited.length ? cited.join(", ") : "none"}</dd></div>
+          <div><dt>Accepted backtest</dt><dd>{backtest ? <span className="mono">{backtestCodesText(backtest)}</span> : "none recorded"}</dd></div>
+          <div><dt>Rounds used</dt><dd>{lineage?.rounds_used ?? "not recorded"}</dd></div>
+          <div><dt>Model</dt><dd className="mono">{lineage?.model ?? "not recorded"}</dd></div>
+          <div><dt>Prompt version</dt><dd className="mono">{lineage?.prompt_version ?? "not recorded"}</dd></div>
+          <div><dt className="mono">ledger_ids</dt><dd className="mono">{lineage?.ledger_ids?.length ? JSON.stringify(lineage.ledger_ids) : "none"}</dd></div>
+          {lineage?.sigma_rule_id ? <div><dt className="mono">sigma_rule_id</dt><dd className="mono">{lineage.sigma_rule_id}</dd></div> : null}
+        </dl>
+      </section>
+      <section className="panel" aria-label="Accepted backtest">
+        <h3>Accepted backtest</h3>
+        {backtest ? (
+          <>
+            <div className="table-wrap"><table className="cost backtest-table" aria-label="Backtest numbers">
+              <thead><tr><th>Figure</th><th>Matches</th><th>n</th></tr></thead>
+              <tbody>
+                <tr><td>Target events matched</td><td className="num">{figures.matched ?? "not recorded"}</td><td className="num">{figures.targetTotal ?? "not recorded"}</td></tr>
+                <tr><td>Benign baseline matches</td><td className="num">{figures.baselineCount ?? "not recorded"}</td><td className="num">{figures.baselineTotal ?? "not recorded"}</td></tr>
+                <tr><td>Codes</td><td className="mono" colSpan={2}>{backtestCodesText(backtest)}</td></tr>
+                <tr><td>Group</td><td className="mono" colSpan={2}>{typeof backtest.group === "string" ? backtest.group : "not recorded"}</td></tr>
+                {typeof backtest.sigma_sha256 === "string" ? <tr><td className="mono">sigma_sha256</td><td className="mono" colSpan={2}>{backtest.sigma_sha256}</td></tr> : null}
+              </tbody>
+            </table></div>
+            <BacktestBars backtest={backtest} />
+          </>
+        ) : <p>No accepted backtest recorded.</p>}
+        {Array.isArray(backtest?.target_matched) && (backtest.target_matched as unknown[]).length ? (
+          <details><summary>Matched target events (text only)</summary><pre className="payload mono">{JSON.stringify(backtest.target_matched, null, 2)}</pre></details>
+        ) : null}
+      </section>
+      <section className="panel" aria-label="Transitions">
+        <h3>Transitions</h3>
+        {transitions.length ? (
+          <div className="table-wrap"><table className="cost" aria-label="Rule transitions">
+            <thead><tr><th>From</th><th>To</th><th>Approver</th><th>Reason</th><th>At</th></tr></thead>
+            <tbody>{transitions.map((t, i) => (<tr key={i}><td>{t.from ?? "—"}</td><td><RuleStatusBadge status={t.to ?? ""} /></td><td>{t.approver ?? "—"}</td><td>{t.reason ?? "—"}</td><td className="mono num">{t.at ?? "—"}</td></tr>))}</tbody>
+          </table></div>
+        ) : <p>No transitions recorded.</p>}
+      </section>
+      <section className="panel" aria-label="Fired in">
+        <h3>Fired in</h3>
+        {findings.length ? (
+          <ul className="plain">{findings.map((f) => (<li key={f.incident_id}><a href={buildDetailHash(f.incident_id)}>Incident {f.incident_id}{f.incident_title ? ` — ${f.incident_title}` : ""}</a>{typeof f.findings === "number" ? <> · {f.findings} finding{f.findings === 1 ? "" : "s"}</> : null}</li>))}</ul>
+        ) : <p>This rule has not fired in any incident.</p>}
+      </section>
     </article>
   );
 }
@@ -511,7 +565,7 @@ export function IncidentList({ items, total, page, setPage, pageSize, onSelect, 
         <ul className="dist-legend">{verdictCats.map((v) => <li key={v.key}>{v.label}: {v.c}</li>)}</ul>
       </div>
       <div className="table-wrap">
-        <table aria-label="Incidents">
+        <table className="incidents" aria-label="Incidents">
           <thead><tr><th>ID</th><th>Title</th><th>Severity</th><th>Verdict</th><th>Events</th><th className="col-inj">Injection</th></tr></thead>
           <tbody>
             {items.map((it) => (
@@ -744,7 +798,7 @@ export function IncidentView({ detail }: { detail: IncidentDetail }) {
                     <td>{a.purpose}</td><td className="mono">{a.model}</td><td className="num">{a.attempt_number}</td>
                     <td><span className={`outcome-dot outcome-${outcomeKind}`} aria-hidden="true" />{a.outcome}{a.failed_validator ? ` (failed validator: ${a.failed_validator})` : ""} · {a.token_source ?? "not measured"}<span className="sr-only"> Outcome: {outcomeText}</span></td>
                     <td><span className="num">{a.tokens}</span><span className="token-bar" aria-hidden="true"><span className="token-fill grow" style={{ width: `${(a.tokens / maxTokens) * 100}%` }} /></span></td>
-                    <td className="num">{a.usd ?? "not measured"}</td>
+                    <td className="num col-usd">{a.usd ?? "not measured"}</td>
                   </tr>
                 );
               })}
@@ -894,7 +948,7 @@ export default function App() {
           {route.view === "rule" ? (
             <>
               <button type="button" onClick={() => go(lastRulesHash.current)}>Back to rules</button>
-              {ruleDetailState === "loading" ? <p aria-live="polite">Loading rule…</p>
+              {ruleDetailState === "loading" ? <div aria-live="polite" className="reserve"><p>Loading rule…</p><div className="skeleton" aria-hidden="true"><span /><span /><span /></div></div>
                 : ruleDetailState === "invalid" ? <p role="alert">Invalid rule id: the URL must be #/rules/&lt;number&gt;.</p>
                 : ruleDetailState === "error" ? <p role="alert">Could not load this rule. It may not exist. <button type="button" onClick={retry}>Retry</button></p>
                 : ruleDetail ? <RuleDetailView detail={ruleDetail} /> : null}
@@ -915,7 +969,7 @@ export default function App() {
         <main><h2>Learned rules</h2>
           <RulesBanner />
           <RuleFilterBar filters={route} onChange={setRuleFilters} />
-          {ruleListState === "loading" ? <p aria-live="polite">Loading rules…</p> : ruleListState === "error" ? <p role="alert">Could not load rules. Check that the API and database are running, then reload. <button type="button" onClick={retry}>Retry</button></p> : (
+          {ruleListState === "loading" ? <div aria-live="polite" className="reserve"><p>Loading rules…</p><div className="skeleton" aria-hidden="true"><span /><span /><span /></div></div> : ruleListState === "error" ? <p role="alert">Could not load rules. Check that the API and database are running, then reload. <button type="button" onClick={retry}>Retry</button></p> : (
             <RulesList items={ruleItems} total={ruleTotal} page={route.page} setPage={(n) => setRuleFilters({ ...route, page: n })} pageSize={pageSize} onSelect={openRule} />
           )}
         </main>

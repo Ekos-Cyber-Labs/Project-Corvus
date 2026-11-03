@@ -17,14 +17,18 @@ import App, {
   RuleStatusBadge,
   RulesBanner,
   RulesList,
+  backtestCodesText,
   buildRuleHash,
   buildRulesHash,
   buildRulesQuery,
   parseHash,
+  ruleAltersAlertsText,
+  ruleCountLine,
   type IncidentDetail,
   type RuleDetail,
   type RuleListItem,
 } from "./App";
+import { BacktestBars, LifecycleStepper, backtestFigures } from "./visuals";
 
 const IMG = "<img src=x onerror=alert(1)>";
 const SCRIPT = "</scr" + "ipt>";
@@ -157,9 +161,9 @@ describe("RuleDetailView renders untrusted text as text only", () => {
     const code = container.querySelector("pre code");
     expect(code?.textContent).toContain(IMG);
     expect(code?.textContent).toContain(JS_URL);
-    expect(screen.getByText("Copy Sigma text")).toBeTruthy();
+    expect(screen.getByText("Copy")).toBeTruthy();
     expect(screen.getByText("stored")).toBeTruthy();
-    expect(screen.getByText(/backtest/)).toBeTruthy();
+    expect(screen.getAllByText(/backtest/).length).toBeGreaterThan(0);
     const incidentLink = screen.getByRole("link", { name: /Fired/ });
     expect(incidentLink.getAttribute("href")).toBe("#/incidents/4");
   });
@@ -182,7 +186,7 @@ describe("RuleDetailView renders untrusted text as text only", () => {
       findings: [],
     };
     render(<RuleDetailView detail={bare} />);
-    expect(screen.getByText("none recorded")).toBeTruthy();
+    expect(screen.getAllByText("none recorded").length).toBeGreaterThan(0);
     expect(screen.getByText("No accepted backtest recorded.")).toBeTruthy();
     expect(screen.getByText("No transitions recorded.")).toBeTruthy();
     expect(screen.getByText("This rule has not fired in any incident.")).toBeTruthy();
@@ -375,7 +379,7 @@ describe("App rules routing", () => {
     stubRules(calls);
     render(<App />);
     const back = await screen.findByText("Back to rules");
-    const heading = await screen.findByText("Rule three");
+    const heading = await screen.findByRole("heading", { name: "Rule three" });
     expect(back.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
@@ -439,6 +443,107 @@ describe("badge color contrast", () => {
       if (rl < 4.5) failures.push(`${cls} light ${rl.toFixed(2)}`);
     }
     expect(failures).toEqual([]);
+  });
+});
+
+describe("part 2 rules polish", () => {
+  it("count line comes from the loaded items", () => {
+    expect(ruleCountLine([evilItem], 1)).toContain("1 rules: 1 shadow");
+    expect(ruleCountLine([evilItem, { ...evilItem, id: 10, status: "candidate" }], 5)).toContain("(status counts from this page, n=2)");
+    render(<RulesList items={[evilItem]} total={1} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} />);
+    expect(screen.getByText(/1 rules: 1 shadow/)).toBeTruthy();
+  });
+
+  it("list rows carry a status rail and text chips", () => {
+    const { container } = render(<RulesList items={[evilItem]} total={1} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} />);
+    expect(container.querySelector(".rule-rail-shadow")).not.toBeNull();
+    expect(container.querySelector(".badge.rule-shadow")?.textContent).toBe("shadow");
+    expect(container.querySelector(".badge.mode-shadow")?.textContent).toBe("shadow");
+  });
+
+  it("summary card, does-line, stepper and backtest table render from the payload", () => {
+    const { container } = render(<RuleDetailView detail={evilDetail} />);
+    expect(screen.getByText(/What this rule does: shadow — it does not alter alerts/)).toBeTruthy();
+    expect(screen.getByText("Last transition approver")).toBeTruthy();
+    expect(container.querySelector(".lc-current")?.textContent).toContain("shadow");
+    expect(container.querySelector(".backtest-table")?.textContent).toContain("Target events matched");
+    expect(container.querySelector(".backtest-table")?.textContent).toContain("not recorded");
+    expect(container.textContent).toContain("1 (n=1)");
+    expect(screen.getByLabelText(/Target events matched: 1 matches of n=1/)).toBeTruthy();
+    const source = screen.getByRole("link", { name: /Source/ });
+    expect(source.getAttribute("href")).toBe("#/incidents/4");
+    expectInert(container);
+  });
+
+  it("summary grid keeps each fact once, without repeating the header chips", () => {
+    const { container } = render(<RuleDetailView detail={evilDetail} />);
+    const terms = Array.from(container.querySelectorAll(".summary-grid dt")).map((dt) => dt.textContent);
+    expect(terms).not.toContain("Name");
+    expect(terms).not.toContain("Status");
+    expect(terms).not.toContain("Mode");
+    expect(terms).not.toContain("Version");
+    expect(terms).toContain("Native rule id");
+    expect(terms).toContain("Group");
+    expect(terms).toContain("Last transition approver");
+    expect(terms).toContain("Last transition date");
+    expect(terms).toContain("Hits");
+    expect(terms).toContain("False positives");
+    expect(terms).toContain("Source incident id");
+    // The heading and header chips still carry name, status, mode, version.
+    expect(container.querySelector("h2")?.textContent).toBe(evilDetail.title);
+    expect(container.querySelector(".hero-badges")?.textContent).toContain("shadow");
+    expect(container.querySelector(".hero-badges")?.textContent).toContain("v2");
+  });
+
+  it("lineage shows backtest codes as text and never a bare null", () => {
+    const { container } = render(<RuleDetailView detail={evilDetail} />);
+    expect(container.textContent).toContain("accepted");
+    expect(container.textContent).not.toContain('["accepted"]');
+    expect(backtestCodesText({ codes: ["accepted"] })).toBe("accepted");
+    expect(backtestCodesText({ codes: [] })).toBe("no codes recorded");
+    expect(backtestCodesText({})).toBe("no codes recorded");
+    expect(backtestCodesText({ codes: null })).toBe("no codes recorded");
+    expect(backtestCodesText(null)).toBe("none recorded");
+    const noCodes: RuleDetail = {
+      ...evilDetail,
+      lineage: {
+        ...evilDetail.lineage,
+        backtest: { target_matched: ["evt-1"], target_total: 1, baseline_count: 0, group: "corvus_sigma" },
+      },
+    };
+    const { container: bare } = render(<RuleDetailView detail={noCodes} />);
+    expect(screen.getAllByText("no codes recorded").length).toBeGreaterThan(0);
+    expect(bare.textContent).not.toMatch(/\bnull\b/);
+    // The backtest table below still shows its figures.
+    expect(bare.querySelector(".backtest-table")?.textContent).toContain("Target events matched");
+  });
+
+  it("does-line follows mode and status without inventing payload fields", () => {
+    expect(ruleAltersAlertsText({ status: "shadow", mode: "shadow" })).toContain("does not alter alerts");
+    expect(ruleAltersAlertsText({ status: "active", mode: "active" })).toContain("alters alerts");
+    expect(ruleAltersAlertsText({ status: "candidate", mode: null })).toContain("does not alter alerts");
+  });
+
+  it("backtest figures keep the API numbers and name a missing baseline n", () => {
+    expect(backtestFigures({ target_matched: ["a", "b"], target_total: 7, baseline_count: 3 })).toEqual({ matched: 2, targetTotal: 7, baselineCount: 3, baselineTotal: null });
+    const { container } = render(<BacktestBars backtest={{ target_matched: ["a"], target_total: 4, baseline_count: 2 }} />);
+    expect(container.textContent).toContain("1 (n=4)");
+    expect(container.textContent).toContain("2 (n=not recorded)");
+  });
+
+  it("stepper marks the current side state with its transition date", () => {
+    const { container } = render(<LifecycleStepper status="rolled_back" transitions={[{ from: "active", to: "rolled_back", approver: "op", reason: "bad", at: "2026-11-01T00:00:00Z" }]} />);
+    expect(container.querySelector(".lc-current")?.textContent).toContain("rolled_back");
+    expect(container.querySelector(".lc-current")?.textContent).toContain("2026-11-01");
+    expect(screen.getByText(/Current status is rolled_back/)).toBeTruthy();
+  });
+
+  it("carried-over layout guards are in the stylesheet", () => {
+    const css = readFileSync(join(process.cwd(), "src", "styles.css"), "utf-8");
+    expect(css).toContain("table.incidents tr.rowlink");
+    expect(css).toMatch(/\.col-usd[^{]*\{[^}]*white-space:nowrap/);
+    expect(css).toContain("scroll-margin-top:5rem");
+    expect(css).toContain("scroll-margin-top:6.5rem");
   });
 });
 

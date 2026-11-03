@@ -169,6 +169,66 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
   );
 }
 
+export type RuleTransition = { from?: string | null; to?: string | null; approver?: string | null; reason?: string | null; at?: string | null };
+export const LIFECYCLE_MAIN = ["candidate", "shadow", "active"] as const;
+export const LIFECYCLE_SIDE = ["rolled_back", "archived"] as const;
+export function lifecycleDates(transitions: RuleTransition[]): Record<string, string> {
+  const dates: Record<string, string> = {};
+  for (const t of transitions) if (t.to && t.at) dates[t.to] = t.at;
+  return dates;
+}
+export function LifecycleStepper({ status, transitions }: { status: string; transitions: RuleTransition[] }) {
+  const dates = lifecycleDates(transitions);
+  const known = (LIFECYCLE_MAIN as readonly string[]).includes(status) || (LIFECYCLE_SIDE as readonly string[]).includes(status);
+  const step = (s: string, side = false) => (
+    <li key={s} className={`lc-step ${side ? "lc-side" : ""} ${status === s ? "lc-current" : ""}`} aria-current={status === s ? "step" : undefined}>
+      <span className="lc-dot" aria-hidden="true" />
+      <span className="lc-name">{s}</span>
+      <span className="lc-date mono">{dates[s] ?? "no date recorded"}</span>
+      {status === s ? <span className="lc-here">current</span> : null}
+    </li>
+  );
+  return (
+    <div className="lifecycle">
+      <p className="sr-only">Rule lifecycle: candidate, then shadow, then active. Rolled back and archived are side states. Current status is {known ? status : `${status} (unknown)`}{dates[status] ? ` since ${dates[status]}` : ""}.</p>
+      <ol className="lc-main" aria-hidden="true">{LIFECYCLE_MAIN.map((s) => step(s))}</ol>
+      <ul className="lc-sides" aria-hidden="true">{LIFECYCLE_SIDE.map((s) => step(s, true))}</ul>
+      {!known ? <p className="muted">Current status: <span className="mono">{status || "unknown"}</span> (not a known lifecycle state)</p> : null}
+    </div>
+  );
+}
+
+export type BacktestFigures = { matched: number | null; targetTotal: number | null; baselineCount: number | null; baselineTotal: number | null };
+export function backtestFigures(backtest: Record<string, unknown> | null | undefined): BacktestFigures {
+  if (!backtest) return { matched: null, targetTotal: null, baselineCount: null, baselineTotal: null };
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return {
+    matched: Array.isArray(backtest.target_matched) ? backtest.target_matched.length : null,
+    targetTotal: num(backtest.target_total),
+    baselineCount: num(backtest.baseline_count),
+    baselineTotal: num(backtest.baseline_total),
+  };
+}
+export function BacktestBars({ backtest }: { backtest: Record<string, unknown> | null | undefined }) {
+  const f = backtestFigures(backtest);
+  if (f.matched === null && f.baselineCount === null) return null;
+  const max = Math.max(1, f.matched ?? 0, f.baselineCount ?? 0);
+  const row = (label: string, value: number | null, n: number | null) => (
+    <div className="bt-row">
+      <span className="bt-label">{label}</span>
+      <span className="bt-track" role="img" aria-label={`${label}: ${value ?? "not recorded"} matches${n !== null ? ` of n=${n}` : ", n not recorded"}`}><span className="bt-fill grow" style={{ width: `${((value ?? 0) / max) * 100}%` }} /></span>
+      <span className="bt-value num">{value ?? "not recorded"} (n={n !== null ? n : "not recorded"})</span>
+    </div>
+  );
+  return (
+    <div className="backtest-bars">
+      {row("Target events matched", f.matched, f.targetTotal)}
+      {row("Benign baseline matches", f.baselineCount, f.baselineTotal)}
+      <p className="sr-only">Backtest bars: target events matched {f.matched ?? "not recorded"} of {f.targetTotal ?? "not recorded"}; benign baseline matches {f.baselineCount ?? "not recorded"}{f.baselineTotal !== null ? ` of ${f.baselineTotal}` : " (baseline n not recorded in the payload)"}.</p>
+    </div>
+  );
+}
+
 export function KillChainStrip({ counts, selected, onSelect }: { counts: Record<string, number>; selected: string | null; onSelect: (t: string | null) => void }) {
   const max = Math.max(1, ...Object.values(counts));
   return (
