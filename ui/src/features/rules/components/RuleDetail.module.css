@@ -1,1 +1,12 @@
-.detailRoot { min-width:0; }
+.detailRoot { min-width: 0; display: grid; gap: 4px; }
+.nowrap { white-space: nowrap; }
+.shadow { background: var(--tint-warning); color: var(--text); border: 1px solid var(--warning); border-radius: 8px; padding: 12px 16px; font-weight: 600; margin: 12px 0; }
+.bigNums { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; padding: 0; margin: 12px 0; }
+.bigNums li { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 4px; }
+.bigNums strong { font-size: 28px; line-height: 1.1; white-space: nowrap; }
+.bigNums span { color: var(--muted); font-size: 13px; }
+.timeline { list-style: none; padding: 0 0 0 20px; margin: 12px 0; border-left: 2px solid var(--line); display: grid; gap: 16px; }
+.tlItem { position: relative; display: grid; grid-template-columns: 1fr; }
+.dot { position: absolute; left: -27px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg); }
+.tlHead { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tlMeta { margin: 4px 0 0; color: var(--muted); font-size: 13px; }

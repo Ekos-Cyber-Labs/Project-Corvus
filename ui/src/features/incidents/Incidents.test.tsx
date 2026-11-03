@@ -69,24 +69,26 @@ describe("IncidentView renders untrusted text as text only", () => {
 });
 
 describe("parseHash and hash builders", () => {
-  it("parses the empty and root hashes as the default list route", () => {
-    expect(parseHash("")).toEqual({
-      view: "list", page: 0, minFloor: null, verdict: null, analyzed: null,
-    });
-    expect(parseHash("#/")).toEqual({
-      view: "list", page: 0, minFloor: null, verdict: null, analyzed: null,
-    });
+  it("parses the empty and root hashes as the default dashboard route", () => {
+    expect(parseHash("")).toEqual({ view: "unknown" });
+    expect(parseHash("#/")).toEqual({ view: "unknown" });
   });
 
   it("parses list filters from the hash", () => {
-    expect(parseHash("#/?page=2&verdict=true_positive&min_floor=4&analyzed=true")).toEqual({
-      view: "list", page: 2, minFloor: 4, verdict: "true_positive", analyzed: true,
+    expect(parseHash("#/incidents?page=2&verdict=true_positive&min_floor=4&analyzed=true")).toEqual({
+      view: "list", page: 2, minFloor: 4, verdict: "true_positive", analyzed: true, q: null, quarantined: null,
+    });
+  });
+
+  it("parses the search and quarantined flags", () => {
+    expect(parseHash("#/incidents?q=host-1&quarantined=true")).toEqual({
+      view: "list", page: 0, minFloor: null, verdict: null, analyzed: null, q: "host-1", quarantined: true,
     });
   });
 
   it("sanitizes invalid list values to defaults", () => {
-    expect(parseHash("#/?page=abc&verdict=bogus&min_floor=9&analyzed=maybe")).toEqual({
-      view: "list", page: 0, minFloor: null, verdict: null, analyzed: null,
+    expect(parseHash("#/incidents?page=abc&verdict=bogus&min_floor=9&analyzed=maybe")).toEqual({
+      view: "list", page: 0, minFloor: null, verdict: null, analyzed: null, q: null, quarantined: null,
     });
   });
 
@@ -99,9 +101,9 @@ describe("parseHash and hash builders", () => {
   });
 
   it("round-trips the list hash", () => {
-    const filters = { page: 3, minFloor: 4, verdict: "needs_human", analyzed: false as const };
+    const filters = { page: 3, minFloor: 4, verdict: "needs_human", analyzed: false as const, q: null, quarantined: null };
     expect(parseHash(buildListHash(filters))).toEqual({ view: "list", ...filters });
-    expect(buildListHash({ page: 0, minFloor: null, verdict: null, analyzed: null })).toBe("#/");
+    expect(buildListHash({ page: 0, minFloor: null, verdict: null, analyzed: null, q: null, quarantined: null })).toBe("#/incidents");
   });
 });
 
@@ -201,7 +203,7 @@ describe("App routing and filters", () => {
 
   it("deep link opens the incident and Back returns to the list", async () => {
     const calls: string[] = [];
-    window.location.hash = "#/";
+    window.location.hash = "#/incidents";
     stubApp(calls);
     render(<App />);
     await screen.findByText("Incident three");
@@ -251,7 +253,7 @@ describe("App routing and filters", () => {
 
   it("filter bar calls the API with the right params", async () => {
     const calls: string[] = [];
-    window.location.hash = "#/";
+    window.location.hash = "#/incidents";
     stubApp(calls);
     render(<App />);
     await screen.findByText("Incident three");

@@ -1,1 +1,10 @@
-.listRoot { min-width:0; }
+.cardsRoot { min-width: 0; }
+.listRoot { min-width: 0; }
+.list { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 8px; }
+.card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.selected { border-left: 3px solid var(--accent); }
+.anchor { display: grid; gap: 2px; padding: 10px 12px; text-decoration: none; color: inherit; border-radius: 8px; }
+.id { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.name { font-weight: 600; }
+.meta { margin: 2px 0; }
+.sub { font-size: 12px; color: var(--muted); }

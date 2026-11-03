@@ -134,15 +134,24 @@ describe("RulesList renders untrusted text as text only", () => {
     expect(screen.getByText("No learned rules found.")).toBeTruthy();
   });
 
-  it("rows are keyboard-focusable and open on Enter or Space", () => {
+  it("cards carry a status chip, a from-incident line and a 3px selected border", () => {
+    const { container } = render(
+      <RulesList items={[evilItem]} total={1} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} selectedId={9} />,
+    );
+    expect(container.querySelector(".badge.rule-shadow")?.textContent).toBe("shadow");
+    expect(container.textContent).toContain("From incident 4 · T1059");
+    expect(container.querySelector('[aria-current="true"]')).not.toBeNull();
+  });
+
+  it("cards open on click or Space", () => {
     const seen: number[] = [];
     const { container } = render(
       <RulesList items={[evilItem]} total={1} page={0} setPage={() => undefined} pageSize={20} onSelect={(id) => seen.push(id)} />,
     );
-    const row = container.querySelector("tr.rowlink");
-    expect(row?.getAttribute("tabindex")).toBe("0");
-    fireEvent.keyDown(row!, { key: "Enter" });
-    fireEvent.keyDown(row!, { key: " " });
+    const card = container.querySelector("a");
+    expect(card?.getAttribute("href")).toBe("#/rules/9");
+    fireEvent.click(card!);
+    fireEvent.keyDown(card!, { key: " " });
     expect(seen).toEqual([9, 9]);
   });
 });
@@ -333,8 +342,9 @@ describe("App rules routing", () => {
     window.dispatchEvent(new Event("hashchange"));
     await screen.findByText("Rule three");
     expect(screen.getByText(/no model weights are updated/)).toBeTruthy();
-    const row = screen.getByText("Rule three").closest("tr");
-    fireEvent.click(row!);
+    const card = screen.getByText("Rule three").closest("a");
+    expect(card?.getAttribute("href")).toBe("#/rules/3");
+    fireEvent.click(card!);
     window.dispatchEvent(new Event("hashchange"));
     expect(window.location.hash).toBe("#/rules/3");
     await screen.findByText("Sigma rule (text only)");
@@ -448,18 +458,19 @@ describe("part 2 rules polish", () => {
     expect(screen.getByText(/1 rules: 1 shadow/)).toBeTruthy();
   });
 
-  it("list rows carry a status rail and text chips", () => {
+  it("list cards carry an id, a status chip and a from-incident line", () => {
     const { container } = render(<RulesList items={[evilItem]} total={1} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} />);
-    expect(container.querySelector(".rule-rail-shadow")).not.toBeNull();
     expect(container.querySelector(".badge.rule-shadow")?.textContent).toBe("shadow");
-    expect(container.querySelector(".badge.mode-shadow")?.textContent).toBe("shadow");
+    expect(container.textContent).toContain("From incident 4 · T1059");
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("#/rules/9");
   });
 
-  it("summary card, does-line, stepper and backtest table render from the payload", () => {
+  it("summary card, does-line, lifecycle history and backtest table render from the payload", () => {
     const { container } = render(<RuleDetailView detail={evilDetail} />);
     expect(screen.getByText(/What this rule does: shadow — it does not alter alerts/)).toBeTruthy();
     expect(screen.getByText("Last transition approver")).toBeTruthy();
-    expect(container.querySelector(".lc-current")?.textContent).toContain("shadow");
+    expect(screen.getByText("Lifecycle history")).toBeTruthy();
+    expect(container.textContent).toContain("shadow");
     expect(container.querySelector(".backtest-table")?.textContent).toContain("Target events matched");
     expect(container.querySelector(".backtest-table")?.textContent).toContain("not recorded");
     expect(container.textContent).toContain("1 (n=1)");
@@ -469,9 +480,9 @@ describe("part 2 rules polish", () => {
     expectInert(container);
   });
 
-  it("summary grid keeps each fact once, without repeating the header chips", () => {
+  it("lineage grid keeps each fact once, without repeating the header chips", () => {
     const { container } = render(<RuleDetailView detail={evilDetail} />);
-    const terms = Array.from(container.querySelectorAll(".summary-grid dt")).map((dt) => dt.textContent);
+    const terms = Array.from(container.querySelectorAll(".lineage-grid dt")).map((dt) => dt.textContent);
     expect(terms).not.toContain("Name");
     expect(terms).not.toContain("Status");
     expect(terms).not.toContain("Mode");

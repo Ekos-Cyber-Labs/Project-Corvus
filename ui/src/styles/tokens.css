@@ -1,12 +1,18 @@
 :root, [data-theme="dark"] {
   --ground:#0d1117; --sidebar:#10161d; --surface:#151c25; --raised:#1a2630; --border:#222b36;
-  --text:#e6edf3; --muted:#8b98a6; --accent:#4cc9bd; --accent-ink:#0d1117;
+  --text:#e6edf3; --muted:#8b98a6; --accent:#4cc9bd; --accent-dim:#3d9488; --accent-ink:#0d1117;
   --critical:#ff6b6b; --high:#ff9f43; --medium:#f2c94c; --low:#5aa9e6;
   --success:#4cc9bd; --warning:#f2b84b; --danger:#ff6b6b;
   --bg:#0d1117; --panel:#151c25; --panel2:#1a2630; --line:#222b36;
   --accent2:#4cc9bd; --ok:#4cc9bd;
   --sev1:#a8b8c8; --sev2:#5aa9e6; --sev3:#f2c94c; --sev4:#ff9f43; --sev5:#ff6b6b; --sev6:#ff6b9a;
   --sev-ink:#0d1117; --chart-ink:#0d1117;
+  --nav-active:#1a2a2d; --row-selected:#1a2a2d; --tint-accent:#1a2d2a; --tint-danger:#3a2226; --tint-warning:#3a2f1a; --tint-low:#1e2f42;
+  --ink-on-fill:#ffffff; --neutral:#7d8894; --glow-sev6:rgba(255,107,154,.35); --glow-sev6-strong:rgba(255,107,154,.45);
+  --tactic-reconnaissance:#7a8a99; --tactic-resource-development:#7a8a99; --tactic-initial-access:#bd7f27; --tactic-execution:#b8862e;
+  --tactic-persistence:#b07a2a; --tactic-privilege-escalation:#c05a3a; --tactic-stealth:#9a6a9a; --tactic-defense-impairment:#9a6a9a;
+  --tactic-credential-access:#c05a3a; --tactic-discovery:#5a8a7a; --tactic-lateral-movement:#4a7ab5; --tactic-collection:#5a8ab5;
+  --tactic-command-and-control:#4a7aa5; --tactic-exfiltration:#9c5f7d; --tactic-impact:#c04545; --tactic-other:#7a8a99;
   --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px; --space-7:48px;
   --radius:12px; --radius-sm:8px;
   --text-sm:.85rem; --text-base:1rem; --text-lg:1.15rem; --text-xl:1.6rem;
@@ -18,13 +24,19 @@
 }
 [data-theme="light"] {
   --ground:#f2f4f7; --sidebar:#e8edf2; --surface:#ffffff; --raised:#eef1f5; --border:#d3dae2;
-  --text:#16202a; --muted:#4a5a6a; --accent:#0f6b60; --accent-ink:#ffffff;
+  --text:#16202a; --muted:#4a5a6a; --accent:#0f6b60; --accent-dim:#4f8a80; --accent-ink:#ffffff;
   --critical:#9e2b25; --high:#8a3f00; --medium:#7a5c00; --low:#1a5a8a;
   --success:#1e6b2e; --warning:#7a5c00; --danger:#9e2b25;
   --bg:#f2f4f7; --panel:#ffffff; --panel2:#eef1f5; --line:#d3dae2;
   --accent2:#0f6b60; --ok:#1e6b2e;
   --sev1:#475569; --sev2:#1e7a4c; --sev3:#7a5c00; --sev4:#8a3f00; --sev5:#9e2b25; --sev6:#8a1040;
   --sev-ink:#ffffff; --chart-ink:#ffffff;
+  --nav-active:#d3ebe7; --row-selected:#d9e8e5; --tint-accent:#d9ece9; --tint-danger:#f3d9d7; --tint-warning:#f0e3bb; --tint-low:#d6e6f5;
+  --ink-on-fill:#ffffff; --neutral:#7d8894; --glow-sev6:rgba(138,16,64,.35); --glow-sev6-strong:rgba(138,16,64,.45);
+  --tactic-reconnaissance:#7a8a99; --tactic-resource-development:#7a8a99; --tactic-initial-access:#bd7f27; --tactic-execution:#b8862e;
+  --tactic-persistence:#b07a2a; --tactic-privilege-escalation:#c05a3a; --tactic-stealth:#9a6a9a; --tactic-defense-impairment:#9a6a9a;
+  --tactic-credential-access:#c05a3a; --tactic-discovery:#5a8a7a; --tactic-lateral-movement:#4a7ab5; --tactic-collection:#5a8ab5;
+  --tactic-command-and-control:#4a7aa5; --tactic-exfiltration:#9c5f7d; --tactic-impact:#c04545; --tactic-other:#7a8a99;
   --shadow:0 1px 2px rgba(28,35,32,.08), 0 6px 18px rgba(28,35,32,.08);
   --inner:inset 0 0 0 transparent;
   color-scheme:light;

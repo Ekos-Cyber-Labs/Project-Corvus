@@ -1,0 +1,13 @@
+.page { display: grid; gap: 16px; }
+.actions { margin: 0; }
+.row2 { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; align-items: stretch; }
+.row2 > * { height: 100%; }
+.row2 > :global(.panel) { margin: 0; height: 100%; box-sizing: border-box; }
+.row3 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: stretch; }
+.row3 > * { height: 100%; }
+.row3 > :global(.panel) { margin: 0; height: 100%; box-sizing: border-box; }
+.loading { display: grid; gap: 16px; }
+.row1 { display: grid; }
+@media (max-width: 900px) {
+  .row2, .row3 { grid-template-columns: 1fr; }
+}

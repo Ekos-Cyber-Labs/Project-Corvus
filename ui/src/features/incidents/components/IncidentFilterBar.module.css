@@ -1,0 +1,6 @@
+.wrap { display: grid; gap: 12px; margin: 12px 0; }
+.searchRow { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; min-height: 44px; max-width: 560px; }
+.searchRow input { flex: 1; min-height: 44px; background: transparent; border: 0; color: var(--text); font: inherit; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips button { min-height: 44px; border-radius: 999px; }
+.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }

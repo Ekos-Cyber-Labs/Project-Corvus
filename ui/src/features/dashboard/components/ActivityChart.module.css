@@ -1,0 +1,11 @@
+.svg { width: 100%; height: auto; display: block; }
+.older { fill: var(--accent-dim); }
+.recent { fill: var(--accent); }
+.marker { stroke: var(--warning); stroke-width: 1.5; }
+.axis { stroke: var(--border); stroke-width: 1; }
+.tick { fill: var(--muted); font-size: 10px; }
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+.swRecent, .swOlder, .swSweep { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
+.swRecent { background: var(--accent); }
+.swOlder { background: var(--accent-dim); }
+.swSweep { background: transparent; border: 2px dashed var(--warning); width: 8px; }

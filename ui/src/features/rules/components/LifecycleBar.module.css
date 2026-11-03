@@ -1,0 +1,5 @@
+.stages { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 0; margin: 0; align-items: center; }
+.stages li { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.hot { color: var(--text); }
+.hot span:first-child { background: var(--tint-accent); color: var(--text); border-radius: 6px; padding: 2px 8px; }
+.side { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; background: var(--panel2); }

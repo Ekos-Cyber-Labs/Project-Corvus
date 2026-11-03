@@ -1,1 +1,10 @@
-.shellRoot { display:flex; min-height:100vh; }
+.shellRoot { display: flex; min-height: 100vh; }
+.sidebar { width: 232px; flex: none; background: var(--sidebar); color: var(--text); border-right: 1px solid var(--border); padding: 20px 16px; position: sticky; top: 0; height: 100vh; }
+.main { flex: 1; min-width: 0; }
+.content { padding: 28px 36px; max-width: 1320px; margin: 0 auto; }
+.content h1 { font-size: 26px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.02em; }
+@media (max-width: 900px) {
+  .shellRoot { flex-direction: column; }
+  .sidebar { width: auto; height: auto; position: static; border-right: 0; border-bottom: 1px solid var(--border); }
+  .content { padding: 20px 16px; }
+}

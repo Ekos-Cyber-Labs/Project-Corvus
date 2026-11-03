@@ -1,1 +1,12 @@
-.sidebarRoot { display:flex; flex-direction:column; gap:var(--space-4); }
+.sidebarRoot { display: flex; flex-direction: column; gap: 20px; height: 100%; }
+.brand { display: flex; gap: 12px; align-items: center; color: var(--accent); }
+.word { margin: 0; font-size: 17px; font-weight: 700; color: var(--text); line-height: 1.1; }
+.caption { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.2; }
+.nav { display: flex; flex-direction: column; gap: 4px; }
+.nav a { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: var(--text); font-weight: 400; }
+.nav a[aria-current="page"] { background: var(--nav-active); color: var(--accent); font-weight: 600; }
+.pill { margin-left: auto; background: var(--tint-danger); color: var(--danger); border: 1px solid var(--danger); border-radius: 999px; padding: 0 8px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.sweepBox { margin-top: auto; border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: grid; gap: 4px; }
+.sweepRow { margin: 0; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.sweepDot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+.sweepNext { margin: 0; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }

@@ -24,10 +24,10 @@ export function eventTactic(uid: string, evidence: { event_uid: string; event?: 
 }
 
 export const TACTIC_FILL: Record<string, string> = {
-  reconnaissance: "#7a8a99", "resource-development": "#7a8a99", "initial-access": "#bd7f27", execution: "#b8862e",
-  persistence: "#b07a2a", "privilege-escalation": "#c05a3a", stealth: "#9a6a9a", "defense-impairment": "#9a6a9a",
-  "credential-access": "#c05a3a", discovery: "#5a8a7a", "lateral-movement": "#4a7ab5", collection: "#5a8ab5",
-  "command-and-control": "#4a7aa5", exfiltration: "#9c5f7d", impact: "#c04545", other: "#7d8894",
+  reconnaissance: "var(--tactic-reconnaissance)", "resource-development": "var(--tactic-resource-development)", "initial-access": "var(--tactic-initial-access)", execution: "var(--tactic-execution)",
+  persistence: "var(--tactic-persistence)", "privilege-escalation": "var(--tactic-privilege-escalation)", stealth: "var(--tactic-stealth)", "defense-impairment": "var(--tactic-defense-impairment)",
+  "credential-access": "var(--tactic-credential-access)", discovery: "var(--tactic-discovery)", "lateral-movement": "var(--tactic-lateral-movement)", collection: "var(--tactic-collection)",
+  "command-and-control": "var(--tactic-command-and-control)", exfiltration: "var(--tactic-exfiltration)", impact: "var(--tactic-impact)", other: "var(--tactic-other)",
 };
 
 function fmtTick(ms: number): string {
@@ -92,11 +92,11 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
                   onFocus={() => onHighlight(first)} onBlur={() => onHighlight(null)}
                   onClick={() => onJump?.(first)}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); onJump?.(first); } }}>
-                  <circle cx={cluster.x} cy="30" r="10" fill={TACTIC_FILL[tac] ?? TACTIC_FILL.other} stroke={highlighted !== null && cluster.indices.includes(highlighted) ? "currentColor" : "none"} strokeWidth="2" />
+                  <circle cx={cluster.x} cy="30" r="10" style={{ fill: TACTIC_FILL[tac] ?? TACTIC_FILL.other }} stroke={highlighted !== null && cluster.indices.includes(highlighted) ? "currentColor" : "none"} strokeWidth="2" />
                   <text x={cluster.x} y="34" textAnchor="middle" className="svg-count">{cluster.indices.length}</text>
                 </g>
               ) : (
-                <circle cx={cluster.x} cy="30" r={highlighted === first ? 7 : 5} fill={TACTIC_FILL[tac] ?? TACTIC_FILL.other} stroke={highlighted === first ? "currentColor" : "none"} strokeWidth="2"
+                <circle cx={cluster.x} cy="30" r={highlighted === first ? 7 : 5} style={{ fill: TACTIC_FILL[tac] ?? TACTIC_FILL.other }} stroke={highlighted === first ? "currentColor" : "none"} strokeWidth="2"
                   tabIndex={0} role="button" aria-label={`Claim ${first + 1}: ${e.description} at ${e.time}, event ${e.event_uid}${tac !== "other" ? `, tactic ${TACTIC_NAMES[tac] ?? tac}` : ", neutral: no technique tied"}`}
                   onMouseEnter={() => onHighlight(first)} onMouseLeave={() => onHighlight(null)}
                   onFocus={() => onHighlight(first)} onBlur={() => onHighlight(null)} />

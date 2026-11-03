@@ -1,0 +1,9 @@
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--high); margin-right: 6px; }
+.table { table-layout: auto; }
+.id { white-space: nowrap; }
+.title { width: 100%; }
+.sev { white-space: nowrap; }
+.sevCell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sevCell .sev-dot { margin-right: 0; vertical-align: middle; }
+.verdict { white-space: nowrap; }
+.time { white-space: nowrap; }

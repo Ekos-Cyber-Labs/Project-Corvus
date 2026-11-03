@@ -1,23 +1,78 @@
-import { LayoutDashboard, ScrollText, Settings, Shield } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
+import { LayoutDashboard, ScrollText, Settings, Shield } from "lucide-react";
+import { getJson } from "../../api/client";
 import sidebarStyles from "./Sidebar.module.css";
-export function Sidebar({ theme, onToggleTheme }: { theme: string; onToggleTheme: () => void }) {
+function usePendingHighCritical(): number | null {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    getJson<{ total: number }>("/api/incidents?min_floor=4&analyzed=false&limit=1", controller.signal)
+      .then((d) => { if (!controller.signal.aborted) setCount(d.total); })
+      .catch(() => { if (!controller.signal.aborted) setCount(null); });
+    return () => controller.abort();
+  }, []);
+  return count;
+}
+function useSweepCountdown(): { label: string; seconds: number | null } {
+  const [nextAt, setNextAt] = useState<string | null>(null);
+  const [running, setRunning] = useState<boolean | null>(null);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    getJson<{ running: boolean; next_run_at: string | null; last: { status: string } | null }>("/api/sweep/status", controller.signal)
+      .then((d) => {
+        if (controller.signal.aborted) return;
+        setRunning(d.running === true || d.last?.status === "running");
+        setNextAt(d.next_run_at);
+      })
+      .catch(() => { if (!controller.signal.aborted) { setRunning(null); setNextAt(null); } });
+    return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    if (nextAt === null) return;
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [nextAt]);
+  if (running === null && nextAt === null) return { label: "Sweep not detected", seconds: null };
+  const label = running ? "Sweep running" : nextAt ? "Sweep paused" : "Sweep not detected";
+  if (!nextAt) return { label, seconds: null };
+  const ms = Date.parse(nextAt) - Date.now();
+  const seconds = ms > 0 ? Math.floor(ms / 1000) : 0;
+  return { label, seconds };
+}
+export function Sidebar() {
   const location = useLocation();
   const path = location.pathname;
-  const isDashboard = path === "/dashboard";
-  const isIncidents = path === "/" || path === "/incidents" || path.startsWith("/incidents/");
+  const isDashboard = path === "/dashboard" || path === "/";
+  const isIncidents = path === "/incidents" || path.startsWith("/incidents/");
   const isRules = path === "/rules" || path.startsWith("/rules/");
   const isSettings = path === "/settings";
+  const pendingHigh = usePendingHighCritical();
+  const sweep = useSweepCountdown();
+  const nextText = sweep.seconds === null ? "—" : `${Math.floor(sweep.seconds / 60)}:${String(sweep.seconds % 60).padStart(2, "0")}`;
   return (
     <div className={sidebarStyles.sidebarRoot}>
-      <div className="sidebar-brand"><Shield size={22} /><div><h1>Corvus</h1><p className="muted tagline">Every claim is verifiable: severity, timeline, trace, and cost cite stored evidence.</p></div></div>
-      <nav aria-label="Sections" className="sidebar-nav">
+      <div className={sidebarStyles.brand}>
+        <svg width="26" height="26" viewBox="0 0 26 26" role="img" aria-label="Corvus bird mark">
+          <path d="M3 15 C6 9 11 5 19 4 C15 8 13 10 12 12 L21 12 L14 16 L18 21 L11 17 C8 18 5 17 3 15 Z" fill="currentColor" />
+          <circle cx="15.5" cy="8.5" r="1.3" style={{ fill: "var(--sidebar)" }} />
+        </svg>
+        <div>
+          <p className={sidebarStyles.word}>Corvus</p>
+          <p className={sidebarStyles.caption}>SOC analyst</p>
+        </div>
+      </div>
+      <nav aria-label="Sections" className={sidebarStyles.nav}>
         <Link to="/dashboard" aria-current={isDashboard ? "page" : undefined}><LayoutDashboard size={18} /> Dashboard</Link>
-        <Link to="/incidents" aria-current={isIncidents ? "page" : undefined}><Shield size={18} /> Incidents</Link>
+        <Link to="/incidents" aria-current={isIncidents ? "page" : undefined}><Shield size={18} /> Incidents{typeof pendingHigh === "number" && pendingHigh > 0 ? <span className={sidebarStyles.pill}>{pendingHigh}</span> : null}</Link>
         <Link to="/rules" aria-current={isRules ? "page" : undefined}><ScrollText size={18} /> Rules</Link>
         <Link to="/settings" aria-current={isSettings ? "page" : undefined}><Settings size={18} /> Settings</Link>
       </nav>
-      <button type="button" aria-label="Toggle color theme" onClick={onToggleTheme}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>
+      <div className={sidebarStyles.sweepBox} aria-live="polite">
+        <p className={sidebarStyles.sweepRow}><span className={sidebarStyles.sweepDot} aria-hidden="true" />{sweep.label}</p>
+        <p className={sidebarStyles.sweepNext}>Next in {nextText}</p>
+      </div>
     </div>
   );
 }

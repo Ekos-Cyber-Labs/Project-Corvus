@@ -1,0 +1,14 @@
+.card { height: 100%; display: flex; flex-direction: column; }
+.body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 16px; }
+.rows { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 10px; }
+.rows li { display: grid; grid-template-columns: 72px 1fr auto; gap: 12px; align-items: center; }
+.name { font-size: 13px; white-space: nowrap; }
+.track { display: block; height: 14px; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.fill { display: block; height: 100%; }
+.critical { background: var(--critical); }
+.high { background: var(--high); }
+.medium { background: var(--medium); }
+.low { background: var(--low); }
+.count { min-width: 3ch; text-align: right; white-space: nowrap; }
+.split { list-style: none; padding: 8px 0 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.split li { display: inline-flex; gap: 6px; align-items: baseline; white-space: nowrap; }

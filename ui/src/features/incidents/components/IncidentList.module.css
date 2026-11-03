@@ -1,1 +1,3 @@
-.listRoot { min-width:0; }
+.listRoot { min-width: 0; }
+.second { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.events { text-align: right; }

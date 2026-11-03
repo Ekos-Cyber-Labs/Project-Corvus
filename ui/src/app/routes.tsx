@@ -3,7 +3,8 @@ import { IncidentsPage } from "../features/incidents/pages/IncidentsPage";
 import { IncidentDetailPage } from "../features/incidents/pages/IncidentDetailPage";
 import { RulesPage } from "../features/rules/pages/RulesPage";
 import { RuleDetailPage } from "../features/rules/pages/RuleDetailPage";
-import { EmptyState } from "../components/ui/EmptyState";
+import { DashboardPage } from "../features/dashboard/pages/DashboardPage";
+import { SettingsPage } from "../features/settings/pages/SettingsPage";
 export function NotFoundPage() {
   const lastListHash = (() => { try { return sessionStorage.getItem("corvus-last-list-hash") || "#/"; } catch { return "#/"; } })();
   return (
@@ -16,13 +17,13 @@ export function NotFoundPage() {
 export function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<IncidentsPage />} />
+      <Route path="/" element={<DashboardPage />} />
+      <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/incidents" element={<IncidentsPage />} />
       <Route path="/incidents/:id" element={<IncidentDetailPage />} />
       <Route path="/rules" element={<RulesPage />} />
       <Route path="/rules/:id" element={<RuleDetailPage />} />
-      <Route path="/dashboard" element={<main><EmptyState title="Dashboard" message="Coming next" /></main>} />
-      <Route path="/settings" element={<main><EmptyState title="Settings" message="Coming next" /></main>} />
+      <Route path="/settings" element={<SettingsPage />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

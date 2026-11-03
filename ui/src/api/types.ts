@@ -53,3 +53,39 @@ export type Health = {
   models?: { glimmer?: { reachable?: boolean; detail?: string }; meta?: { reachable?: boolean; detail?: string } } | null;
   self_observation?: Record<string, unknown>;
 };
+export type DashboardTotals = {
+  incidents: number; by_severity: Record<string, number>; by_verdict: Record<string, number>;
+  pending: number; analyzed: number; failed: number; quarantined: number; with_injection: number;
+};
+export type DashboardActivity = { hour: string; incidents: number };
+export type DashboardSweepMarker = {
+  id: number; started_at: string | null; finished_at: string | null; status: string;
+  analyzed: number; failed_analyses: number; skipped_policy: number; skipped_budget: number;
+};
+export type DashboardRecent = {
+  id: number; title: string; final_severity: number; verdict_kind: string; analyzed_at: string | null;
+};
+export type Dashboard = {
+  totals: DashboardTotals; spend: { total_usd: number | null; cap_usd: number | null };
+  activity: DashboardActivity[]; activity_bucket?: string;
+  window: { start: string | null; end: string | null; anchored_to: string | null };
+  sweep_runs: DashboardSweepMarker[]; recent: DashboardRecent[];
+};
+export type SweepLast = {
+  id: number; poll_cycle_id: number | null; started_at: string | null; finished_at: string | null;
+  status: string; error_code: string; analyzed: number; failed_analyses: number;
+  skipped_policy: number; skipped_budget: number; new_alerts: number | null;
+  new_incidents: number | null; poll_status: string | null; interval_seconds: number;
+};
+export type SweepStatus = {
+  last: SweepLast | null; running: boolean; next_run_at: string | null; policy: Record<string, unknown> | null;
+};
+export type SweepPolicyDict = {
+  min_floor: number; max_analyses: number; always_analyze_injection: boolean;
+  spend_cap_usd: number; lang: string; interval_seconds: number;
+};
+export type SettingsView = {
+  sweep_policy: { source: string; policy: SweepPolicyDict | null; error?: string };
+  connections: { name: string; address: string | null; state: string }[];
+  spend_cap_usd: number | null; app_version: string; attack_version: string; ocsf_version: string;
+};
