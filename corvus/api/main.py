@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -951,6 +951,391 @@ def get_rule(rule_id: int) -> Any:
         },
         "transitions": history,
         "findings": findings,
+    }
+
+
+#: Verdicts that count as real verdicts (mirrors ``verdictKind`` in
+#: ``ui/src/App.tsx``): anything else is triaged/failed/quarantined/pending.
+_REAL_VERDICTS = frozenset(
+    {"true_positive", "benign_authorized", "false_positive", "needs_human"}
+)
+
+#: Final severity (1..6) mapped to the four UI levels; 1 is counted
+#: separately as informational.
+_UI_LEVELS = {
+    1: "informational",
+    2: "low",
+    3: "medium",
+    4: "high",
+    5: "critical",
+    6: "critical",
+}
+
+
+def _verdict_kind(verdict: Any, ai_status: str, quarantined: bool) -> str:
+    """Mirror the UI ``verdictKind``: failed and quarantined are not verdicts."""
+    if isinstance(verdict, str) and verdict in _REAL_VERDICTS:
+        return "verdict"
+    if quarantined:
+        return "quarantined"
+    if ai_status == "failed":
+        return "failed"
+    if ai_status == "done":
+        return "triaged"
+    return "pending"
+
+
+def _redacted_address(url: str | None) -> str | None:
+    """Return ``scheme://host[:port]`` only, never userinfo/path/query/key."""
+    if not url:
+        return None
+    try:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(url)
+        if not parts.hostname:
+            return None
+        host = parts.hostname.lower()
+        port = f":{parts.port}" if parts.port else ""
+        scheme = (parts.scheme or "https").lower()
+        return f"{scheme}://{host}{port}"
+    except Exception:
+        return None
+
+
+def _connection_state(url: str | None, reachable: bool) -> str:
+    if not url:
+        return "not_configured"
+    return "connected" if reachable else "unreachable"
+
+
+def _sweep_tables_exist(cur: Any) -> bool:
+    try:
+        cur.execute("SELECT to_regclass('public.sweep_runs')")
+        row = cur.fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
+
+
+@app.get("/api/dashboard")
+def get_dashboard() -> Any:
+    """Totals, 24 hourly buckets (by ``first_seen``), sweep markers, recent."""
+    url = _database_url()
+    if not url:
+        return JSONResponse(status_code=503, content={"detail": "database unavailable"})
+    try:
+        with psycopg.connect(url, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                scope = "WHERE correlation_key NOT LIKE 'adv-llm:%%'"
+                cur.execute(f"SELECT COUNT(*) FROM incidents {scope}")
+                total_row = cur.fetchone()
+                total = int(total_row[0]) if total_row else 0
+                cur.execute(
+                    "SELECT severity_id, COUNT(*) FROM incidents"
+                    f" {scope} GROUP BY severity_id"
+                )
+                by_level = {
+                    "informational": 0,
+                    "low": 0,
+                    "medium": 0,
+                    "high": 0,
+                    "critical": 0,
+                }
+                for row in cur.fetchall():
+                    by_level[_UI_LEVELS.get(int(row[0]), "informational")] += int(
+                        row[1]
+                    )
+                cur.execute(
+                    f"SELECT verdict, COUNT(*) FROM incidents {scope} GROUP BY verdict"
+                )
+                by_verdict: dict[str, int] = {}
+                for row in cur.fetchall():
+                    key = str(row[0]) if row[0] is not None else "none"
+                    by_verdict[key] = int(row[1])
+                cur.execute(
+                    f"SELECT COUNT(*) FROM incidents {scope} AND ai_status = 'pending'"
+                )
+                pending_row = cur.fetchone()
+                pending = int(pending_row[0]) if pending_row else 0
+                cur.execute(
+                    f"SELECT COUNT(*) FROM incidents {scope} AND ai_status = 'failed'"
+                )
+                failed_row = cur.fetchone()
+                failed = int(failed_row[0]) if failed_row else 0
+                cur.execute(
+                    "SELECT COUNT(*) FROM incidents i"
+                    f" {scope} AND EXISTS(SELECT 1 FROM incident_analyses a"
+                    " WHERE a.incident_id = i.id AND a.stage = 'analysis')"
+                )
+                analyzed_row = cur.fetchone()
+                analyzed = int(analyzed_row[0]) if analyzed_row else 0
+                cur.execute(
+                    "SELECT COUNT(*) FROM incidents i"
+                    f" {scope} AND EXISTS(SELECT 1 FROM llm_attempts t"
+                    " WHERE t.incident_id = i.id AND t.purpose = 'triage'"
+                    " AND t.outcome LIKE '%quarantin%')"
+                )
+                quarantined_row = cur.fetchone()
+                quarantined = int(quarantined_row[0]) if quarantined_row else 0
+                cur.execute(
+                    "SELECT COUNT(*) FROM incidents i"
+                    f" {scope} AND EXISTS(SELECT 1 FROM incident_signals s"
+                    " WHERE s.incident_id = i.id AND s.kind = 'injection')"
+                )
+                injection_row = cur.fetchone()
+                with_injection = int(injection_row[0]) if injection_row else 0
+                cur.execute("SELECT COALESCE(SUM(usd), 0) FROM spend")
+                spend_row = cur.fetchone()
+                spend_total = float(spend_row[0]) if spend_row else 0.0
+                try:
+                    from corvus.llm.spend import get_spend_cap
+
+                    cap: Any = get_spend_cap()
+                except Exception:
+                    cap = None
+                cur.execute(
+                    "SELECT date_trunc('hour', first_seen), COUNT(*)"
+                    " FROM incidents"
+                    f" {scope} AND first_seen >= NOW() - INTERVAL '24 hours'"
+                    " GROUP BY 1"
+                )
+                bucket_counts: dict[str, int] = {}
+                for r in cur.fetchall():
+                    moment = r[0]
+                    if isinstance(moment, datetime):
+                        if moment.tzinfo is None:
+                            moment = moment.replace(tzinfo=UTC)
+                        bucket_counts[
+                            moment.astimezone(UTC).strftime("%Y-%m-%dT%H:00:00Z")
+                        ] = int(r[1])
+                cur.execute("SELECT NOW()")
+                now_row = cur.fetchone()
+                now = now_row[0] if now_row else datetime.now(UTC)
+                if now.tzinfo is None:
+                    now = now.replace(tzinfo=UTC)
+                base = now.replace(minute=0, second=0, microsecond=0)
+                activity = []
+                for back in range(23, -1, -1):
+                    hour = base - timedelta(hours=back)
+                    key = hour.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    activity.append(
+                        {"hour": key, "incidents": bucket_counts.get(key, 0)}
+                    )
+                markers: list[dict[str, Any]] = []
+                if _sweep_tables_exist(cur):
+                    cur.execute(
+                        "SELECT id, started_at, finished_at, status, analyzed,"
+                        " failed_analyses, skipped_policy, skipped_budget"
+                        " FROM sweep_runs"
+                        " WHERE started_at >= NOW() - INTERVAL '24 hours'"
+                        " ORDER BY started_at ASC"
+                    )
+                    markers = [
+                        {
+                            "id": int(r[0]),
+                            "started_at": _iso(r[1]),
+                            "finished_at": _iso(r[2]),
+                            "status": str(r[3]),
+                            "analyzed": int(r[4] or 0),
+                            "failed_analyses": int(r[5] or 0),
+                            "skipped_policy": int(r[6] or 0),
+                            "skipped_budget": int(r[7] or 0),
+                        }
+                        for r in cur.fetchall()
+                    ]
+                cur.execute(
+                    "SELECT i.id, i.title, i.severity_id, i.ai_status, i.verdict,"
+                    " a.created_at,"
+                    " EXISTS(SELECT 1 FROM llm_attempts t"
+                    " WHERE t.incident_id = i.id AND t.purpose = 'triage'"
+                    " AND t.outcome LIKE '%quarantin%')"
+                    " FROM incidents i JOIN incident_analyses a"
+                    " ON a.incident_id = i.id AND a.stage = 'analysis'"
+                    f" {scope} ORDER BY a.created_at DESC, i.id DESC LIMIT 5"
+                )
+                recent = [
+                    {
+                        "id": int(r[0]),
+                        "title": str(r[1] or ""),
+                        "final_severity": int(r[2]),
+                        "verdict_kind": _verdict_kind(r[4], str(r[3]), bool(r[6])),
+                        "analyzed_at": _iso(r[5]),
+                    }
+                    for r in cur.fetchall()
+                ]
+        return {
+            "totals": {
+                "incidents": total,
+                "by_severity": by_level,
+                "by_verdict": by_verdict,
+                "pending": pending,
+                "analyzed": analyzed,
+                "failed": failed,
+                "quarantined": quarantined,
+                "with_injection": with_injection,
+            },
+            "spend": {"total_usd": spend_total, "cap_usd": cap},
+            "activity": activity,
+            "activity_bucket": "first_seen hour (UTC); empty hours are 0",
+            "sweep_runs": markers,
+            "recent": recent,
+        }
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "database unavailable"})
+
+
+@app.get("/api/sweep/status")
+def get_sweep_status() -> Any:
+    """Last sweep run, next-run estimate, running flag, and its policy."""
+    url = _database_url()
+    if not url:
+        return JSONResponse(status_code=503, content={"detail": "database unavailable"})
+    try:
+        with psycopg.connect(url, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                if not _sweep_tables_exist(cur):
+                    return {
+                        "last": None,
+                        "running": False,
+                        "next_run_at": None,
+                        "policy": None,
+                    }
+                cur.execute(
+                    "SELECT s.id, s.poll_cycle_id, s.started_at, s.finished_at,"
+                    " s.status, s.error_code, s.analyzed, s.failed_analyses,"
+                    " s.skipped_policy, s.skipped_budget, s.policy,"
+                    " s.interval_seconds,"
+                    " p.alerts_seen, p.incidents_upserted, p.status"
+                    " FROM sweep_runs s LEFT JOIN wazuh_poll_cycles p"
+                    " ON p.id = s.poll_cycle_id"
+                    " ORDER BY s.id DESC LIMIT 1"
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return {
+                        "last": None,
+                        "running": False,
+                        "next_run_at": None,
+                        "policy": None,
+                    }
+                (
+                    rid,
+                    poll_id,
+                    started,
+                    finished,
+                    status,
+                    error_code,
+                    analyzed,
+                    failed_analyses,
+                    skipped_policy,
+                    skipped_budget,
+                    policy,
+                    interval,
+                    alerts_seen,
+                    incidents_upserted,
+                    poll_status,
+                ) = row
+                try:
+                    interval_s = float(interval or 300)
+                except TypeError, ValueError:
+                    interval_s = 300.0
+                cur.execute("SELECT NOW()")
+                now = (cur.fetchone() or [None])[0]
+                running = False
+                next_run_at = None
+                if started is not None and now is not None:
+                    age = (now - started).total_seconds()
+                    if str(status) == "running" and age < 3 * interval_s:
+                        running = True
+                    if age < 3 * interval_s:
+                        nxt = started + timedelta(seconds=interval_s)
+                        next_run_at = _iso(nxt)
+                last = {
+                    "id": int(rid),
+                    "poll_cycle_id": int(poll_id) if poll_id is not None else None,
+                    "started_at": _iso(started),
+                    "finished_at": _iso(finished),
+                    "status": str(status),
+                    "error_code": str(error_code or ""),
+                    "analyzed": int(analyzed or 0),
+                    "failed_analyses": int(failed_analyses or 0),
+                    "skipped_policy": int(skipped_policy or 0),
+                    "skipped_budget": int(skipped_budget or 0),
+                    "new_alerts": int(alerts_seen or 0)
+                    if alerts_seen is not None
+                    else None,
+                    "new_incidents": int(incidents_upserted or 0)
+                    if incidents_upserted is not None
+                    else None,
+                    "poll_status": str(poll_status) if poll_status else None,
+                    "interval_seconds": interval_s,
+                }
+        return {
+            "last": last,
+            "running": running,
+            "next_run_at": next_run_at,
+            "policy": dict(policy or {}),
+        }
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "database unavailable"})
+
+
+def _endpoint_entry(name: str, url: str | None, kind: str) -> dict[str, Any]:
+    """One settings connection entry reusing the health checks."""
+    if kind == "database":
+        check = check_database(url)
+        display = _redacted_address(url)
+    else:
+        check = check_endpoint(name, url)
+        display = _redacted_address(url)
+    return {
+        "name": name,
+        "address": display,
+        "state": _connection_state(url, bool(check.get("reachable"))),
+    }
+
+
+@app.get("/api/settings")
+def get_settings_view() -> Any:
+    """Effective sweep policy plus redacted connection settings (read-only)."""
+    try:
+        from corvus import __version__ as app_version
+        from corvus.attack.build import ATTACK_VERSION
+        from corvus.live.sweep import effective_policy
+        from corvus.normalize.ocsf import OCSF_SCHEMA_VERSION
+    except Exception:
+        return JSONResponse(status_code=500, content={"detail": "internal error"})
+    try:
+        policy = effective_policy()
+        policy_body: Any = {"source": "configured", "policy": policy.as_dict()}
+    except ValueError as exc:
+        policy_body = {"source": "configured", "policy": None, "error": str(exc)}
+    wazuh_url = os.environ.get("WAZUH_INDEXER_URL")
+    triage_url = os.environ.get("TRIAGE_BASE_URL") or os.environ.get("GLIMMER_BASE_URL")
+    analysis_url = os.environ.get("ANALYSIS_BASE_URL") or os.environ.get(
+        "META_BASE_URL"
+    )
+    database_url = _database_url()
+    entries = [
+        _endpoint_entry("database", database_url, "database"),
+        _endpoint_entry("wazuh_indexer", wazuh_url, "http"),
+        _endpoint_entry("triage_model", triage_url, "http"),
+        _endpoint_entry("reasoning_model", analysis_url, "http"),
+    ]
+    try:
+        from corvus.llm.spend import get_spend_cap
+
+        cap: Any = get_spend_cap()
+    except Exception:
+        cap = None
+    return {
+        "sweep_policy": policy_body,
+        "connections": entries,
+        "spend_cap_usd": cap,
+        "app_version": app_version,
+        "attack_version": ATTACK_VERSION,
+        "ocsf_version": OCSF_SCHEMA_VERSION,
     }
 
 

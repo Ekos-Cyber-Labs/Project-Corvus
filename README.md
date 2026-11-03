@@ -138,6 +138,14 @@ From a clean clone:
 
 Three-minute judge script: `docs/demo.md`. It walks the incident list, one explained chain with its evidence, the pseudonymized view the cloud model sees, and the learned rule in shadow mode with its lineage, naming the exact screen and command for each step.
 
+## Automatic sweep
+
+`corvus sweep [--once | --interval SECONDS]` runs the unattended loop: every N seconds (default 300, env `SWEEP_INTERVAL_SECONDS`, minimum 30) it runs one poll cycle (`corvus/live/poll.py`, reused, not copied), selects the incidents that cycle created or grew whose `ai_status` is still pending, and runs the existing analysis on the ones a deterministic policy considers worth it — the Glimmer triage worker, then the Spark agent loop via `run_analysis`, exactly as `corvus analyze` does. Everything else stays pending and can still be analyzed by hand.
+
+The policy (`corvus/live/sweep.py::decide`, a pure function; flags override env, env overrides defaults): analyze when the deterministic severity floor reaches `--min-floor` (`low|medium|high|critical`, default `high`, env `SWEEP_MIN_FLOOR`), or when the incident has an injection signal and `--always-analyze-injection` is on (default on, `--no-always-analyze-injection` opts out, env `SWEEP_ALWAYS_INJECTION`); candidates rank by floor descending, then event count descending; at most `--max-analyses` per cycle (default 5, env `SWEEP_MAX_ANALYSES`, 0..50). Budget: once recorded spend reaches the cap (`--spend-cap-usd`, default `$SPEND_CAP_USD`), every remaining candidate is recorded `skipped_budget` and the sweep still collects. A failure or an unavailable backend on one incident is recorded and never stops the cycle or the loop; an already-analyzed incident is never analyzed again. One Postgres advisory lock keeps two sweeps from overlapping (the second exits cleanly); a Wazuh outage records a failed cycle, logs one redacted line, and the loop continues after the normal interval; SIGINT/SIGTERM stop cleanly after the current step; nothing is deleted.
+
+Shadow and approval guarantees are unchanged: the sweep only reads and analyzes — it never proposes, deploys, or approves rules. Read-only status lives at `GET /api/dashboard`, `GET /api/sweep/status`, and `GET /api/settings` (see `docs/architecture.md`).
+
 ## Data policy
 
 Only public datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) or lab-generated data. No customer data, no real names. Most fixtures use reserved documentation ranges and private lab ranges with `example.com`. The Linux corpus (`tests/fixtures/linux/sshd_real_corpus.jsonl` and the tests that use it) is real traffic from our own lab and may contain public addresses of lab hosts and of the people who logged in. Datasets are fetched with checksums and never committed.

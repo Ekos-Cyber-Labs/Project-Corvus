@@ -2,6 +2,7 @@
 
 import argparse
 import os
+from typing import Any
 
 from corvus import __version__
 
@@ -225,6 +226,88 @@ def build_parser() -> argparse.ArgumentParser:
         "--replay-dir",
         default="data/replay",
         help="Replay Parquet store for incident evidence (default: data/replay).",
+    )
+
+    sweep = sub.add_parser(
+        "sweep",
+        help="Loop poll-then-analyze: poll Wazuh, select pending incidents "
+        "by policy, run triage plus Spark analysis on them.",
+    )
+    sweep.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single cycle and stop (default: loop every interval).",
+    )
+    sweep.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        help="Seconds between cycles; loop until SIGINT/SIGTERM "
+        "(default: 300, env SWEEP_INTERVAL_SECONDS, minimum 30).",
+    )
+    sweep.add_argument(
+        "--min-floor",
+        default=None,
+        choices=["low", "medium", "high", "critical"],
+        help="Analyze incidents at or above this floor "
+        "(default: high, env SWEEP_MIN_FLOOR).",
+    )
+    sweep.add_argument(
+        "--max-analyses",
+        type=int,
+        default=None,
+        help="Analyses per cycle, at most (default: 5, env SWEEP_MAX_ANALYSES, 0..50).",
+    )
+    sweep.add_argument(
+        "--always-analyze-injection",
+        dest="always_analyze_injection",
+        action="store_true",
+        default=None,
+        help="Always analyze incidents with an injection signal "
+        "(default on, env SWEEP_ALWAYS_INJECTION).",
+    )
+    sweep.add_argument(
+        "--no-always-analyze-injection",
+        dest="always_analyze_injection",
+        action="store_false",
+        help="Do not prefer injection-signal incidents.",
+    )
+    sweep.add_argument(
+        "--spend-cap-usd",
+        type=float,
+        default=None,
+        help="USD spend cap for this sweep (default: $SPEND_CAP_USD).",
+    )
+    sweep.add_argument(
+        "--lang",
+        default="en",
+        choices=["en", "es"],
+        help="Answer language for verdicts (default: %(default)s).",
+    )
+    sweep.add_argument(
+        "--store",
+        default="data/live",
+        help="Live replay-format store directory (default: data/live).",
+    )
+    sweep.add_argument(
+        "--replay-dir",
+        default="data/replay",
+        help="Replay Parquet store for incident evidence (default: data/replay).",
+    )
+    sweep.add_argument(
+        "--since",
+        default=None,
+        help="Seed cursor when no checkpoint is stored (ISO-8601).",
+    )
+    sweep.add_argument(
+        "--with-archives",
+        action="store_true",
+        help="Fetch surrounding archive events for each new incident.",
+    )
+    sweep.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="Postgres URL (default: $DATABASE_URL).",
     )
 
     rules = sub.add_parser("rules", help="Learned-rule commands.")
@@ -943,6 +1026,68 @@ def main(argv: list[str] | None = None) -> int:
             f" loop tokens: {outcome.loop_tokens}"
         )
         return 0
+    if args.command == "sweep":
+        from corvus.live.sweep import (
+            effective_policy,
+            run_sweep_loop,
+            try_acquire_sweep_lock,
+        )
+        from corvus.normalize.wazuh import parse_wazuh_time
+
+        if not args.database_url:
+            parser.error("DATABASE_URL is not set (or pass --database-url).")
+        if args.once and args.interval is not None:
+            parser.error("pass --once or --interval, not both")
+        try:
+            policy = effective_policy(
+                min_floor=args.min_floor,
+                max_analyses=args.max_analyses,
+                always_analyze_injection=args.always_analyze_injection,
+                spend_cap_usd=args.spend_cap_usd,
+                lang=args.lang,
+                interval_seconds=args.interval,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        sweep_since_ms: int | None = None
+        if args.since is not None:
+            try:
+                sweep_since_ms = parse_wazuh_time(args.since)
+            except ValueError as exc:
+                parser.error(f"--since is not a time: {exc}")
+        missing = [
+            name
+            for name in (
+                "WAZUH_INDEXER_URL",
+                "WAZUH_INDEXER_USER",
+                "WAZUH_INDEXER_PASSWORD",
+            )
+            if not os.environ.get(name)
+        ]
+        if missing:
+            # Names only: values (credentials) never appear in errors.
+            parser.error("sweep needs from the environment: " + ", ".join(missing))
+        lock_conn: Any = None
+        try:
+            lock_conn = try_acquire_sweep_lock(args.database_url)
+            if lock_conn is None:
+                print("another sweep is already running; exiting")
+                return 0
+            return run_sweep_loop(
+                database_url=args.database_url,
+                store_dir=args.store,
+                replay_dir=args.replay_dir,
+                policy=policy,
+                once=args.once,
+                since_ms=sweep_since_ms,
+                with_archives=args.with_archives,
+            )
+        finally:
+            try:
+                if lock_conn is not None:
+                    lock_conn.close()
+            except Exception:
+                pass
     if args.command == "rules" and args.rules_command == "ledger-check":
         from corvus.learning.ledger import ledger_check
 

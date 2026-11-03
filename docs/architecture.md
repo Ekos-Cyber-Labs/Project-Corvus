@@ -466,6 +466,30 @@ or model inputs. Details: `datasets/README.md`.
   The operator reaches the indexer through a local port forward to
   the manager host; the forward command and any address stay outside
   the repository (local shell / env file only, never committed).
+- Automatic sweep (`corvus sweep [--once | --interval SECONDS]`,
+  default every 300 s, minimum 30): each cycle reuses the live poll
+  above (same `wazuh_poll_cycles` ledger row, linked by
+  `sweep_runs.poll_cycle_id`), selects the incidents the cycle created
+  or grew whose `ai_status` is still pending, and runs the existing
+  analysis on the ones the pure `decide` policy picks (floor at or
+  above `SWEEP_MIN_FLOOR`, or an injection signal with
+  `SWEEP_ALWAYS_INJECTION`; ranked floor-first, capped at
+  `SWEEP_MAX_ANALYSES` per cycle; past `SPEND_CAP_USD` everything is
+  `skipped_budget`). Selection runs the Glimmer triage worker then
+  `run_analysis` exactly as `corvus analyze` does; one incident's
+  failure never stops the cycle, resolved analyses are never re-run,
+  and one Postgres advisory lock keeps two sweeps from overlapping.
+  Sweep rows (`sweep_runs` plus per-incident `sweep_decisions`,
+  migration `0013_sweep_runs.sql`) carry counts and the effective
+  policy only — no credentials, raw events, or model text — and three
+  read-only routes expose them: `GET /api/dashboard` (totals, hourly
+  `first_seen` buckets for the last 24 hours, sweep markers, five most
+  recent analyzed incidents), `GET /api/sweep/status` (last run, next
+  estimate from last start plus stored interval, running flag, last
+  policy), and `GET /api/settings` (effective policy, redacted
+  `scheme://host[:port]` connection states, spend cap, versions). The
+  sweep never proposes, deploys, or approves rules, so the shadow and
+  approval guarantees are unchanged.
 - `ReplayAdapter`: public datasets normalized with `corvus replay load`
   into per-file events/provenance Parquet under `data/replay/`
   (explicit schemas, batched streaming, atomic writes) and queried

@@ -25,6 +25,8 @@ EXPECTED_TABLES = {
     "incident_analyses",
     "spend_reservations",
     "wazuh_poll_cycles",
+    "sweep_runs",
+    "sweep_decisions",
 }
 
 # Key columns per table, exactly as named in the migration-002 spec.
@@ -151,6 +153,26 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "expires_at",
         "created_at",
     },
+    "sweep_runs": {
+        "id",
+        "poll_cycle_id",
+        "started_at",
+        "finished_at",
+        "status",
+        "error_code",
+        "analyzed",
+        "failed_analyses",
+        "skipped_policy",
+        "skipped_budget",
+        "policy",
+        "interval_seconds",
+    },
+    "sweep_decisions": {
+        "sweep_run_id",
+        "incident_id",
+        "decision",
+        "reason_code",
+    },
 }
 
 EXPECTED_INDEXES = {
@@ -161,6 +183,8 @@ EXPECTED_INDEXES = {
     "idx_incidents_ai_status_list",
     "idx_spend_created_at",
     "idx_rules_sigma_id_version",
+    "idx_sweep_runs_started",
+    "idx_sweep_decisions_incident",
 }
 
 
@@ -189,6 +213,7 @@ def test_migrate_applies_twice_idempotently() -> None:
         assert "0010_poll_cycle_status.sql" in first
         assert "0011_agent_step_emitted.sql" in first
         assert "0012_pseudonym_counters.sql" in first
+        assert "0013_sweep_runs.sql" in first
         assert migrate(test_url) == []
         with psycopg.connect(test_url) as conn:
             with conn.cursor() as cur:
@@ -206,6 +231,7 @@ def test_migrate_applies_twice_idempotently() -> None:
                     "0010_poll_cycle_status.sql",
                     "0011_agent_step_emitted.sql",
                     "0012_pseudonym_counters.sql",
+                    "0013_sweep_runs.sql",
                 ]
 
         # File-level idempotency: executing 0002 and 0004 directly, twice, is safe.
@@ -288,6 +314,14 @@ def test_migrate_applies_twice_idempotently() -> None:
             with conn.cursor() as cur:
                 cur.execute(counters_text)
                 cur.execute(counters_text)
+            conn.commit()
+        sweep_text = (Path(MIGRATIONS_DIR) / "0013_sweep_runs.sql").read_text(
+            encoding="utf-8"
+        )
+        with psycopg.connect(test_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sweep_text)
+                cur.execute(sweep_text)
             conn.commit()
 
         with psycopg.connect(test_url) as conn:
