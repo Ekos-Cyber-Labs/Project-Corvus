@@ -56,6 +56,8 @@ th, td { text-align:left; padding:.55rem .5rem; border-bottom:1px solid var(--li
 .badge.verdict-benign_authorized { border-color:var(--ok); color:var(--ok); }
 .badge.triaged { border-style:dashed; color:var(--text); }
 .badge.pending { color:var(--muted); }
+.badge.failed { border-color:var(--danger); color:var(--danger); font-weight:700; }
+.badge.quarantined { border-color:var(--accent); color:var(--accent); font-weight:700; }
 .badge.rule-candidate { border-style:dashed; color:var(--muted); }
 .badge.rule-shadow { border-color:var(--accent2); color:var(--accent2); font-weight:700; }
 .badge.rule-active { border-color:var(--ok); color:var(--ok); font-weight:700; }
@@ -181,6 +183,7 @@ button.dist-seg { cursor:pointer; }
 .inj-card { border:1px solid var(--danger); border-radius:var(--radius); padding:var(--space-3); background:var(--panel); }
 .outcome-dot { display:inline-block; width:.6rem; height:.6rem; border-radius:50%; margin-right:.35rem; background:var(--muted); }
 .outcome-ok { background:var(--ok); }
+.outcome-neutral { background:var(--muted); }
 .outcome-invalid { background:var(--danger); }
 .outcome-quarantined { background:var(--accent); }
 .response-plan { list-style:none; padding:0; display:grid; gap:var(--space-2); }

@@ -3,9 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App, {
   IncidentList,
   IncidentView,
+  attemptOutcomeKind,
+  attemptOutcomeText,
   buildListHash,
   isNumericId,
   parseHash,
+  verdictKind,
+  VerdictBadge,
   type IncidentDetail,
   type IncidentListItem,
 } from "./App";
@@ -395,6 +399,123 @@ describe("stat tiles name the field they count", () => {
     expect(ticks).toHaveLength(5);
     expect(ticks[0]).toContain("2026-10-30 00:00:00");
     expect(ticks[4]).toContain("2026-10-30 10:00:00");
+  });
+});
+
+describe("model attempt outcomes use real outcome strings", () => {
+  const attemptsDetail: IncidentDetail = {
+    id: 9,
+    title: "attempt outcomes",
+    severity_floor: 3,
+    severity_id: 3,
+    ai_status: "done",
+    verdict: "needs_human",
+    analysis: { verdict: "needs_human" },
+    llm_attempts: [
+      { purpose: "analysis", model: "m", attempt_number: 1, outcome: "ok", tokens: 1 },
+      { purpose: "rule_proposal", model: "m", attempt_number: 1, outcome: "accepted", tokens: 1 },
+      { purpose: "analysis", model: "m", attempt_number: 2, outcome: "tool_calls", tokens: 1 },
+      { purpose: "analysis", model: "m", attempt_number: 3, outcome: "quarantined", tokens: 1 },
+      { purpose: "analysis", model: "m", attempt_number: 4, outcome: "invalid", failed_validator: "schema", tokens: 1 },
+      { purpose: "analysis", model: "m", attempt_number: 5, outcome: "weird_new_outcome", tokens: 1 },
+    ],
+  };
+
+  it("classifies ok/accepted as ok, tool_calls/unknown as neutral, quarantined as block, failed-validator as invalid", () => {
+    expect(attemptOutcomeKind("ok")).toBe("ok");
+    expect(attemptOutcomeKind("accepted")).toBe("ok");
+    expect(attemptOutcomeKind("tool_calls")).toBe("neutral");
+    expect(attemptOutcomeKind("quarantined")).toBe("quarantined");
+    expect(attemptOutcomeKind("invalid", "schema")).toBe("invalid");
+    expect(attemptOutcomeKind("weird_new_outcome")).toBe("neutral");
+    expect(attemptOutcomeText("weird_new_outcome")).toBe("weird_new_outcome");
+    expect(attemptOutcomeText("invalid", "schema")).toContain("invalid");
+  });
+
+  it("renders the right dot color per outcome and raw text for unknown, never red", () => {
+    const { container } = render(<IncidentView detail={attemptsDetail} />);
+    const dots = Array.from(container.querySelectorAll(".outcome-dot"));
+    expect(dots).toHaveLength(6);
+    const kinds = dots.map((d) => d.className);
+    expect(kinds.filter((c) => c.includes("outcome-ok"))).toHaveLength(2);
+    expect(kinds.filter((c) => c.includes("outcome-neutral"))).toHaveLength(2);
+    expect(kinds.filter((c) => c.includes("outcome-quarantined"))).toHaveLength(1);
+    expect(kinds.filter((c) => c.includes("outcome-invalid"))).toHaveLength(1);
+    // Unknown outcome keeps its raw text and is not labelled invalid.
+    expect(screen.getAllByText(/weird_new_outcome/).length).toBeGreaterThan(0);
+    const sr = Array.from(container.querySelectorAll(".sr-only")).map((e) => e.textContent ?? "");
+    expect(sr.some((t) => t.includes("weird_new_outcome") && t.includes("invalid"))).toBe(false);
+  });
+});
+
+describe("failed and quarantined incidents never show pending", () => {
+  const base: IncidentListItem = {
+    id: 1, title: "t", severity_floor: 3, severity_id: 3,
+    ai_status: "done", event_count: 1, has_injection: false,
+  };
+
+  it("shows failed in the list and excludes it from the analyzed count", () => {
+    const failed: IncidentListItem = { ...base, id: 11, title: "failed one", verdict: null, ai_status: "failed", analyzed: true };
+    const good: IncidentListItem = { ...base, id: 12, title: "good one", verdict: "true_positive", ai_status: "done", analyzed: true };
+    const fresh: IncidentListItem = { ...base, id: 13, title: "fresh one", verdict: null, ai_status: "pending", analyzed: false };
+    const { container } = render(
+      <IncidentList
+        items={[good, failed, fresh]}
+        total={3}
+        page={0}
+        setPage={() => undefined}
+        pageSize={20}
+        onSelect={() => undefined}
+      />,
+    );
+    expect(screen.getByText("failed").className).toContain("failed");
+    expect(screen.getByText("pending").className).toContain("pending");
+    const failedCell = screen.getByText("failed one").closest("tr")?.textContent ?? "";
+    expect(failedCell).toContain("failed");
+    expect(failedCell).not.toContain("pending");
+    const summary = container.querySelector(".summary-count")?.textContent ?? "";
+    expect(summary).toContain("3 incidents");
+    expect(summary).toContain("1 analyzed");
+    expect(verdictKind(null, "failed")).toBe("failed");
+  });
+
+  it("shows failed in the summary card for ai_status failed with no verdict", () => {
+    const failedDetail: IncidentDetail = {
+      id: 21, title: "failed incident", severity_floor: 3, severity_id: 3,
+      ai_status: "failed", verdict: null, analysis: null, llm_attempts: [],
+    };
+    const { container } = render(<IncidentView detail={failedDetail} />);
+    const badges = container.querySelector(".hero-badges")?.textContent ?? "";
+    expect(badges).toContain("failed");
+    expect(badges).not.toContain("pending");
+  });
+
+  it("shows quarantined in the card when the stored attempts hold a quarantined triage", () => {
+    const qDetail: IncidentDetail = {
+      id: 22, title: "quarantined incident", severity_floor: 3, severity_id: 3,
+      ai_status: "failed", verdict: null, analysis: null,
+      llm_attempts: [
+        { purpose: "triage", model: "m", attempt_number: 1, outcome: "quarantined", tokens: 1 },
+      ],
+    };
+    const { container } = render(<IncidentView detail={qDetail} />);
+    const badges = container.querySelector(".hero-badges")?.textContent ?? "";
+    expect(badges).toContain("quarantined");
+    expect(badges).not.toContain("pending");
+    expect(verdictKind(null, "failed", qDetail.llm_attempts)).toBe("quarantined");
+  });
+
+  it("renders failed and quarantined badges with their own classes via VerdictBadge", () => {
+    const { rerender } = render(<VerdictBadge verdict={null} aiStatus="failed" />);
+    expect(screen.getByText("failed").className).toContain("failed");
+    rerender(
+      <VerdictBadge
+        verdict={null}
+        aiStatus="failed"
+        attempts={[{ purpose: "triage", outcome: "quarantined" }]}
+      />,
+    );
+    expect(screen.getByText("quarantined").className).toContain("quarantined");
   });
 });
 

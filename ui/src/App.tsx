@@ -142,8 +142,33 @@ export function buildRulesHash(filters: RuleFilters): string {
   return query ? `#/rules?${query}` : "#/rules";
 }
 export function buildRuleHash(id: number): string { return `#/rules/${id}`; }
-export function verdictKind(verdict: string | null | undefined, aiStatus: string): "verdict" | "triaged" | "pending" {
+export type AttemptOutcomeKind = "ok" | "neutral" | "quarantined" | "invalid";
+export function attemptOutcomeKind(outcome: string, failedValidator?: string | null): AttemptOutcomeKind {
+  if (typeof failedValidator === "string" ? failedValidator.trim() !== "" : Boolean(failedValidator)) return "invalid";
+  if (outcome === "ok" || outcome === "accepted") return "ok";
+  if (outcome.includes("quarantin")) return "quarantined";
+  if (outcome === "invalid") return "invalid";
+  return "neutral";
+}
+export function attemptOutcomeText(outcome: string, failedValidator?: string | null): string {
+  const kind = attemptOutcomeKind(outcome, failedValidator);
+  if (kind === "invalid") return `invalid${failedValidator ? ` (failed validator: ${failedValidator})` : ""}`;
+  return outcome;
+}
+export function hasQuarantinedTriage(attempts?: { purpose: string; outcome: string }[] | null): boolean {
+  if (!attempts) return false;
+  return attempts.some(
+    (a) => a.purpose === "triage" && typeof a.outcome === "string" && a.outcome.includes("quarantin"),
+  );
+}
+export function verdictKind(
+  verdict: string | null | undefined,
+  aiStatus: string,
+  attempts?: { purpose: string; outcome: string }[] | null,
+): "verdict" | "triaged" | "failed" | "quarantined" | "pending" {
   if (verdict !== null && verdict !== undefined && REAL_VERDICTS.has(verdict)) return "verdict";
+  if (hasQuarantinedTriage(attempts)) return "quarantined";
+  if (aiStatus === "failed") return "failed";
   if (aiStatus === "done") return "triaged";
   return "pending";
 }
@@ -485,10 +510,14 @@ export function HealthStrip({ health, error }: { health: Health | null; error?: 
     </div>
   );
 }
-export function VerdictBadge({ verdict, aiStatus }: { verdict?: string | null; aiStatus: string }) {
-  const kind = verdictKind(verdict, aiStatus);
+export function VerdictBadge({ verdict, aiStatus, attempts }: {
+  verdict?: string | null; aiStatus: string; attempts?: { purpose: string; outcome: string }[] | null;
+}) {
+  const kind = verdictKind(verdict, aiStatus, attempts);
   if (kind === "verdict") return <span className={`badge verdict-${verdict}`}>{verdict}</span>;
   if (kind === "triaged") return <span className="badge triaged">triaged</span>;
+  if (kind === "failed") return <span className="badge failed">failed</span>;
+  if (kind === "quarantined") return <span className="badge quarantined">quarantined</span>;
   return <span className="badge pending">pending</span>;
 }
 export function FilterBar({ filters, onChange }: { filters: ListFilters; onChange: (next: ListFilters) => void }) {
@@ -526,7 +555,10 @@ export function IncidentList({ items, total, page, setPage, pageSize, onSelect, 
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const open = useCallback((id: number) => onSelect(id), [onSelect]);
   if (!items.length) return <p>{emptyMessage ?? "No incidents found."}</p>;
-  const analyzedCount = items.filter((it) => it.analyzed === true || (it.analyzed == null && verdictKind(it.verdict, it.ai_status) !== "pending")).length;
+  const analyzedCount = items.filter((it) => {
+    const k = verdictKind(it.verdict, it.ai_status);
+    return (k === "verdict" || k === "triaged") && it.analyzed !== false;
+  }).length;
   const injectionCount = items.filter((it) => it.has_injection).length;
   const maxEvents = Math.max(1, ...items.map((it) => it.event_count));
   const sevCounts = [1, 2, 3, 4, 5, 6].map((n) => ({ n, c: items.filter((it) => it.severity_id === n).length }));
@@ -669,7 +701,7 @@ export function IncidentView({ detail }: { detail: IncidentDetail }) {
       <section id="section-summary" className="panel hero" aria-label="Incident summary">
         <h2>{detail.title || `Incident ${detail.id}`}</h2>
         <p className="hero-badges">
-          <VerdictBadge verdict={analysis?.verdict ?? detail.verdict} aiStatus={detail.ai_status} />{" "}
+          <VerdictBadge verdict={analysis?.verdict ?? detail.verdict} aiStatus={detail.ai_status} attempts={detail.llm_attempts} />{" "}
           <SeverityChip floor={floor} final={final} />
         </p>
         <SeverityGauge floor={floor} final={final} />
@@ -791,8 +823,8 @@ export function IncidentView({ detail }: { detail: IncidentDetail }) {
             <thead><tr><th>Purpose</th><th>Model</th><th>Attempt</th><th>Outcome</th><th>Tokens</th><th>USD</th></tr></thead>
             <tbody>
               {detail.llm_attempts.map((a, i) => {
-                const outcomeKind = a.outcome.includes("quarantin") ? "quarantined" : (a.outcome === "ok" ? "ok" : "invalid");
-                const outcomeText = a.outcome === "ok" ? "ok" : outcomeKind === "quarantined" ? "quarantined" : `invalid${a.failed_validator ? ` (failed validator: ${a.failed_validator})` : ""}`;
+                const outcomeKind = attemptOutcomeKind(a.outcome, a.failed_validator);
+                const outcomeText = attemptOutcomeText(a.outcome, a.failed_validator);
                 return (
                   <tr key={i}>
                     <td>{a.purpose}</td><td className="mono">{a.model}</td><td className="num">{a.attempt_number}</td>
