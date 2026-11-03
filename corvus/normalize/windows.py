@@ -108,6 +108,7 @@ __all__ = [
     "TASKSCHEDULER_CHANNEL",
     "WINDOWS_POWERSHELL_CHANNEL",
     "WINDOWS_TEXT_CAP",
+    "WINDOWS_UNMAPPED_LIST_CAP",
     "UnmappedEvent",
     "WindowsReadResult",
     "WindowsReadStats",
@@ -344,6 +345,15 @@ def _checked_ms(moment_ms: int) -> int:
 #: :data:`corvus.normalize.wazuh.LINUX_USERNAME_CAP` pattern.
 WINDOWS_TEXT_CAP = 65536
 
+#: Bound on the number of items kept in one leftover ``unmapped`` list
+#: (or dict keys). Real Windows payload leftovers are single values or
+#: small maps (a handful of ``EventData`` fields); 1000 is two orders
+#: of magnitude above any legitimate record yet bounds a hostile
+#: 100000-item list to 1% of its size. Combined with the
+#: :data:`WINDOWS_TEXT_CAP` serialized-size cap applied to the same
+#: value, the stored size per ``unmapped`` key stays bounded.
+WINDOWS_UNMAPPED_LIST_CAP = 1000
+
 
 def _sanitize_str(value: str) -> tuple[str, bool]:
     """Replace NUL and lone surrogates with U+FFFD.
@@ -465,6 +475,113 @@ def _cap_raw_leaves(value: Any, truncated: dict[str, int], path: str = "$") -> A
             for index, item in enumerate(value)
         )
     return value
+
+
+def _cap_unmapped_nested(value: Any) -> Any:
+    """Truncate string leaves of a nested leftover value (no markers).
+
+    The top-level ``<key>_truncated`` marker set by
+    :func:`_cap_unmapped_value` covers the whole value, so nested
+    leaves truncate silently here. Dict keys are never truncated.
+    """
+    if isinstance(value, str):
+        return value[:WINDOWS_TEXT_CAP] if len(value) > WINDOWS_TEXT_CAP else value
+    if isinstance(value, dict):
+        return {key: _cap_unmapped_nested(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_cap_unmapped_nested(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_cap_unmapped_nested(item) for item in value)
+    return value
+
+
+def _cap_unmapped_value(value: Any, unmapped: dict[str, Any], key: str) -> Any:
+    """Cap one leftover ``unmapped`` value like :func:`_cap_text`.
+
+    Strings keep the first :data:`WINDOWS_TEXT_CAP` characters with
+    the original length in ``unmapped["<key>_truncated"]``. Lists (and
+    tuples) keep the first :data:`WINDOWS_UNMAPPED_LIST_CAP` items and
+    dicts the first that many keys; when the JSON serialization of the
+    (count-truncated, leaf-capped) value still exceeds
+    :data:`WINDOWS_TEXT_CAP`, the first that many serialized characters
+    are kept instead. Either way the marker holds the original
+    serialized length, so nothing is silently lost. Values already
+    within both bounds return unchanged (byte-identical). Keys ending
+    in ``_truncated`` are never capped here: they are integer markers,
+    not source text.
+    """
+    marker = f"{key}_truncated"
+    if isinstance(value, str):
+        if len(value) > WINDOWS_TEXT_CAP:
+            unmapped[marker] = len(value)
+            return value[:WINDOWS_TEXT_CAP]
+        return value
+    if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+        return value
+    try:
+        original_serial = json.dumps(value, default=str, sort_keys=True)
+    except ValueError, TypeError:
+        original_serial = str(value)
+    if isinstance(value, (list, tuple)):
+        is_tuple = isinstance(value, tuple)
+        items = list(value)
+        if (
+            len(items) <= WINDOWS_UNMAPPED_LIST_CAP
+            and len(original_serial) <= WINDOWS_TEXT_CAP
+        ):
+            return value
+        unmapped[marker] = len(original_serial)
+        kept = items[:WINDOWS_UNMAPPED_LIST_CAP]
+        capped = [_cap_unmapped_nested(item) for item in kept]
+        if is_tuple:
+            capped_tuple: Any = tuple(capped)
+            try:
+                serial = json.dumps(capped_tuple, default=str, sort_keys=True)
+            except ValueError, TypeError:
+                serial = str(capped_tuple)
+            if len(serial) <= WINDOWS_TEXT_CAP:
+                return capped_tuple
+            return serial[:WINDOWS_TEXT_CAP]
+        try:
+            serial = json.dumps(capped, default=str, sort_keys=True)
+        except ValueError, TypeError:
+            serial = str(capped)
+        if len(serial) <= WINDOWS_TEXT_CAP:
+            return capped
+        return serial[:WINDOWS_TEXT_CAP]
+    if isinstance(value, dict):
+        if (
+            len(value) <= WINDOWS_UNMAPPED_LIST_CAP
+            and len(original_serial) <= WINDOWS_TEXT_CAP
+        ):
+            return value
+        unmapped[marker] = len(original_serial)
+        kept_items = list(value.items())[:WINDOWS_UNMAPPED_LIST_CAP]
+        capped_dict = {key: _cap_unmapped_nested(item) for key, item in kept_items}
+        try:
+            serial = json.dumps(capped_dict, default=str, sort_keys=True)
+        except ValueError, TypeError:
+            serial = str(capped_dict)
+        if len(serial) <= WINDOWS_TEXT_CAP:
+            return capped_dict
+        return serial[:WINDOWS_TEXT_CAP]
+    if len(original_serial) <= WINDOWS_TEXT_CAP:
+        return value
+    unmapped[marker] = len(original_serial)
+    return original_serial[:WINDOWS_TEXT_CAP]
+
+
+def _cap_unmapped_dict(unmapped: dict[str, Any]) -> None:
+    """Cap every source-controlled leftover in ``unmapped`` in place.
+
+    Covers all ``unmapped=fields`` mapper returns: any leftover payload
+    key (string, list or dict) truncates per :func:`_cap_unmapped_value`
+    with its original length in ``<key>_truncated``. Integer markers
+    (keys ending in ``_truncated``), booleans and numbers pass through,
+    so values already within the caps stay byte-identical.
+    """
+    for key in [key for key in unmapped if not key.endswith("_truncated")]:
+        unmapped[key] = _cap_unmapped_value(unmapped[key], unmapped, key)
 
 
 def _parse_non_iso(text: str) -> datetime:
@@ -1847,6 +1964,7 @@ def normalize_event(
         uid=uid, time_ms=time_ms, channel=channel, computer=host, event_id=event_id
     )
     event = mapper(working, ctx)
+    _cap_unmapped_dict(event.unmapped)
     if fields_bad or computer_bad or raw_bad:
         working.setdefault("windows.text_sanitized", True)
         event.unmapped["windows.text_sanitized"] = True

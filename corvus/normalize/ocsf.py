@@ -48,6 +48,7 @@ MAX_TIME_MS = 4102444800000
 PLACEHOLDERS = frozenset({"", "-", "n/a", "unknown"})
 
 __all__ = [
+    "ENTITY_KEY_CAP",
     "MAX_TIME_MS",
     "MIN_TIME_MS",
     "OCSF_SCHEMA_VERSION",
@@ -186,6 +187,17 @@ def canonicalize_ip(value: str | None) -> str | None:
     return str(parsed)
 
 
+#: Bound on a combined correlation key (``domain\\user``): each part
+#: arrives already capped by its normalizer, but the concatenation can
+#: still exceed either part's cap, so the key caps here at the same
+#: documented length. Longer keys keep the first characters; the parts'
+#: original lengths are already recorded in the event's ``unmapped``
+#: markers, so no new marker is needed. Asserted equal to both
+#: normalizers' text caps in ``tests/test_identifier_caps.py``; kept as
+#: a local constant so the shared schema module stays independent.
+ENTITY_KEY_CAP = 65536
+
+
 def compute_entity_keys(
     *,
     user: str | None = None,
@@ -199,10 +211,16 @@ def compute_entity_keys(
 
     This is the one shared function every OCSF event class uses: ``ip`` is
     the device address, ``src_ip``/``dst_ip`` come from the endpoints, so a
-    placeholder device address never hides an endpoint address.
+    placeholder device address never hides an endpoint address. The
+    combined ``domain\\\\user`` key caps at :data:`ENTITY_KEY_CAP` (its
+    parts are capped individually first, but the concatenation can still
+    overflow); every other key is a single already-bounded value.
     """
+    key = canonicalize_user(user, domain)
+    if key is not None and len(key) > ENTITY_KEY_CAP:
+        key = key[:ENTITY_KEY_CAP]
     return EntityKeys(
-        user=canonicalize_user(user, domain),
+        user=key,
         host=canonicalize_host(hostname),
         ip=canonicalize_ip(ip),
         src_ip=canonicalize_ip(src_ip),

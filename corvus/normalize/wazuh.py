@@ -79,6 +79,7 @@ from corvus.normalize.ocsf import (
 __all__ = [
     "LINUX_USERNAME_CAP",
     "SUPPORTED_DECODERS",
+    "WAZUH_UNMAPPED_LIST_CAP",
     "decode_audit_hex",
     "linux_dedup_key",
     "map_alert",
@@ -399,14 +400,23 @@ def _groups(rule: dict[str, Any]) -> list[str]:
     return [str(group) for group in groups]
 
 
-def _attacks(rule: dict[str, Any]) -> list[AttackRef]:
+def _attacks(rule: dict[str, Any], unmapped: dict[str, Any]) -> list[AttackRef]:
     """Build typed ATT&CK refs from the rule's MITRE block.
 
     ``rule.mitre`` carries parallel ``id``/``tactic``/``technique``
     arrays. ``TA####`` ids become tactics, ``T####(.###)?`` ids become
     techniques (a sub-technique keeps its parent in ``technique``);
     names come from the same-kind array by position, else stay None.
-    Unknown shapes are skipped, never raised.
+    Unknown shapes are skipped, never raised. Names cap at
+    :data:`WAZUH_RAW_DATA_CAP` like :func:`_cap_typed` (the first
+    characters kept, the original length in
+    ``unmapped["wazuh.mitre_tactic_truncated"]`` /
+    ``unmapped["wazuh.mitre_technique_truncated"]``; when several names
+    overflow the larger original length wins, so nothing is silently
+    lost). Ids keep today's validation (non-strings and regex misses
+    are skipped exactly as before — the cap applies only to ids that
+    already pass, keeping the same entries, with the original length
+    in ``unmapped["wazuh.mitre_id_truncated"]``).
     """
     mitre = rule.get("mitre")
     if not isinstance(mitre, dict):
@@ -425,16 +435,27 @@ def _attacks(rule: dict[str, Any]) -> list[AttackRef]:
         if not isinstance(raw, str):
             continue
         uid = raw.strip().upper()
+        # Ids keep today's validation (a miss is skipped below), but a
+        # passing id is still bounded: ``T\d+`` matches any digit run,
+        # so a hostile id would otherwise reach ``attacks[]`` whole.
+        if len(uid) > WAZUH_RAW_DATA_CAP and (
+            re.fullmatch(r"TA\d+", uid) is not None
+            or re.fullmatch(r"T\d+(\.\d+)?", uid) is not None
+        ):
+            prev_id = unmapped.get("wazuh.mitre_id_truncated")
+            if not isinstance(prev_id, int) or len(uid) > prev_id:
+                unmapped["wazuh.mitre_id_truncated"] = len(uid)
+            uid = uid[:WAZUH_RAW_DATA_CAP]
         if re.fullmatch(r"TA\d+", uid):
             name = tactic_names[tactic_pos] if tactic_pos < len(tactic_names) else None
             tactic_pos += 1
-            attacks.append(
-                AttackRef(
-                    tactic=TacticRef(
-                        uid=uid, name=str(name) if name is not None else None
-                    )
-                )
-            )
+            tactic_label = str(name) if name is not None else None
+            if tactic_label is not None and len(tactic_label) > WAZUH_RAW_DATA_CAP:
+                prev = unmapped.get("wazuh.mitre_tactic_truncated")
+                if not isinstance(prev, int) or len(tactic_label) > prev:
+                    unmapped["wazuh.mitre_tactic_truncated"] = len(tactic_label)
+                tactic_label = tactic_label[:WAZUH_RAW_DATA_CAP]
+            attacks.append(AttackRef(tactic=TacticRef(uid=uid, name=tactic_label)))
         elif re.fullmatch(r"T\d+(\.\d+)?", uid):
             name = (
                 technique_names[technique_pos]
@@ -443,6 +464,11 @@ def _attacks(rule: dict[str, Any]) -> list[AttackRef]:
             )
             technique_pos += 1
             label = str(name) if name is not None else None
+            if label is not None and len(label) > WAZUH_RAW_DATA_CAP:
+                prev = unmapped.get("wazuh.mitre_technique_truncated")
+                if not isinstance(prev, int) or len(label) > prev:
+                    unmapped["wazuh.mitre_technique_truncated"] = len(label)
+                label = label[:WAZUH_RAW_DATA_CAP]
             if "." in uid:
                 parent, _, _sub = uid.partition(".")
                 attacks.append(
@@ -473,6 +499,19 @@ LINUX_USERNAME_CAP = 256
 #: original length lands in
 #: ``unmapped["wazuh.raw_data_truncated"]`` as ``{json_path: length}``.
 WAZUH_RAW_DATA_CAP = 65536
+
+#: Bound on the number of items kept in one leftover ``unmapped`` list
+#: (or dict keys). Real Wazuh leftovers are single values or small maps
+#: (a handful of ``audit.*`` fields, one ``decoder_conflict`` map);
+#: 1000 is two orders of magnitude above any legitimate record yet
+#: bounds a hostile 100000-item list to 1% of its size. Combined with
+#: the :data:`WAZUH_RAW_DATA_CAP` serialized-size cap applied to the
+#: same value, the stored size per ``unmapped`` key stays bounded.
+#: Asserted equal to
+#: :data:`corvus.normalize.windows.WINDOWS_UNMAPPED_LIST_CAP` in
+#: ``tests/test_unmapped_cap.py``; kept as a local constant so the two
+#: normalizers stay independent.
+WAZUH_UNMAPPED_LIST_CAP = 1000
 
 
 def _cap_raw_leaves(value: Any, truncated: dict[str, int], path: str = "$") -> Any:
@@ -516,6 +555,8 @@ def _cap_typed(value: str | None, unmapped: dict[str, Any], key: str) -> str | N
     key; longer values truncate here and the original length lands in
     ``unmapped[key]``. The attacker-controlled Linux user name keeps
     its own shorter :data:`LINUX_USERNAME_CAP` and never routes here.
+    Identifiers (alert/rule/decoder ids) keep uniqueness through
+    :func:`_cap_id` instead and never route here.
     """
     if value is None:
         return None
@@ -523,6 +564,144 @@ def _cap_typed(value: str | None, unmapped: dict[str, Any], key: str) -> str | N
         unmapped[key] = len(value)
         return value[:WAZUH_RAW_DATA_CAP]
     return value
+
+
+#: Characters of hex digest kept in a capped identifier (64 bits, like
+#: :func:`corvus.normalize.windows.make_uid`).
+_ID_HASH_LEN = 16
+
+
+def _cap_id(value: str, unmapped: dict[str, Any], key: str) -> str:
+    """Bound an identifier reaching a typed OCSF slot.
+
+    The alert ``id`` (event/finding ``uid``), the archive document
+    ``_id`` (event ``uid``), ``rule.id`` (analytic ``uid``) and
+    ``decoder.name`` (both ``log_name`` slots) are source-controlled
+    yet land in typed slots, so they cannot truncate like text: two
+    different long ids sharing a prefix must not collide. Values
+    within :data:`WAZUH_RAW_DATA_CAP` return byte-identical with no
+    marker; longer values keep the first characters plus ``"#"`` plus
+    the first :data:`_ID_HASH_LEN` hex characters of the SHA-256 of
+    the full value (deterministic: the same input always yields the
+    same output, and the hash suffix separates shared prefixes), and
+    the original length lands in ``unmapped[key]``. The result never
+    exceeds :data:`WAZUH_RAW_DATA_CAP`.
+    """
+    if len(value) <= WAZUH_RAW_DATA_CAP:
+        return value
+    unmapped[key] = len(value)
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:_ID_HASH_LEN]
+    head = WAZUH_RAW_DATA_CAP - len(digest) - 1
+    return f"{value[:head]}#{digest}"
+
+
+def _cap_unmapped_nested(value: Any) -> Any:
+    """Truncate string leaves of a nested leftover value (no markers).
+
+    The top-level ``<key>_truncated`` marker set by
+    :func:`_cap_unmapped_value` covers the whole value, so nested
+    leaves truncate silently here. Dict keys are never truncated.
+    """
+    if isinstance(value, str):
+        return value[:WAZUH_RAW_DATA_CAP] if len(value) > WAZUH_RAW_DATA_CAP else value
+    if isinstance(value, dict):
+        return {key: _cap_unmapped_nested(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_cap_unmapped_nested(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_cap_unmapped_nested(item) for item in value)
+    return value
+
+
+def _cap_unmapped_value(value: Any, unmapped: dict[str, Any], key: str) -> Any:
+    """Cap one leftover ``unmapped`` value like :func:`_cap_typed`.
+
+    Strings keep the first :data:`WAZUH_RAW_DATA_CAP` characters with
+    the original length in ``unmapped["<key>_truncated"]``. Lists (and
+    tuples) keep the first :data:`WAZUH_UNMAPPED_LIST_CAP` items and
+    dicts the first that many keys; when the JSON serialization of the
+    (count-truncated, leaf-capped) value still exceeds
+    :data:`WAZUH_RAW_DATA_CAP`, the first that many serialized
+    characters are kept instead. Either way the marker holds the
+    original serialized length, so nothing is silently lost. Values
+    already within both bounds return unchanged (byte-identical). Keys
+    ending in ``_truncated`` are never capped here: they are integer
+    markers, not source text.
+    """
+    marker = f"{key}_truncated"
+    if isinstance(value, str):
+        if len(value) > WAZUH_RAW_DATA_CAP:
+            unmapped[marker] = len(value)
+            return value[:WAZUH_RAW_DATA_CAP]
+        return value
+    if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+        return value
+    try:
+        original_serial = json.dumps(value, default=str, sort_keys=True)
+    except ValueError, TypeError:
+        original_serial = str(value)
+    if isinstance(value, (list, tuple)):
+        is_tuple = isinstance(value, tuple)
+        items = list(value)
+        if (
+            len(items) <= WAZUH_UNMAPPED_LIST_CAP
+            and len(original_serial) <= WAZUH_RAW_DATA_CAP
+        ):
+            return value
+        unmapped[marker] = len(original_serial)
+        kept = items[:WAZUH_UNMAPPED_LIST_CAP]
+        capped = [_cap_unmapped_nested(item) for item in kept]
+        if is_tuple:
+            capped_tuple: Any = tuple(capped)
+            try:
+                serial = json.dumps(capped_tuple, default=str, sort_keys=True)
+            except ValueError, TypeError:
+                serial = str(capped_tuple)
+            if len(serial) <= WAZUH_RAW_DATA_CAP:
+                return capped_tuple
+            return serial[:WAZUH_RAW_DATA_CAP]
+        try:
+            serial = json.dumps(capped, default=str, sort_keys=True)
+        except ValueError, TypeError:
+            serial = str(capped)
+        if len(serial) <= WAZUH_RAW_DATA_CAP:
+            return capped
+        return serial[:WAZUH_RAW_DATA_CAP]
+    if isinstance(value, dict):
+        if (
+            len(value) <= WAZUH_UNMAPPED_LIST_CAP
+            and len(original_serial) <= WAZUH_RAW_DATA_CAP
+        ):
+            return value
+        unmapped[marker] = len(original_serial)
+        kept_items = list(value.items())[:WAZUH_UNMAPPED_LIST_CAP]
+        capped_dict = {key: _cap_unmapped_nested(item) for key, item in kept_items}
+        try:
+            serial = json.dumps(capped_dict, default=str, sort_keys=True)
+        except ValueError, TypeError:
+            serial = str(capped_dict)
+        if len(serial) <= WAZUH_RAW_DATA_CAP:
+            return capped_dict
+        return serial[:WAZUH_RAW_DATA_CAP]
+    if len(original_serial) <= WAZUH_RAW_DATA_CAP:
+        return value
+    unmapped[marker] = len(original_serial)
+    return original_serial[:WAZUH_RAW_DATA_CAP]
+
+
+def _cap_unmapped_dict(unmapped: dict[str, Any]) -> None:
+    """Cap every source-controlled leftover in ``unmapped`` in place.
+
+    Covers the explicit ``unmapped[...] = value`` writes in every event
+    mapper (``audit.*``, ``syscheck.*``, ``linux.*``) and in the finding
+    builder: any string, list or dict value truncates per
+    :func:`_cap_unmapped_value` with its original length in
+    ``<key>_truncated``. Integer markers (keys ending in
+    ``_truncated``), booleans and numbers pass through, so values
+    already within the caps stay byte-identical.
+    """
+    for key in [key for key in unmapped if not key.endswith("_truncated")]:
+        unmapped[key] = _cap_unmapped_value(unmapped[key], unmapped, key)
 
 
 def _capped_raw(source: dict[str, Any], unmapped: dict[str, Any]) -> str:
@@ -1808,6 +1987,13 @@ def _map_event(
                 return None, (decoder, rule_id)
     device_unmapped: dict[str, Any] = {}
     device = _device(source, device_unmapped)
+    # Identifiers land in typed slots (event ``metadata.uid`` and both
+    # ``log_name`` slots), so they cap here with uniqueness preserved
+    # (:func:`_cap_id`); the marker merges into the event ``unmapped``
+    # below. Routing below is unaffected: an over-cap decoder never
+    # equals a supported name either way.
+    uid = _cap_id(uid, device_unmapped, "wazuh.event_uid_truncated")
+    decoder = _cap_id(decoder, device_unmapped, "wazuh.decoder_truncated")
     fields = _data_fields(source)
     try:
         if decoder == "sshd":
@@ -1914,6 +2100,8 @@ def _map_event(
         return None, (decoder, rule_id)
     if device_unmapped and event is not None:
         event.unmapped.update(device_unmapped)
+    if event is not None:
+        _cap_unmapped_dict(event.unmapped)
     return event, None
 
 
@@ -1930,10 +2118,14 @@ def _build_finding(
 
     The rule description becomes the finding title (and analytic
     name/desc), so it is capped at :data:`WAZUH_RAW_DATA_CAP` with the
-    original length in ``unmapped``.
+    original length in ``unmapped``. The finding ``uid`` arrives
+    already capped from the caller; the decoder and the rule id cap
+    here with uniqueness preserved (:func:`_cap_id`) since both land
+    in typed slots (``log_name``, analytic ``uid``).
     """
     rule_id = rule.get("id")
     unmapped: dict[str, Any] = {}
+    decoder = _cap_id(decoder, unmapped, "wazuh.decoder_truncated")
     raw_description = _str(rule.get("description")) or f"Wazuh rule {rule_id}"
     description = _cap_typed(raw_description, unmapped, "wazuh.description_truncated")
     assert description is not None
@@ -1946,13 +2138,18 @@ def _build_finding(
     firedtimes = _int(rule.get("firedtimes"))
     analytic = Analytic(
         name=description,
-        uid=str(rule_id) if rule_id is not None else None,
+        uid=(
+            _cap_id(str(rule_id), unmapped, "wazuh.rule_id_truncated")
+            if rule_id is not None
+            else None
+        ),
         desc=description,
         category=category,
         type="Rule",
         type_id=1,
     )
-    attacks = _attacks(rule)
+    attacks = _attacks(rule, unmapped)
+    _cap_unmapped_dict(unmapped)
     if event is not None:
         evidence = Evidence(
             uid=event.metadata.uid,
@@ -2011,7 +2208,10 @@ def map_alert(
     the decoder has no typed mapping. Hits without a rule block or
     without a parseable time raise ``ValueError``; far-future ISO
     timestamps past 2100-01-01 UTC still map so the live poll counts
-    them as ``future_dated`` instead of unmapped.
+    them as ``future_dated`` instead of unmapped. Identifier fields
+    (alert ``id``, ``rule.id``, ``decoder.name``) cap at
+    :data:`WAZUH_RAW_DATA_CAP` with uniqueness preserved
+    (:func:`_cap_id`); values within the cap stay byte-identical.
     """
     raw_source = hit.get("_source")
     if not isinstance(raw_source, dict):
@@ -2036,6 +2236,11 @@ def map_alert(
     ) or "unknown"
     finding_unmapped: dict[str, Any] = {}
     device = _device(source, finding_unmapped)
+    # The alert id lands in typed uid slots (finding ``uid``,
+    # ``finding_info.uid``, ``metadata.uid``), so it caps here with
+    # uniqueness preserved (:func:`_cap_id`); the event uid caps again
+    # inside :func:`_map_event` once the ``#event`` suffix is added.
+    alert_id = _cap_id(alert_id, finding_unmapped, "wazuh.alert_id_truncated")
     event, unmapped_key = _map_event(source, f"{alert_id}#event")
     finding = _build_finding(source, rule, alert_id, time_ms, device, decoder, event)
     if finding_unmapped:
@@ -2054,9 +2259,12 @@ def map_archive(
 
     Archives carry the raw event with no rule match, so no finding is
     built. The ``id`` field repeats across archive documents, so the
-    event uid is the document ``_id`` (unique per document); the Wazuh
-    ``id`` is kept verbatim in ``unmapped`` as ``wazuh_id``. Hits
-    without a document ``_id`` count as ``("unknown", None)``.
+    event uid is the document ``_id`` (unique per document), capped at
+    :data:`WAZUH_RAW_DATA_CAP` with uniqueness preserved
+    (:func:`_cap_id`); the Wazuh ``id`` is kept in ``unmapped`` as
+    ``wazuh_id``, capped at :data:`WAZUH_RAW_DATA_CAP` with the
+    original length in ``unmapped["wazuh_id_truncated"]``. Hits without
+    a document ``_id`` count as ``("unknown", None)``.
     """
     raw_source = hit.get("_source")
     if not isinstance(raw_source, dict):
@@ -2086,7 +2294,9 @@ def map_archive(
         return None, unmapped_key or (decoder, None)
     wazuh_id = _str(source.get("id"))
     if wazuh_id is not None:
-        event.unmapped["wazuh_id"] = wazuh_id
+        event.unmapped["wazuh_id"] = _cap_unmapped_value(
+            wazuh_id, event.unmapped, "wazuh_id"
+        )
     if source_bad:
         event.unmapped["wazuh.text_sanitized"] = True
     return event, None
@@ -2271,8 +2481,15 @@ def map_linux_doc(
     event, unmapped_key = _map_event(doc, event_uid, override_time_ms=time_ms)
     finding: DetectionFinding | None = None
     if isinstance(rule, dict) and rule.get("id") is not None:
-        finding_uid = _str(doc.get("id")) or event_uid
         finding_unmapped: dict[str, Any] = {}
+        # The document id lands in typed finding uid slots, so it caps
+        # here with uniqueness preserved (:func:`_cap_id`); the event
+        # uid above is already a fixed-size hash.
+        finding_uid = _cap_id(
+            _str(doc.get("id")) or event_uid,
+            finding_unmapped,
+            "wazuh.alert_id_truncated",
+        )
         finding = _build_finding(
             doc,
             rule,
