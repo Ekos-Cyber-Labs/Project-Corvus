@@ -1,0 +1,494 @@
+{
+  "anti_leak": [
+    {
+      "check": "a-created-before-variant",
+      "detail": "rule created 2026-10-31T23:22:35.525000+00:00 before first variant step 2026-11-01T02:56:51.084000+00:00",
+      "result": "PASS"
+    },
+    {
+      "check": "b-lineage-in-training-windows",
+      "detail": "n=2 cited uid(s) all in the recorded accepted backtest target_matched (n=2); training windows n=7 (2026-10-31T04:24:55.479000+00:00..2026-10-31T04:25:57.772000+00:00)",
+      "result": "PASS"
+    },
+    {
+      "check": "b-lineage-outside-variant-windows",
+      "detail": "n=2 cited uid(s), none present in either variant export",
+      "result": "PASS"
+    },
+    {
+      "check": "c-no-variant-values-in-rule",
+      "detail": "n=5 variant-only declared value(s) checked (n=5 declared), none in the text",
+      "result": "PASS"
+    },
+    {
+      "check": "d-model-never-saw-variant",
+      "detail": "n=8 recorded attempt(s), all created before first variant step 2026-11-01T02:56:51.084000+00:00",
+      "result": "PASS"
+    }
+  ],
+  "baseline": {
+    "dir": "data/replay-linux-baseline",
+    "match_uids": [],
+    "matches_n": 0,
+    "mode": "store",
+    "n_events": 55794,
+    "unloadable": null,
+    "window": [
+      "2026-10-28T00:00:01.332000+00:00",
+      "2026-10-30T23:59:49.819000+00:00"
+    ]
+  },
+  "inputs": {
+    "negative": "data/lab-chain1b-control",
+    "negative_gt": "data/lab-chain1b-control/ground_truth_control.jsonl",
+    "positive": "data/lab-chain1b-positive",
+    "positive_gt": "data/lab-chain1b-positive/ground_truth_positive.jsonl",
+    "train_gt": "data/lab-chain1/ground_truth_cadena1.jsonl"
+  },
+  "ledger": {
+    "detection_window": {
+      "end": "2026-11-01T03:22:18.796000+00:00",
+      "start": "2026-11-01T02:56:51.084000+00:00"
+    },
+    "segments": {
+      "after": {
+        "attempts": {
+          "by_purpose_model": [],
+          "rows": 0
+        },
+        "spend_rows": 0,
+        "spend_usd": 0
+      },
+      "before": {
+        "attempts": {
+          "by_purpose_model": [
+            {
+              "model": "muse-spark-1.3",
+              "purpose": "rule_proposal",
+              "rows": 43
+            }
+          ],
+          "rows": 43
+        },
+        "spend_rows": 43,
+        "spend_usd": 0.857111
+      },
+      "inside": {
+        "attempts": {
+          "by_purpose_model": [],
+          "rows": 0
+        },
+        "spend_rows": 0,
+        "spend_usd": 0
+      }
+    }
+  },
+  "limits": {
+    "behavior_same_as_training": false,
+    "distinct_learned_rules": {
+      "mine_sigma_id": "7a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d",
+      "n": 1,
+      "other_ids": []
+    },
+    "expected_detect_missed": [],
+    "expected_miss_missed": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8
+    ],
+    "negative_techniques": [
+      "1:T1046",
+      "2:T1110.001",
+      "3:T1078.003",
+      "4:T1548.003",
+      "5:T1053.003",
+      "6:T1098.004",
+      "7:T1005",
+      "8:T1005"
+    ],
+    "no_model_weight_updates": "No model weights are updated anywhere in this pipeline: what is learned is a verified, versioned Sigma rule (see the rule-proposal loop, which stores text plus lineage, never gradients).",
+    "positive_techniques": [
+      "1:T1046",
+      "2:T1110.001",
+      "3:T1078.003",
+      "4:T1548.003",
+      "5:T1053.003",
+      "6:T1098.004",
+      "7:T1005",
+      "8:T1005"
+    ],
+    "train_techniques": [
+      "1:T1046",
+      "2:T1110.001",
+      "3:T1078.003",
+      "4:T1548.003",
+      "5:T1053.003",
+      "6:T1098.004",
+      "7:T1048"
+    ],
+    "training_set": {
+      "cited_events_n": 2,
+      "incident_events_n": 10,
+      "incident_events_note": null,
+      "incident_id": 1,
+      "incidents_n": 1
+    },
+    "uncovered_by_any_rule": [],
+    "variant_specific_declared": [
+      ".cache-sysd.gz",
+      ".s2.dat",
+      "8443",
+      "8444",
+      "gzip"
+    ],
+    "variant_specific_declared_n": 5
+  },
+  "meta": {
+    "codes": [],
+    "dirty_paths_n": 7,
+    "dirty_tree": true,
+    "git_commit": "4e5acf9940668e6544ae0bb3f7219335fa94f5e1",
+    "producing_command": "corvus eval gate2 --rule 1 --train-gt data/lab-chain1/ground_truth_cadena1.jsonl --positive data/lab-chain1b-positive --positive-gt data/lab-chain1b-positive/ground_truth_positive.jsonl --negative data/lab-chain1b-control --negative-gt data/lab-chain1b-control/ground_truth_control.jsonl --baseline-dir data/replay-linux-baseline --out <local scratch path>",
+    "rule": {
+      "created_at": "2026-10-31T23:22:35.525234+00:00",
+      "db_id": 1,
+      "native_rule_id": 100000,
+      "sigma_rule_id": "7a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d",
+      "status": "shadow",
+      "title": "Shadow Staging Via Shell With Chmod",
+      "version": 1
+    },
+    "variant_window": {
+      "end": "2026-11-01T03:22:51.260000+00:00",
+      "start": "2026-11-01T02:56:51.084000+00:00"
+    },
+    "verdict": "VALID"
+  },
+  "negative": {
+    "data_window": [
+      "2026-11-01T02:56:00+00:00",
+      "2026-11-01T02:58:08.433000+00:00"
+    ],
+    "dir": "data/lab-chain1b-control",
+    "ignored_files": [],
+    "learned_n": 0,
+    "learned_times": [],
+    "n_alert_files": 1,
+    "n_alerts": 215,
+    "n_archive_files": 1,
+    "n_events": 1360,
+    "other_learned_n": 0,
+    "shipped_n": 215,
+    "steps": [
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "5501": 1,
+          "5502": 2,
+          "5715": 1
+        },
+        "step": 1,
+        "technique": "T1046",
+        "verdict": "PASS",
+        "window": "2026-11-01T02:56:51.084000+00:00..2026-11-01T02:56:54.950000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "5501": 1,
+          "5502": 1,
+          "5503": 3,
+          "5551": 1,
+          "5715": 1,
+          "5760": 4
+        },
+        "step": 2,
+        "technique": "T1110.001",
+        "verdict": "PASS",
+        "window": "2026-11-01T02:56:54.974000+00:00..2026-11-01T02:57:05.134000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 2,
+          "5501": 5,
+          "5502": 3,
+          "5715": 1,
+          "5760": 5,
+          "5763": 1
+        },
+        "step": 3,
+        "technique": "T1078.003",
+        "verdict": "PASS",
+        "window": "2026-11-01T02:57:05.161000+00:00..2026-11-01T02:57:09.469000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "2502": 2,
+          "40112": 2,
+          "5501": 3,
+          "5502": 3,
+          "5715": 1
+        },
+        "step": 4,
+        "technique": "T1548.003",
+        "verdict": "PASS",
+        "window": "2026-11-01T02:57:09.488000+00:00..2026-11-01T02:57:13.689000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "11": 1,
+          "40112": 2,
+          "5402": 2,
+          "5501": 5,
+          "5502": 5,
+          "5715": 1
+        },
+        "step": 5,
+        "technique": "T1053.003",
+        "verdict": "PASS",
+        "window": "2026-11-01T02:57:13.711000+00:00..2026-11-01T02:57:18.281000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 2,
+          "5402": 2,
+          "5501": 7,
+          "5502": 7,
+          "5715": 3
+        },
+        "step": 6,
+        "technique": "T1098.004",
+        "verdict": "PASS",
+        "window": "2026-11-01T02:57:18.306000+00:00..2026-11-01T02:57:30.021000+00:00"
+      },
+      {
+        "expected": "detect",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 6,
+          "5402": 6,
+          "5501": 17,
+          "5502": 13,
+          "5715": 3
+        },
+        "step": 7,
+        "technique": "T1005",
+        "verdict": "FAIL",
+        "window": "2026-11-01T02:57:30.047000+00:00..2026-11-01T02:57:49.606000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 4,
+          "5402": 4,
+          "5501": 11,
+          "5502": 11,
+          "5715": 3
+        },
+        "step": 8,
+        "technique": "T1005",
+        "verdict": "PASS",
+        "window": "2026-11-01T02:57:49.629000+00:00..2026-11-01T02:58:08.710000+00:00"
+      }
+    ]
+  },
+  "positive": {
+    "data_window": [
+      "2026-11-01T03:20:52.550000+00:00",
+      "2026-11-01T03:23:01.427000+00:00"
+    ],
+    "dir": "data/lab-chain1b-positive",
+    "false_positives": [],
+    "ignored_files": [],
+    "learned_n": 7,
+    "n_alert_files": 1,
+    "n_alerts": 168,
+    "n_archive_files": 1,
+    "n_events": 1001,
+    "other_learned_n": 0,
+    "shipped_n": 161,
+    "steps": [
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "5501": 1,
+          "5715": 1
+        },
+        "step": 1,
+        "technique": "T1046",
+        "verdict": "PASS",
+        "window": "2026-11-01T03:21:32.232000+00:00..2026-11-01T03:21:36.599000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "5501": 1,
+          "5502": 1,
+          "5503": 4,
+          "5715": 1,
+          "5760": 7,
+          "5763": 1
+        },
+        "step": 2,
+        "technique": "T1110.001",
+        "verdict": "PASS",
+        "window": "2026-11-01T03:21:36.620000+00:00..2026-11-01T03:21:48.782000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 2,
+          "5501": 5,
+          "5502": 3,
+          "5715": 1,
+          "5760": 2
+        },
+        "step": 3,
+        "technique": "T1078.003",
+        "verdict": "PASS",
+        "window": "2026-11-01T03:21:48.801000+00:00..2026-11-01T03:21:53.094000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "2502": 2,
+          "40112": 2,
+          "5501": 3,
+          "5502": 3,
+          "5715": 1
+        },
+        "step": 4,
+        "technique": "T1548.003",
+        "verdict": "PASS",
+        "window": "2026-11-01T03:21:53.113000+00:00..2026-11-01T03:21:57.254000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 2,
+          "5402": 2,
+          "5501": 5,
+          "5502": 5,
+          "5715": 1
+        },
+        "step": 5,
+        "technique": "T1053.003",
+        "verdict": "PASS",
+        "window": "2026-11-01T03:21:57.272000+00:00..2026-11-01T03:22:01.322000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 3,
+          "5402": 2,
+          "5501": 9,
+          "5502": 7,
+          "5715": 3
+        },
+        "step": 6,
+        "technique": "T1098.004",
+        "verdict": "PASS",
+        "window": "2026-11-01T03:22:01.341000+00:00..2026-11-01T03:22:12.890000+00:00"
+      },
+      {
+        "expected": "detect",
+        "first_delay_s": 5.7,
+        "learned_n": 7,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 5,
+          "5402": 4,
+          "5501": 15,
+          "5502": 11,
+          "5715": 3
+        },
+        "step": 7,
+        "technique": "T1005",
+        "verdict": "PASS",
+        "window": "2026-11-01T03:22:12.909000+00:00..2026-11-01T03:22:31.902000+00:00"
+      },
+      {
+        "expected": "miss",
+        "first_delay_s": null,
+        "learned_n": 0,
+        "rule_db_id": 1,
+        "rule_version": 1,
+        "shipped": {
+          "40112": 4,
+          "5402": 4,
+          "5501": 11,
+          "5502": 11,
+          "5715": 3
+        },
+        "step": 8,
+        "technique": "T1005",
+        "verdict": "PASS",
+        "window": "2026-11-01T03:22:31.927000+00:00..2026-11-01T03:22:51.260000+00:00"
+      }
+    ]
+  }
+}

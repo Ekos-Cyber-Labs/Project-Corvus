@@ -81,6 +81,9 @@ Details and attacker model: `docs/threat-model.md`.
 - The UI has no login in hackathon scope.
 - One-node PostgreSQL; no replica or failover.
 - One model output repeated an attacker's markdown image and link into the stored verdict (fixture `v2-render-username-persist`); inert in the React UI, which renders text (`ui/src/App.tsx` has no HTML rendering path); the stored value is not sanitized.
+- Gate 2 covers 1 step of 8 in the variant chain (step 7); the other 7 steps are missed, which the report calls the rule's confirmed limit (`eval/reports/gate2_variant_2026-11-01.md`).
+- Gate 2 tested a single rule on a single variant (n = 1 run, 1 rule, 1 variant); this does not show the system learning to detect whole chains.
+- The lab data behind Gate 2 is not committed (`data/` is git-ignored), so only the committed report is reproducible here, not the run.
 
 ## Results
 
@@ -106,6 +109,12 @@ Every number below names its producing report. Anything not yet measured is mark
 | Glimmer throughput, concurrency 8 | n=8 requests: aggregate 60.4 tok/s, per-request 7.7 tok/s, time to first token 0.68 s, 0 errors | `eval/reports/glimmer_throughput_2026-11-02.json` |
 | Glimmer throughput, concurrency 16 | n=16 requests: aggregate 116.5 tok/s, per-request 7.4 tok/s, time to first token 0.71 s, 0 errors | `eval/reports/glimmer_throughput_2026-11-02.json` |
 | Glimmer throughput, concurrency 32 | n=32 requests: aggregate 212.3 tok/s, per-request 6.7 tok/s, time to first token 0.77 s, 0 errors | `eval/reports/glimmer_throughput_2026-11-02.json` |
+| Gate 2 variant, detection on unseen variant | 1 of 8 steps (step 7, n=7 learned alerts, first 5.7 s after the step began; other 7 missed; n = 1 run, 1 rule, 1 variant) | `eval/reports/gate2_variant_2026-11-01.md` |
+| Gate 2 variant, false positives outside step windows | 0 over n=1001 events scanned (n = 1 run, 1 rule, 1 variant) | `eval/reports/gate2_variant_2026-11-01.md` |
+| Gate 2 variant, benign baseline matches | 0 over n=55794 events (n = 1 run, 1 rule, 1 variant) | `eval/reports/gate2_variant_2026-11-01.md` |
+| Gate 2 variant, negative control (rule absent) | 0 learned alerts over n=1360 events, n=215 alerts (n = 1 run, 1 rule, 1 variant) | `eval/reports/gate2_variant_2026-11-01.md` |
+
+Gate 2 scope for all four rows above: one learned Sigma rule (db id 1, status shadow, proposed by the model from one training incident) tested on one unseen variant chain; anti-leak checks a to d pass; model spend inside the detection window is 0 (the rule runs without a model call).
 
 Reproduce: `python -m eval.llm_harness --render-from eval/reports/adversarial_v2_live_2026-11-02.json --report-md <path>` (verified here: output byte-identical to the committed report, no database, no model). The live run was produced by the reviewer with `corvus eval llm --adversarial-set v2` (needs `--max-usd` around 6 or higher, per `eval/reports/adversarial_v2_stub_2026-11-02.md`), run as 16 shards in parallel with a custom parallel driver: the committed harness runs fixtures one at a time and Glimmer decodes about 8 tokens per second per request, so a sequential run of 62 incidents takes hours.
 

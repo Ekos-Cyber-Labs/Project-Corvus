@@ -8,8 +8,11 @@ organization already runs.
   (it does not re-ingest all logs), correlates alerts into attack chains
   deterministically, reasons over them with AI, hunts in what was not
   correlated, learns new detections, and pushes them back to the SIEM as rules.
-- Every attack Corvus catches makes the customer's SIEM better, even when
-  Corvus is off.
+- When a learned rule passes backtest and human approval, the customer's
+  SIEM keeps that narrow detection even when Corvus is off. Gate 2 shows
+  the current limit: one shadow rule covered 1 of 8 variant steps
+  (n = 1 run, 1 rule, 1 variant;
+  `eval/reports/gate2_variant_2026-11-01.md`).
 - Hackathon scope: Wazuh only. Adapters for other SIEMs are roadmap.
 
 Data flow (hackathon):
