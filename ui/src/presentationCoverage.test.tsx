@@ -161,7 +161,7 @@ describe("presentation mode coverage", () => {
     localStorage.setItem(PRESENTATION_STORAGE_KEY, "true");
     window.location.hash = "#/incidents/1";
     render(<App />);
-    await screen.findByText("Agent trace");
+    await screen.findByRole("heading", { name: "Agent trace" });
     expectMasked();
   });
 
@@ -196,7 +196,7 @@ describe("presentation mode coverage", () => {
     stubAll();
     window.location.hash = "#/incidents/1";
     render(<App />);
-    await screen.findByText("Agent trace");
+    await screen.findByRole("heading", { name: "Agent trace" });
     expect(document.body.innerHTML).toContain(V4A);
     expect(document.body.innerHTML).toContain(V6A);
   });

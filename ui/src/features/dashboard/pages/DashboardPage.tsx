@@ -16,9 +16,7 @@ export function DashboardPage() {
   return (
     <main className={pageStyles.page}>
       <PageHeader title="Dashboard" subtitle={subtitle}>
-        <p className={pageStyles.actions}>
-          <button type="button" disabled title="Run corvus sweep from the host">Sweep now</button>
-        </p>
+        <p className={pageStyles.actions}><span className="muted" role="note">Sweeps run from the host: <span className="mono">corvus sweep</span></span></p>
       </PageHeader>
       {state === "loading" ? (
         <div aria-live="polite" className={pageStyles.loading}>

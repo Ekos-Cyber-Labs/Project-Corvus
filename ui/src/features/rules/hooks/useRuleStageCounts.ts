@@ -6,14 +6,11 @@ export function useRuleStageCounts(retryNonce: number) {
   useEffect(() => {
     const controller = new AbortController();
     setState("loading");
-    const one = (status: string | null) => {
-      const query = status ? `?status=${status}&limit=1` : "?limit=1";
-      return getJson<{ total: number }>(`/api/rules${query}`, controller.signal);
-    };
-    Promise.all([one("candidate"), one(null), one("shadow"), one("active")])
-      .then(([candidate, all, shadow, active]) => {
+    const one = (status: string) => getJson<{ total: number }>(`/api/rules?status=${status}&limit=1`, controller.signal);
+    Promise.all([one("candidate"), one("shadow"), one("active")])
+      .then(([candidate, shadow, active]) => {
         if (controller.signal.aborted) return;
-        setCounts({ proposed: candidate.total, backtested: all.total, shadow: shadow.total, active: active.total });
+        setCounts({ proposed: candidate.total, backtested: 0, shadow: shadow.total, active: active.total });
         setState("ready");
       })
       .catch(() => { if (!controller.signal.aborted) setState("error"); });

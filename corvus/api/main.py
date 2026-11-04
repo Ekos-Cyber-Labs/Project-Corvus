@@ -431,6 +431,9 @@ def list_incidents(
                     " s.incident_id=i.id AND s.kind='injection'),"
                     " EXISTS(SELECT 1 FROM incident_analyses a"
                     " WHERE a.incident_id=i.id AND a.stage='analysis'),"
+                    " EXISTS(SELECT 1 FROM llm_attempts t"
+                    " WHERE t.incident_id=i.id AND t.purpose='triage'"
+                    " AND t.outcome LIKE '%%quarantin%%'),"
                     " i.learned_rules"
                     f" FROM incidents i {where} ORDER BY 11 DESC,"
                     " i.severity_floor DESC, i.id DESC LIMIT %s OFFSET %s",
@@ -451,7 +454,8 @@ def list_incidents(
                         "event_count": int(r[8] or 0),
                         "has_injection": bool(r[9]),
                         "analyzed": bool(r[10]),
-                        "learned_rules": list(r[11] or []),
+                        "quarantined": bool(r[11]),
+                        "learned_rules": list(r[12] or []),
                     }
                     for r in cur.fetchall()
                 ]

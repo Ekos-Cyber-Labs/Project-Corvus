@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../app/App";
 import { buildListHash, parseHash } from "../../lib/hash";
+import { verdictKind } from "./utils/incidents";
 import type { IncidentDetail, IncidentListItem } from "../../api/types";
 const items: IncidentListItem[] = [
   { id: 1, title: "sudo escalation on host-1", severity_floor: 4, severity_floor_name: "High", severity_id: 5, severity_name: "Critical", ai_status: "done", verdict: "true_positive", event_count: 41, has_injection: false, analyzed: true },
@@ -69,6 +70,48 @@ describe("incidents console", () => {
     fireEvent.click(await screen.findByText("Open full analysis"));
     window.dispatchEvent(new Event("hashchange"));
     expect(window.location.hash).toBe("#/incidents/1");
+  });
+  it("lists a quarantined incident as Quarantined and filters every chip correctly", async () => {
+    const quar: IncidentListItem = { id: 3, title: "quarantined injection", severity_floor: 4, severity_floor_name: "High", severity_id: 5, severity_name: "Critical", ai_status: "failed", verdict: null, event_count: 9, has_injection: true, analyzed: false, quarantined: true };
+    const all = [...items, quar];
+    vi.stubGlobal("fetch", async (input: unknown) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/settings") return { ok: true, status: 200, json: async () => ({ sweep_policy: { source: "configured", policy: null }, connections: [], spend_cap_usd: null, app_version: "x", attack_version: "y", ocsf_version: "z" }) };
+      if (path === "/api/sweep/status") return { ok: true, status: 200, json: async () => ({ last: null, running: false, next_run_at: null, policy: null }) };
+      if (path === "/api/incidents/3") return { ok: true, status: 200, json: async () => ({ ...detailOne, id: 3, title: "quarantined injection", ai_status: "failed", verdict: null, analysis: null, llm_attempts: [{ purpose: "triage", model: "m", attempt_number: 1, outcome: "quarantined", tokens: 1 }] }) };
+      if (path === "/api/incidents/1") return { ok: true, status: 200, json: async () => detailOne };
+      if (path === "/api/incidents/2") return { ok: true, status: 200, json: async () => ({ ...detailOne, id: 2, title: "weird cron on host-2", severity_floor: 3, severity_id: 3, severity_floor_name: "Medium", severity_name: "Medium", analysis: null, verdict: null, ai_status: "pending" }) };
+      if (path === "/api/incidents") {
+        const query = new URLSearchParams(url.split("?")[1] ?? "");
+        let out = all;
+        if (query.get("analyzed") === "true") out = out.filter((it) => it.analyzed);
+        if (query.get("analyzed") === "false") out = out.filter((it) => !it.analyzed);
+        return { ok: true, status: 200, json: async () => ({ items: out, total: out.length, limit: 20, offset: 0 }) };
+      }
+      return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+    });
+    window.location.hash = "#/incidents";
+    render(<App />);
+    await screen.findByText("quarantined injection");
+    expect(verdictKind(null, "failed", null, true)).toBe("quarantined");
+    const quarRow = screen.getByText("quarantined injection").closest("tr")?.textContent ?? "";
+    expect(quarRow).toContain("Quarantined");
+    expect(quarRow).not.toContain("Failed");
+    fireEvent.click(screen.getByText("Quarantined", { selector: "button" }));
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => { expect(screen.queryByText("sudo escalation on host-1")).toBeNull(); });
+    expect(screen.getByText("weird cron on host-2")).toBeTruthy();
+    expect(screen.getByText("quarantined injection")).toBeTruthy();
+    fireEvent.click(screen.getByText("Analyzed", { selector: "button" }));
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => { expect(screen.queryByText("quarantined injection")).toBeNull(); });
+    expect(screen.getByText("sudo escalation on host-1")).toBeTruthy();
+    fireEvent.click(screen.getByText("Pending", { selector: "button" }));
+    window.dispatchEvent(new Event("hashchange"));
+    await waitFor(() => { expect(screen.queryByText("sudo escalation on host-1")).toBeNull(); });
+    expect(screen.getByText("weird cron on host-2")).toBeTruthy();
+    expect(screen.getByText("quarantined injection")).toBeTruthy();
   });
   it("renders hostile incident titles as text only", async () => {
     const hostile: IncidentListItem = { ...items[0], id: 3, title: "<img src=x onerror=alert(1)>\u0007bad" };

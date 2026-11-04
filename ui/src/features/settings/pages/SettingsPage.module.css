@@ -1,8 +1,8 @@
 .page { display: grid; gap: 16px; max-width: 880px; }
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.grid div { display: grid; gap: 4px; }
-.grid dt { font-weight: 600; font-size: 13px; }
-.ro { margin: 0; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; color: var(--muted); min-height: 44px; display: flex; align-items: center; white-space: nowrap; }
+.defList { display: grid; gap: 8px; margin: 12px 0; padding: 0; }
+.defList div { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 12px; align-items: baseline; }
+.defList dt { font-weight: 600; font-size: 13px; }
+.defList dd { margin: 0; }
 .dotRun, .dotPause, .dotNone { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
 .dotRun { background: var(--accent); }
 .dotPause { background: var(--warning); }
@@ -16,5 +16,5 @@
 .seg button { border: 0; border-radius: 0; background: var(--panel2); color: var(--text); min-height: 44px; padding: 0 16px; }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 @media (max-width: 900px) {
-  .grid, .conns li { grid-template-columns: 1fr; }
+  .defList div, .conns li { grid-template-columns: 1fr; }
 }

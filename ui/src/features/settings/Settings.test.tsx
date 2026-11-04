@@ -36,17 +36,25 @@ describe("SettingsPage", () => {
     window.location.hash = "#/settings";
     const { container } = render(<App />);
     expect(await screen.findByText("Automatic sweep")).toBeTruthy();
-    expect(screen.getByText("Sweep not detected")).toBeTruthy();
+    expect(screen.getByText("No sweep running")).toBeTruthy();
     expect(screen.getByText(/Set with corvus sweep flags/)).toBeTruthy();
     expect(screen.getByText(/stays pending and can be analyzed by hand/)).toBeTruthy();
     expect(screen.getByText(/keeps collecting but stops analyzing/)).toBeTruthy();
+    expect(screen.getByText("Poll interval")).toBeTruthy();
+    expect(screen.getByText("300 s")).toBeTruthy();
+    expect(screen.getByText("High").getAttribute("title")).toBe("4");
+    expect(screen.getByText("Injection signals always analyzed")).toBeTruthy();
+    expect(screen.getByText("Yes")).toBeTruthy();
     expect(screen.getByText("Unreachable")).toBeTruthy();
     expect(screen.getAllByText("Connected").length).toBe(2);
-    expect(screen.getByText("Not configured")).toBeTruthy();
+    expect(screen.getAllByText("Not configured")).toHaveLength(1);
+    expect(screen.getByText("triage_model")).toBeTruthy();
+    expect(screen.getByText("reasoning_model")).toBeTruthy();
     expect(screen.getByText(/pseudonymized on-prem/)).toBeTruthy();
     expect(screen.getByText(/Shadow rules never change alerts/)).toBeTruthy();
     expect(screen.getByText(/rendered as plain text/)).toBeTruthy();
     expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("input[type=checkbox]:disabled")).toBeNull();
   });
   it("leaks no secrets in the connections card", async () => {
     stubSettings();
@@ -58,15 +66,16 @@ describe("SettingsPage", () => {
     expect(text).not.toContain("password");
     expect(text).not.toContain("@");
   });
-  it("disables the policy fields with no save button", async () => {
+  it("shows the policy as text with no fields and no save button", async () => {
     stubSettings();
     window.location.hash = "#/settings";
-    render(<App />);
+    const { container } = render(<App />);
     await screen.findByText("Automatic sweep");
-    const checkbox = screen.getByLabelText(/Always analyze incidents with an injection signal/) as HTMLInputElement;
-    expect(checkbox.disabled).toBe(true);
-    expect(checkbox.checked).toBe(true);
+    expect(screen.queryByLabelText(/Always analyze incidents with an injection signal/)).toBeNull();
     expect(screen.queryByText("Save")).toBeNull();
+    expect(container.querySelector("input[disabled]")).toBeNull();
+    expect(screen.getByText("5")).toBeTruthy();
+    expect(screen.getByText("$100")).toBeTruthy();
   });
   it("writes the theme choice and toggles reduce motion locally", async () => {
     stubSettings();

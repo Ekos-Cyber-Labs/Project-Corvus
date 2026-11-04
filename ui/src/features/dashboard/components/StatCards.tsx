@@ -5,7 +5,7 @@ export function StatCards({ dashboard, sweep }: { dashboard: Dashboard; sweep: S
   const t = dashboard.totals;
   const open = t.pending;
   const lastNew = sweep?.last?.new_incidents;
-  const openLine = lastNew === null || lastNew === undefined ? "no sweep recorded yet" : `+${lastNew} since the last sweep`;
+  const openLine = lastNew === null || lastNew === undefined ? "no sweep recorded yet" : `${lastNew} new in the last sweep`;
   const analyzedPct = t.incidents > 0 ? Math.round((t.analyzed / t.incidents) * 100) : 0;
   const spendTotal = dashboard.spend.total_usd ?? 0;
   const spendCap = dashboard.spend.cap_usd;

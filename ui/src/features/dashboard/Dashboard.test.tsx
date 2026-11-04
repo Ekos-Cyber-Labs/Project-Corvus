@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HashRouter } from "react-router";
 import { App } from "../../app/App";
@@ -51,9 +51,15 @@ describe("dashboard helpers", () => {
   });
   it("maps verdict kinds to chips", () => {
     expect(verdictChip("verdict")).toEqual({ text: "Verdict", className: "dash-verdict-tp" });
+    expect(verdictChip("true_positive")).toEqual({ text: "True positive", className: "dash-verdict-tp" });
+    expect(verdictChip("benign_authorized")).toEqual({ text: "Benign", className: "dash-verdict-benign" });
+    expect(verdictChip("false_positive")).toEqual({ text: "False positive", className: "dash-verdict-benign" });
+    expect(verdictChip("needs_human")).toEqual({ text: "Needs human", className: "dash-verdict-quar" });
     expect(verdictChip("quarantined").text).toBe("Quarantined");
     expect(verdictChip("failed").text).toBe("Failed");
-    expect(verdictChip("triaged").text).toBe("Skipped by policy");
+    expect(verdictChip("triaged").text).toBe("Triaged");
+    expect(verdictChip("pending").text).toBe("Pending");
+    expect(verdictChip("weird_new_kind").text).toBe("weird_new_kind");
   });
 });
 describe("DashboardPage", () => {
@@ -79,7 +85,7 @@ describe("DashboardPage", () => {
     window.location.hash = "#/dashboard";
     render(<App />);
     expect(await screen.findByText(/has not run yet/)).toBeTruthy();
-    expect(screen.getByText(/corvus sweep/)).toBeTruthy();
+    expect(screen.getByText(/Sweeps run from the host/)).toBeTruthy();
   });
   it("shows an error state with a retry", async () => {
     vi.stubGlobal("fetch", async () => ({ ok: false, status: 503, json: async () => ({ detail: "database unavailable" }) }));
@@ -88,15 +94,30 @@ describe("DashboardPage", () => {
     expect(await screen.findByText(/Could not load the dashboard/)).toBeTruthy();
     expect(screen.getByText("Retry")).toBeTruthy();
   });
-  it("disables Sweep now with the host-run title", async () => {
+  it("shows a read-only sweep line instead of a Sweep now button", async () => {
     const calls: string[] = [];
     stub(dashboard(), sweep(), calls);
     window.location.hash = "#/dashboard";
     render(<App />);
-    const button = await screen.findByText("Sweep now");
-    expect(button.tagName).toBe("BUTTON");
-    expect((button as HTMLButtonElement).disabled).toBe(true);
-    expect(button.getAttribute("title")).toBe("Run corvus sweep from the host");
+    expect(await screen.findByText(/Sweeps run from the host/)).toBeTruthy();
+    expect(screen.queryByText("Sweep now")).toBeNull();
+  });
+  it("reads the open-incidents caption as new in the last sweep", async () => {
+    const calls: string[] = [];
+    stub(dashboard(), sweep(), calls);
+    window.location.hash = "#/dashboard";
+    render(<App />);
+    expect(await screen.findByText("7 new in the last sweep")).toBeTruthy();
+  });
+  it("shows the last sweep as local time plus a relative part with the ISO in the title", async () => {
+    const calls: string[] = [];
+    const started = new Date(Date.now() - 22 * 60000).toISOString();
+    stub(dashboard(), sweep({ last: sweep().last && { ...sweep().last!, started_at: started } }), calls);
+    window.location.hash = "#/dashboard";
+    render(<App />);
+    const dd = await screen.findByTitle(started);
+    expect(dd.textContent).toContain("22 min ago");
+    expect(dd.textContent).toMatch(/\d{2}:\d{2} · 22 min ago/);
   });
 });
 describe("sidebar sweep countdown", () => {
@@ -110,11 +131,10 @@ describe("sidebar sweep countdown", () => {
       return { ok: true, status: 200, json: async () => ({ items: [], total: 0 }) };
     });
     render(<HashRouter><Sidebar /></HashRouter>);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(screen.getByText("Sweep paused")).toBeTruthy();
-    expect(screen.getByText("Next in 2:00")).toBeTruthy();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(screen.getByText("Next in 1:59")).toBeTruthy();
+    await vi.waitFor(() => { expect(screen.getByText("Sweep paused")).toBeTruthy(); });
+    const first = screen.getByText(/Next in \d+:\d\d/).textContent;
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.waitFor(() => { expect(screen.getByText(/Next in \d+:\d\d/).textContent).not.toBe(first); });
   });
   it("shows an incidents pill for pending high and critical", async () => {
     vi.stubGlobal("fetch", async (input: unknown) => {
@@ -124,6 +144,37 @@ describe("sidebar sweep countdown", () => {
     });
     render(<HashRouter><Sidebar /></HashRouter>);
     expect(await screen.findByText("7")).toBeTruthy();
+  });
+  it("explains the incidents pill and matches the pending high-or-higher list total", async () => {
+    const seven = Array.from({ length: 7 }, (_, i) => ({ id: 200 + i, title: `pending high ${i}`, severity_floor: 4, severity_id: 4, ai_status: "pending", verdict: null, event_count: 2, has_injection: false, analyzed: false }));
+    vi.stubGlobal("fetch", async (input: unknown) => {
+      const url = String(input);
+      const path = url.split("?")[0];
+      if (path === "/api/sweep/status") return { ok: true, status: 200, json: async () => sweep({ last: null, running: false, next_run_at: null }) };
+      if (path === "/api/incidents") {
+        const query = new URLSearchParams(url.split("?")[1] ?? "");
+        const match = query.get("min_floor") === "4" && query.get("analyzed") === "false";
+        return { ok: true, status: 200, json: async () => ({ items: match ? seven : [], total: match ? 7 : 0, limit: 20, offset: 0 }) };
+      }
+      return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+    });
+    window.location.hash = "#/incidents?analyzed=false&min_floor=4";
+    render(<App />);
+    const pill = await screen.findByText("7");
+    expect(pill.getAttribute("title")).toBe("7 incidents High or Critical pending analysis");
+    expect(pill.getAttribute("aria-label")).toBe("7 incidents High or Critical pending analysis");
+    expect(await screen.findByText("7 incidents, 0 analyzed, 0 with injection signals")).toBeTruthy();
+  });
+  it("shows no sweep running without a countdown, plus the last sweep when known", async () => {
+    vi.stubGlobal("fetch", async (input: unknown) => {
+      const url = String(input);
+      if (url.startsWith("/api/sweep/status")) return { ok: true, status: 200, json: async () => ({ running: false, next_run_at: null, last: { status: "ok", started_at: "2026-11-02T18:00:00Z" } }) };
+      return { ok: true, status: 200, json: async () => ({ items: [], total: 0 }) };
+    });
+    render(<HashRouter><Sidebar /></HashRouter>);
+    expect(await screen.findByText("No sweep running")).toBeTruthy();
+    expect(screen.queryByText(/Next in/)).toBeNull();
+    expect(screen.getByText(/Last sweep/)).toBeTruthy();
   });
 });
 describe("dashboard hostile rendering", () => {
@@ -145,13 +196,39 @@ describe("dashboard hostile rendering", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("[onerror]")).toBeNull();
   });
-  it("exposes the sweep button to assistive tech", async () => {
+  it("keeps the sweep line readable text, not a control", async () => {
     const calls: string[] = [];
     stub(dashboard(), sweep(), calls);
     window.location.hash = "#/dashboard";
+    const { container } = render(<App />);
+    const line = await screen.findByText(/Sweeps run from the host/);
+    expect(line.tagName).not.toBe("BUTTON");
+    expect(container.querySelector("button[disabled]")).toBeNull();
+  });
+  it("shows one real verdict per row with its tone and the ISO time in the title", async () => {
+    const kinds: [string, string, string][] = [
+      ["true_positive", "True positive", "dash-verdict-tp"],
+      ["benign_authorized", "Benign", "dash-verdict-benign"],
+      ["false_positive", "False positive", "dash-verdict-benign"],
+      ["needs_human", "Needs human", "dash-verdict-quar"],
+      ["quarantined", "Quarantined", "dash-verdict-quar"],
+    ];
+    const base = dashboard();
+    const d = dashboard({
+      totals: { ...base.totals, by_verdict: {} },
+      recent: kinds.map(([kind], i) => ({ id: 100 + i, title: `row ${kind}`, final_severity: 4, verdict_kind: kind, analyzed_at: `2026-11-02T05:${String(10 + i).padStart(2, "0")}:00Z` })),
+    });
+    const calls: string[] = [];
+    stub(d, sweep(), calls);
+    window.location.hash = "#/dashboard";
     render(<App />);
-    const button = await screen.findByText("Sweep now");
-    fireEvent.click(button);
-    expect((button as HTMLButtonElement).disabled).toBe(true);
+    const table = await screen.findByRole("table", { name: "Latest verdicts from the sweep" });
+    for (const [i, [, text, cls]] of kinds.entries()) {
+      const pill = within(table).getByText(text);
+      expect(pill.className).toContain(cls);
+      expect(pill.getAttribute("title")).toBeTruthy();
+      const timeCell = within(table).getByTitle(`2026-11-02T05:${String(10 + i).padStart(2, "0")}:00Z`);
+      expect(timeCell.textContent).not.toMatch(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
+    }
   });
 });

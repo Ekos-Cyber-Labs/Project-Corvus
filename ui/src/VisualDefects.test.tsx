@@ -6,27 +6,29 @@ import { SeverityDist } from "./features/dashboard/components/SeverityDist";
 import { RuleDetailView } from "./features/rules/components/RuleDetail";
 import { IncidentPreview } from "./features/incidents/components/IncidentPreview";
 import { verdictKind } from "./features/incidents/utils/incidents";
-import { formatCompactTime } from "./lib/format";
+import { formatDateTime } from "./lib/formatDateTime";
 import type { Dashboard, RuleDetail } from "./api/types";
 describe("visual defects", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
-  it("shows compact local time with full ISO in title and sr-only", () => {
+  it("shows compact local time with full ISO in title only", () => {
     const { container } = render(<RecentVerdicts recent={[{ id: 25, title: "Incident title here", final_severity: 4, verdict_kind: "verdict", analyzed_at: "2026-11-03T18:14:51Z" }]} />);
     const cell = screen.getByTitle("2026-11-03T18:14:51Z");
-    expect(cell.textContent).toContain(formatCompactTime("2026-11-03T18:14:51Z"));
-    expect(cell.querySelector(".sr-only")?.textContent).toBe("2026-11-03T18:14:51Z");
+    expect(cell.textContent).toContain(formatDateTime("2026-11-03T18:14:51Z"));
+    expect(cell.querySelector(".sr-only")).toBeNull();
     expect(container.querySelector("td")?.textContent).toBe("25");
     expect(screen.getByText("High")).toBeTruthy();
   });
   it("adds the verdict split under the severity bars", () => {
-    const dashboard = { totals: { incidents: 10, by_severity: { critical: 1, high: 2, medium: 3, low: 4 }, by_verdict: { true_positive: 2, benign_authorized: 1, false_positive: 1, needs_human: 1 }, pending: 3, analyzed: 4, failed: 1, quarantined: 1, with_injection: 0 }, spend: { total_usd: 0, cap_usd: 100 }, activity: [], window: { start: null, end: null, anchored_to: null }, sweep_runs: [], recent: [] } as Dashboard;
+    const dashboard = { totals: { incidents: 10, by_severity: { critical: 1, high: 2, medium: 3, low: 4, informational: 0 }, by_verdict: { true_positive: 2, benign_authorized: 1, false_positive: 1, needs_human: 1 }, pending: 3, analyzed: 4, failed: 1, quarantined: 1, with_injection: 0 }, spend: { total_usd: 0, cap_usd: 100 }, activity: [], window: { start: null, end: null, anchored_to: null }, sweep_runs: [], recent: [] } as Dashboard;
     render(<SeverityDist dashboard={dashboard} />);
-    expect(screen.getByText("true positive")).toBeTruthy();
-    expect(screen.getByText("benign")).toBeTruthy();
-    expect(screen.getByText("needs human")).toBeTruthy();
-    expect(screen.getByText("quarantined")).toBeTruthy();
-    expect(screen.getByText("failed")).toBeTruthy();
-    expect(screen.getByText("pending")).toBeTruthy();
+    expect(screen.getByText("True positive")).toBeTruthy();
+    expect(screen.getByText("Benign")).toBeTruthy();
+    expect(screen.getByText("Needs human")).toBeTruthy();
+    expect(screen.getByText("Quarantined")).toBeTruthy();
+    expect(screen.getByText("Failed")).toBeTruthy();
+    expect(screen.getByText("Pending")).toBeTruthy();
+    expect(screen.getByText("Informational")).toBeTruthy();
+    expect(screen.getByText("Critical includes Fatal.")).toBeTruthy();
   });
   it("does not repeat the status word when status and mode match", () => {
     const detail: RuleDetail = { id: 9, title: "r", status: "shadow", mode: "shadow", version: 2, hits: 1, false_positives: 0, sigma_text: "title: r", lineage: { source_incident: null, cited_uids: [], backtest: null, ledger_ids: [] }, transitions: [], findings: [] };

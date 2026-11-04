@@ -260,3 +260,5 @@ eval/runs/
 # Corvus UI build output (built by Dockerfile node stage / make ui-build)
 ui/dist/
 ui/node_modules/
+
+!ui/src/lib/

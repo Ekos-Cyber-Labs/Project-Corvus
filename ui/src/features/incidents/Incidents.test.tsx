@@ -54,11 +54,12 @@ describe("IncidentView renders untrusted text as text only", () => {
     for (const a of anchors) expect(a.getAttribute("href")).toMatch(/^#section-/);
   });
 
-  it("reports a missing cited event as missing (a11y: summary is focusable button-like)", () => {
+  it("reports a missing cited event as missing with a short evidence summary", () => {
     render(<IncidentView detail={detail} />);
     expect(screen.getByText(/Missing: no event with this uid/)).toBeTruthy();
-    const summary = screen.getByText(/Evidence for evt-1/);
+    const summary = screen.getByText("Evidence · evt-1");
     expect(summary.tagName).toBe("SUMMARY");
+    expect(screen.queryByText(/event_uid/)).toBeNull();
   });
 
   it("shows attempts, cost, floor vs final", () => {
@@ -131,12 +132,37 @@ describe("verdict labels", () => {
         onSelect={() => undefined}
       />,
     );
-    expect(screen.getByText("true_positive").className).toContain("verdict-true_positive");
-    expect(screen.getByText("needs_human").className).toContain("verdict-needs_human");
-    expect(screen.getByText("false_positive").className).toContain("verdict-false_positive");
-    expect(screen.getByText("triaged")).toBeTruthy();
-    expect(screen.getByText("pending")).toBeTruthy();
+    const tp = screen.getByText("True positive");
+    expect(tp.className).toContain("verdict-true_positive");
+    expect(tp.getAttribute("title")).toBe("true_positive");
+    expect(screen.getByText("Needs human").className).toContain("verdict-needs_human");
+    expect(screen.getByText("False positive").className).toContain("verdict-false_positive");
+    expect(screen.getByText("Triaged")).toBeTruthy();
+    expect(screen.getByText("Pending")).toBeTruthy();
     expect(container.querySelector("td button")).toBeNull();
+  });
+  it("shows each severity once when floor equals final and an arrow when they differ", () => {
+    const same: IncidentListItem = { ...base, id: 10, title: "same", severity_floor: 4, severity_id: 4, severity_floor_name: "High", severity_name: "High", ai_status: "pending", verdict: null, event_count: 1, has_injection: false };
+    const raised: IncidentListItem = { ...same, id: 11, title: "raised" };
+    raised.severity_id = 5;
+    raised.severity_name = "Critical";
+    const { container } = render(
+      <IncidentList items={[same, raised]} total={2} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} />,
+    );
+    const raisedRow = screen.getByText("raised").closest("tr")?.textContent ?? "";
+    expect(raisedRow).toContain("High");
+    expect(raisedRow).toContain("Critical");
+    expect(raisedRow).toContain("→");
+    const sameRow = screen.getByText("same").closest("tr")?.textContent ?? "";
+    expect(sameRow).toContain("High");
+    expect(sameRow).not.toContain("→");
+    expect(container.querySelector(".cell-sev")?.getAttribute("title")).toContain("High (4)");
+  });
+  it("pluralizes the event count", () => {
+    const one: IncidentListItem = { ...base, id: 20, title: "one", event_count: 1, ai_status: "pending", verdict: null };
+    render(<IncidentList items={[one, { ...one, id: 21, title: "many", event_count: 41 }]} total={2} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} />);
+    expect(screen.getByText(/1 event ·/)).toBeTruthy();
+    expect(screen.getByText(/41 events ·/)).toBeTruthy();
   });
 
   it("renders rows as keyboard-focusable links with link-styled titles", () => {
@@ -277,7 +303,7 @@ describe("App routing and filters", () => {
 });
 
 describe("IncidentView readability and guards", () => {
-  it("shows tool arguments as a key/value list and the full result collapsed as text", () => {
+  it("renders each tool call as a sentence with the raw call collapsed as text", () => {
     const longResult = `${PAYLOAD}\n${"x".repeat(5000)}`;
     const withLong: IncidentDetail = {
       ...detail,
@@ -287,12 +313,29 @@ describe("IncidentView readability and guards", () => {
     };
     const { container } = render(<IncidentView detail={withLong} />);
     expect(screen.getByText("As seen by the cloud model (pseudonymized).")).toBeTruthy();
-    expect(Array.from(container.querySelectorAll("dl.args dt")).some((dt) => dt.textContent === "q")).toBe(true);
+    expect(screen.getByText(/Asked for events/)).toBeTruthy();
+    expect(screen.getByText("12 tokens")).toBeTruthy();
     expect(screen.getByText("Full result (text only)")).toBeTruthy();
     expect(screen.getByText(/Result truncated to 4000 characters/)).toBeTruthy();
     expect(screen.getAllByText(PAYLOAD).length).toBeGreaterThan(0);
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("script")).toBeNull();
+  });
+  it("builds the get_events sentence from host, window and limit in order", () => {
+    const p = (n: number) => String(n).padStart(2, "0");
+    const start = new Date(2026, 9, 30, 2, 49, 0);
+    const end = new Date(2026, 9, 30, 3, 23, 0);
+    const clock = (d: Date) => `${p(d.getHours())}:${p(d.getMinutes())}`;
+    const withArgs: IncidentDetail = {
+      ...detail,
+      agent_trace: [
+        { step: 1, tool: "get_events", arguments: { host: "HOST-0001", start: start.toISOString(), end: end.toISOString(), limit: 50 }, result_summary: "returned 50 events", tokens: 9 },
+        { step: 2, tool: "get_attack_technique", arguments: { id: "T1059" }, result_summary: "Command and Scripting Interpreter", tokens: 3 },
+      ],
+    };
+    render(<IncidentView detail={withArgs} />);
+    expect(screen.getByText(new RegExp(`Asked for events on HOST-0001, ${clock(start)} to ${clock(end)}, up to 50 → 50 returned, limit reached; more events may exist`))).toBeTruthy();
+    expect(screen.getByText(/Looked up technique T1059 → Command and Scripting Interpreter/)).toBeTruthy();
   });
 
   it("shows severity factors as a readable list with raw JSON collapsed", () => {
@@ -308,6 +351,9 @@ describe("IncidentView readability and guards", () => {
         }}
       />,
     );
+    expect(screen.getByText("Attack stage").closest("li")?.getAttribute("title")).toBe("factor_1_attack_stage");
+    expect(screen.getByText("Breadth").closest("li")?.textContent).toContain("Not applied");
+    expect(screen.getByText("Success vs attempt").closest("li")?.textContent).toContain("Applied");
     expect(screen.getAllByText(/sets the base to 3/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/adds nothing/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Raw severity factors/)).toBeTruthy();
@@ -315,13 +361,13 @@ describe("IncidentView readability and guards", () => {
 
   it("shows the unverified reasoning heading only when stored text exists", () => {
     const { rerender } = render(<IncidentView detail={detail} />);
-    expect(screen.getByText("Unverified reasoning")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Unverified reasoning" })).toBeTruthy();
     rerender(<IncidentView detail={{ ...detail, reasoning_unverified: null }} />);
-    expect(screen.queryByText("Unverified reasoning")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Unverified reasoning" })).toBeNull();
     rerender(
       <IncidentView detail={{ ...detail, reasoning_unverified: { text: "   ", unverified: true } }} />,
     );
-    expect(screen.queryByText("Unverified reasoning")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Unverified reasoning" })).toBeNull();
   });
 });
 
@@ -338,15 +384,37 @@ describe("stat tiles name the field they count", () => {
     };
     const { container } = render(<IncidentView detail={fixture} />);
     const tiles = container.querySelector(".stat-tiles");
-    expect(tiles?.textContent).toContain("cited events (evidence)");
+    expect(tiles?.textContent).toContain("Cited events");
+    expect(tiles?.textContent).toContain("Cited events found");
+    expect(tiles?.textContent).toContain("Injection signals");
+    expect(tiles?.textContent).toContain("Model spend");
     expect(tiles?.textContent).toContain("511");
-    expect(tiles?.textContent).toContain("events (event_count)");
+    expect(tiles?.textContent).not.toContain("event_count");
+    expect(tiles?.textContent).not.toContain("evidence)");
     expect(tiles?.textContent).not.toContain("findings");
-    const citedTile = Array.from(container.querySelectorAll(".stat-tiles li")).find((li) => li.textContent?.includes("cited events"));
-    expect(citedTile?.querySelector("strong")?.textContent).toBe("2");
+    const citedTile = Array.from(container.querySelectorAll(".stat-tiles li")).find((li) => li.textContent?.includes("Cited events found"));
+    expect(citedTile?.querySelector("strong")?.textContent).toBe("1 of 1");
     expect(container.querySelector(".hero-meta")).toBeNull();
     expect(container.querySelectorAll(".gauge .sev-scale")).toHaveLength(1);
     expect(container.querySelector(".gauge-segs")).toBeNull();
+  });
+  it("shows model spend with three decimals and the exact figure in the title", () => {
+    const fixture: IncidentDetail = { ...detail, spend_total_usd: 0.098765 };
+    const { container } = render(<IncidentView detail={fixture} />);
+    const tiles = Array.from(container.querySelectorAll(".stat-tiles li"));
+    const spend = tiles.find((li) => li.textContent?.includes("Model spend"));
+    expect(spend?.querySelector("strong")?.textContent).toBe("$0.099");
+    expect(spend?.querySelector("strong")?.getAttribute("title")).toBe("0.098765");
+  });
+  it("shows the resolved chip only with stored support and keeps the note collapsed", () => {
+    const resolved: IncidentDetail = { ...detail, pseudonym_resolution: { resolved: true, note: "Tokens resolved." } };
+    const { rerender } = render(<IncidentView detail={resolved} />);
+    expect(screen.getByText("Pseudonyms resolved on-prem")).toBeTruthy();
+    expect(screen.getByText("Privacy details")).toBeTruthy();
+    expect(screen.queryByText("Tokens resolved.")).toBeNull();
+    rerender(<IncidentView detail={{ ...detail, pseudonym_resolution: { resolved: false, note: "Nothing resolved." } }} />);
+    expect(screen.queryByText("Pseudonyms resolved on-prem")).toBeNull();
+    expect(screen.getByText("Privacy details")).toBeTruthy();
   });
 
   it("clamps a one-paragraph 1300-character triage summary with an expanded toggle", () => {
@@ -438,6 +506,20 @@ describe("model attempt outcomes use real outcome strings", () => {
     const sr = Array.from(container.querySelectorAll(".sr-only")).map((e) => e.textContent ?? "");
     expect(sr.some((t) => t.includes("weird_new_outcome") && t.includes("invalid"))).toBe(false);
   });
+  it("labels attempt outcomes in words with the raw codes in the title", () => {
+    render(<IncidentView detail={attemptsDetail} />);
+    const finals = screen.getAllByText("Final answer");
+    expect(finals).toHaveLength(2);
+    expect(finals.map((e) => e.getAttribute("title"))).toEqual(["ok · not measured", "accepted · not measured"]);
+    expect(screen.getByText("Requested events").getAttribute("title")).toBe("tool_calls · not measured");
+    expect(screen.getByText("Quarantined").getAttribute("title")).toBe("quarantined · not measured");
+    expect(screen.getByText("Invalid: schema").getAttribute("title")).toBe("invalid · not measured (failed validator: schema)");
+    expect(screen.getByText("weird_new_outcome")).toBeTruthy();
+  });
+  it("labels a valid exact-ids outcome distinctly from a final answer", () => {
+    render(<IncidentView detail={{ ...attemptsDetail, llm_attempts: [{ purpose: "analysis", model: "m", attempt_number: 1, outcome: "ok", token_source: "exact_ids", tokens: 1 }] }} />);
+    expect(screen.getByText("Valid, exact ids").getAttribute("title")).toBe("ok · exact_ids");
+  });
 });
 
 describe("failed and quarantined incidents never show pending", () => {
@@ -460,15 +542,34 @@ describe("failed and quarantined incidents never show pending", () => {
         onSelect={() => undefined}
       />,
     );
-    expect(screen.getByText("failed").className).toContain("failed");
-    expect(screen.getByText("pending").className).toContain("pending");
+    expect(screen.getByText("Failed").className).toContain("failed");
+    expect(screen.getByText("Pending").className).toContain("pending");
     const failedCell = screen.getByText("failed one").closest("tr")?.textContent ?? "";
-    expect(failedCell).toContain("failed");
-    expect(failedCell).not.toContain("pending");
+    expect(failedCell).toContain("Failed");
+    expect(failedCell).not.toContain("Pending");
     const summary = container.querySelector(".summary-count")?.textContent ?? "";
     expect(summary).toContain("3 incidents");
     expect(summary).toContain("1 analyzed");
     expect(verdictKind(null, "failed")).toBe("failed");
+  });
+
+  it("shows quarantined in the list from the stored flag, like the detail card", () => {
+    const quar: IncidentListItem = { ...base, id: 14, title: "quar one", verdict: null, ai_status: "failed", analyzed: false, has_injection: true, quarantined: true };
+    const plain: IncidentListItem = { ...base, id: 15, title: "plain failed", verdict: null, ai_status: "failed", analyzed: true, has_injection: false, quarantined: false };
+    const { container } = render(
+      <IncidentList
+        items={[quar, plain]}
+        total={2}
+        page={0}
+        setPage={() => undefined}
+        pageSize={20}
+        onSelect={() => undefined}
+      />,
+    );
+    expect(screen.getByText("Quarantined").className).toContain("quarantined");
+    expect(screen.getByText("Failed")).toBeTruthy();
+    const summary = container.querySelector(".summary-count")?.textContent ?? "";
+    expect(summary).not.toContain("NaN");
   });
 
   it("shows failed in the summary card for ai_status failed with no verdict", () => {
@@ -478,8 +579,8 @@ describe("failed and quarantined incidents never show pending", () => {
     };
     const { container } = render(<IncidentView detail={failedDetail} />);
     const badges = container.querySelector(".hero-badges")?.textContent ?? "";
-    expect(badges).toContain("failed");
-    expect(badges).not.toContain("pending");
+    expect(badges).toContain("Failed");
+    expect(badges).not.toContain("Pending");
   });
 
   it("shows quarantined in the card when the stored attempts hold a quarantined triage", () => {
@@ -492,14 +593,15 @@ describe("failed and quarantined incidents never show pending", () => {
     };
     const { container } = render(<IncidentView detail={qDetail} />);
     const badges = container.querySelector(".hero-badges")?.textContent ?? "";
-    expect(badges).toContain("quarantined");
-    expect(badges).not.toContain("pending");
+    expect(badges).toContain("Quarantined");
+    expect(badges).not.toContain("Pending");
     expect(verdictKind(null, "failed", qDetail.llm_attempts)).toBe("quarantined");
+    expect(verdictKind(null, "failed", null, true)).toBe("quarantined");
   });
 
   it("renders failed and quarantined badges with their own classes via VerdictBadge", () => {
     const { rerender } = render(<VerdictBadge verdict={null} aiStatus="failed" />);
-    expect(screen.getByText("failed").className).toContain("failed");
+    expect(screen.getByText("Failed").className).toContain("failed");
     rerender(
       <VerdictBadge
         verdict={null}
@@ -507,7 +609,7 @@ describe("failed and quarantined incidents never show pending", () => {
         attempts={[{ purpose: "triage", outcome: "quarantined" }]}
       />,
     );
-    expect(screen.getByText("quarantined").className).toContain("quarantined");
+    expect(screen.getByText("Quarantined").className).toContain("quarantined");
   });
 });
 

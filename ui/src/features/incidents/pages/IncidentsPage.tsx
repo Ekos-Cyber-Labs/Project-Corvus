@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { buildDetailHash, buildListHash, parseHash, type ListFilters } from "../../../lib/hash";
+import { listQuarantined } from "../utils/incidents";
 import { useIncidents } from "../hooks/useIncidents";
 import { IncidentFilterBar } from "../components/IncidentFilterBar";
 import { IncidentList } from "../components/IncidentList";
@@ -28,7 +29,7 @@ export function IncidentsPage() {
   const pageSize = 20;
   const { items, total, state } = useIncidents(filters, pageSize, retryNonce);
   const shown = useMemo(() => items.filter((it) => {
-    if (filters.quarantined === true && !it.has_injection) return false;
+    if (filters.quarantined === true && !listQuarantined(it)) return false;
     if (!matchesQuery(it.title, it.id, filters.q ?? "")) return false;
     return true;
   }), [items, filters.q, filters.quarantined]);

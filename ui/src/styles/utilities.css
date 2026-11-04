@@ -51,13 +51,18 @@ th, td { text-align:left; padding:.55rem .5rem; border-bottom:1px solid var(--li
 .banner h3 { margin-top:0; }
 .banner p { margin-bottom:0; }
 nav[aria-label="Sections"] { font-size:1rem; }
-nav[aria-label="Sections"] a { font-weight:600; }
-nav[aria-label="Sections"] a[aria-current="page"] { text-decoration:underline; text-underline-offset:4px; }
+nav[aria-label="Sections"] a { font-weight:600; text-decoration:none; }
+nav[aria-label="Sections"] a[aria-current="page"] { text-decoration:none; }
+nav[aria-label="Sections"] a:hover { background:var(--panel2); }
 .table-wrap { overflow-x:auto; }
 tr.rowlink { cursor:pointer; }
 tr.rowlink:hover td { background:var(--panel2); }
 tr.rowlink.selected td { background:var(--row-selected); color:var(--text); }
-a.title-link { font-weight:600; }
+a.title-link { font-weight:600; color:var(--text); text-decoration:none; }
+a.title-link:hover, a.title-link:focus-visible { text-decoration:underline; text-underline-offset:3px; }
+table a, .panel a, .card a { text-decoration:none; }
+table a:hover, table a:focus-visible, .panel a:hover, .panel a:focus-visible, .card a:hover, .card a:focus-visible { text-decoration:underline; text-underline-offset:3px; }
+table.incidents td.cell-id, table.incidents td.cell-sev, table.incidents td.cell-verdict, table.incidents td.cell-events { width:1%; white-space:nowrap; }
 .filterbar { display:flex; flex-wrap:wrap; gap:.75rem; align-items:end; margin:.5rem 0 1rem; }
 .filterbar label { display:flex; flex-direction:column; gap:.25rem; font-size:.9rem; }
 .filterbar select, .section-select select { font:inherit; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:.45rem .6rem; max-width:100%; }

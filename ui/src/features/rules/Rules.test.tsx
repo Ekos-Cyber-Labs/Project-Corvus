@@ -1,4 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { PRESENTATION_STORAGE_KEY, PresentationProvider } from "../../app/providers";
+import { resetMaskedIpMapping } from "../../lib/maskPublicIps";
 // @ts-ignore: node core types are intentionally not installed (no new deps)
 import { readFileSync } from "node:fs";
 // @ts-ignore: node core types are intentionally not installed (no new deps)
@@ -15,6 +18,7 @@ import { RuleDetailView } from "./components/RuleDetail";
 import { RuleFilterBar } from "./components/RuleFilterBar";
 import { RuleModeBadge } from "./components/RuleModeBadge";
 import { RuleStatusBadge } from "./components/RuleStatusBadge";
+import { LifecycleBar } from "./components/LifecycleBar";
 import { RulesBanner } from "./components/RulesBanner";
 import { RulesList } from "./components/RulesList";
 import { backtestCodesText, ruleAltersAlertsText, ruleCountLine } from "./utils/rules";
@@ -66,6 +70,7 @@ const evilDetail: RuleDetail = {
       target_total: 1,
       baseline_count: 0,
       group: "corvus_sigma",
+      sigma_sha256: "abc123",
     },
     rounds_used: 2,
     model: "muse-spark-1.3",
@@ -164,7 +169,7 @@ describe("RuleDetailView renders untrusted text as text only", () => {
     const code = container.querySelector("pre code");
     expect(code?.textContent).toContain(IMG);
     expect(code?.textContent).toContain(JS_URL);
-    expect(screen.getByText("Copy")).toBeTruthy();
+    expect(screen.getAllByText("Copy")).toHaveLength(2);
     expect(screen.getByText("stored")).toBeTruthy();
     expect(screen.getAllByText(/backtest/).length).toBeGreaterThan(0);
     const incidentLink = screen.getByRole("link", { name: /Fired/ });
@@ -206,7 +211,7 @@ describe("incident learned-rule badges", () => {
     verdict: "true_positive",
   };
 
-  it("links a learned rule distinctly from shipped findings", () => {
+  it("links a learned rule distinctly and hides unresolved placeholders", () => {
     const { container } = render(
       <IncidentView
         detail={{
@@ -223,8 +228,15 @@ describe("incident learned-rule badges", () => {
     expect(badge.getAttribute("href")).toBe("#/rules/7");
     expect(badge.className).toContain("learned-rule");
     expect(badge.className).toContain("learned-shadow");
-    expect(screen.getByText("unknown learned rule (unresolved)").className).toContain("learned-unknown");
+    expect(screen.queryByText("unknown learned rule (unresolved)")).toBeNull();
+    expect(screen.queryByText("No learned rule matched this incident.")).toBeNull();
     expectInert(container);
+  });
+
+  it("says when no learned rule matched instead of raw placeholders", () => {
+    render(<IncidentView detail={{ ...base, learned_rules: [{ unknown: true }, { rule_db_id: null }] }} />);
+    expect(screen.getByText("No learned rule matched this incident.")).toBeTruthy();
+    expect(screen.queryByText("unknown learned rule (unresolved)")).toBeNull();
   });
 
   it("renders nothing without learned refs", () => {
@@ -452,10 +464,11 @@ describe("badge color contrast", () => {
 
 describe("part 2 rules polish", () => {
   it("count line comes from the loaded items", () => {
-    expect(ruleCountLine([evilItem], 1)).toContain("1 rules: 1 shadow");
+    expect(ruleCountLine([evilItem], 1)).toBe("1 rule: 1 shadow rule, 0 candidate rules, 0 active rules, 0 archived rules, 0 rolled back rules");
+    expect(ruleCountLine([evilItem], 2)).toBe("2 rules: 1 shadow rule, 0 candidate rules, 0 active rules, 0 archived rules, 0 rolled back rules (status counts from this page, n=1)");
     expect(ruleCountLine([evilItem, { ...evilItem, id: 10, status: "candidate" }], 5)).toContain("(status counts from this page, n=2)");
     render(<RulesList items={[evilItem]} total={1} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} />);
-    expect(screen.getByText(/1 rules: 1 shadow/)).toBeTruthy();
+    expect(screen.getByText(/1 rule: 1 shadow rule/)).toBeTruthy();
   });
 
   it("list cards carry an id, a status chip and a from-incident line", () => {
@@ -465,35 +478,37 @@ describe("part 2 rules polish", () => {
     expect(container.querySelector("a")?.getAttribute("href")).toBe("#/rules/9");
   });
 
-  it("summary card, does-line, lifecycle history and backtest table render from the payload", () => {
+  it("summary card, does-line, lifecycle history, tiles and bars render from the payload", () => {
     const { container } = render(<RuleDetailView detail={evilDetail} />);
     expect(screen.getByText(/What this rule does: shadow — it does not alter alerts/)).toBeTruthy();
-    expect(screen.getByText("Last transition approver")).toBeTruthy();
+    expect(screen.getByText("Approved by")).toBeTruthy();
     expect(screen.getByText("Lifecycle history")).toBeTruthy();
     expect(container.textContent).toContain("shadow");
-    expect(container.querySelector(".backtest-table")?.textContent).toContain("Target events matched");
-    expect(container.querySelector(".backtest-table")?.textContent).toContain("not recorded");
+    expect(container.textContent).toContain("baseline size not recorded");
     expect(container.textContent).toContain("1 (n=1)");
+    expect(container.querySelector(".backtest-table")).toBeNull();
     expect(screen.getByLabelText(/Target events matched: 1 matches of n=1/)).toBeTruthy();
     const source = screen.getByRole("link", { name: /Source/ });
     expect(source.getAttribute("href")).toBe("#/incidents/4");
     expectInert(container);
   });
 
-  it("lineage grid keeps each fact once, without repeating the header chips", () => {
-    const { container } = render(<RuleDetailView detail={evilDetail} />);
-    const terms = Array.from(container.querySelectorAll(".lineage-grid dt")).map((dt) => dt.textContent);
-    expect(terms).not.toContain("Name");
-    expect(terms).not.toContain("Status");
-    expect(terms).not.toContain("Mode");
-    expect(terms).not.toContain("Version");
-    expect(terms).toContain("Native rule id");
-    expect(terms).toContain("Group");
-    expect(terms).toContain("Last transition approver");
-    expect(terms).toContain("Last transition date");
-    expect(terms).toContain("Hits");
-    expect(terms).toContain("False positives");
-    expect(terms).toContain("Source incident id");
+  it("lineage shows only the review facts and keeps the rest in technical details", () => {
+    const dated: RuleDetail = { ...evilDetail, updated_at: "2026-11-02T00:00:00Z", deployed_at: "2026-11-03T00:00:00Z" };
+    const { container } = render(<RuleDetailView detail={dated} />);
+    const lineageSection = screen.getByLabelText("Lineage", { selector: "section" });
+    const lineageTerms = Array.from(lineageSection.querySelectorAll(":scope > dl.lineage-grid dt")).map((dt) => dt.textContent);
+    for (const term of ["Source incident", "Cited events", "Rounds used", "Model", "Approved by", "Created"]) {
+      expect(lineageTerms).toContain(term);
+    }
+    for (const term of ["Name", "Status", "Mode", "Version", "Native rule id", "Hits", "False positives", "Accepted backtest", "sigma_sha256", "ledger_ids", "sigma_rule_id"]) {
+      expect(lineageTerms).not.toContain(term);
+    }
+    const technical = screen.getByText("Technical details").closest("details");
+    const technicalTerms = Array.from(technical?.querySelectorAll("dt") ?? []).map((dt) => dt.textContent);
+    for (const term of ["sigma_sha256", "Codes", "Group", "ledger_ids", "sigma_rule_id", "Native rule id", "Hits", "False positives", "Prompt version", "Accepted backtest", "Source incident id", "Updated"]) {
+      expect(technicalTerms).toContain(term);
+    }
     expect(container.querySelector("h2")?.textContent).toBe(evilDetail.title);
     expect(container.querySelector(".hero-badges")?.textContent).toContain("shadow");
     expect(container.querySelector(".hero-badges")?.textContent).toContain("v2");
@@ -518,7 +533,8 @@ describe("part 2 rules polish", () => {
     const { container: bare } = render(<RuleDetailView detail={noCodes} />);
     expect(screen.getAllByText("no codes recorded").length).toBeGreaterThan(0);
     expect(bare.textContent).not.toMatch(/\bnull\b/);
-    expect(bare.querySelector(".backtest-table")?.textContent).toContain("Target events matched");
+    expect(bare.querySelector(".backtest-table")).toBeNull();
+    expect(bare.textContent).toContain("Target events matched");
   });
 
   it("does-line follows mode and status without inventing payload fields", () => {
@@ -531,9 +547,67 @@ describe("part 2 rules polish", () => {
     expect(backtestFigures({ target_matched: ["a", "b"], target_total: 7, baseline_count: 3 })).toEqual({ matched: 2, targetTotal: 7, baselineCount: 3, baselineTotal: null });
     const { container } = render(<BacktestBars backtest={{ target_matched: ["a"], target_total: 4, baseline_count: 2 }} />);
     expect(container.textContent).toContain("1 (n=4)");
-    expect(container.textContent).toContain("2 (n=not recorded)");
+    expect(container.textContent).toContain("2 (baseline size not recorded)");
   });
 
+  it("shows the exact read-only approve command only for promotable rules", () => {
+    const candidate: RuleDetail = { ...evilDetail, status: "candidate", mode: null };
+    const { unmount } = render(<RuleDetailView detail={candidate} />);
+    expect(screen.getByText("Next step")).toBeTruthy();
+    expect(screen.getByText('corvus rules approve 9 --to shadow --approver <name> --reason "<why>"')).toBeTruthy();
+    expect(screen.getByText("A human approves every step. The console never changes a rule.")).toBeTruthy();
+    unmount();
+    render(<RuleDetailView detail={evilDetail} />);
+    expect(screen.getByText('corvus rules approve 9 --to active --approver <name> --reason "<why>"')).toBeTruthy();
+  });
+  it("shows no next step once a rule left the promotable stages", () => {
+    render(<RuleDetailView detail={{ ...evilDetail, status: "active", mode: "active" }} />);
+    expect(screen.queryByText("Next step")).toBeNull();
+  });
+  it("copies the next-step command with the clipboard button", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const candidate: RuleDetail = { ...evilDetail, status: "candidate", mode: null };
+    render(<RuleDetailView detail={candidate} />);
+    fireEvent.click(screen.getAllByText("Copy")[0]);
+    await waitFor(() => { expect(writeText).toHaveBeenCalledWith('corvus rules approve 9 --to shadow --approver <name> --reason "<why>"'); });
+  });
+  it("copies exact sigma text when presentation mode is off and masked text when on", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const ipDetail: RuleDetail = { ...evilDetail, status: "active", mode: "active", sigma_text: "title: edge\ndescription: dial 8.8.8.8\n" };
+    localStorage.removeItem(PRESENTATION_STORAGE_KEY);
+    resetMaskedIpMapping();
+    const { unmount } = render(<MemoryRouter><PresentationProvider><RuleDetailView detail={ipDetail} /></PresentationProvider></MemoryRouter>);
+    fireEvent.click(screen.getByText("Copy"));
+    await waitFor(() => { expect(writeText).toHaveBeenCalledWith(ipDetail.sigma_text); });
+    unmount();
+    writeText.mockClear();
+    localStorage.setItem(PRESENTATION_STORAGE_KEY, "true");
+    resetMaskedIpMapping();
+    render(<MemoryRouter><PresentationProvider><RuleDetailView detail={ipDetail} /></PresentationProvider></MemoryRouter>);
+    fireEvent.click(screen.getByText("Copy"));
+    await waitFor(() => { expect(writeText).toHaveBeenCalledTimes(1); });
+    const copied = String(writeText.mock.calls[0][0]);
+    expect(copied).not.toContain("8.8.8.8");
+    expect(copied).toContain("198.51.100.");
+    localStorage.removeItem(PRESENTATION_STORAGE_KEY);
+    resetMaskedIpMapping();
+  });
+  it("counts a single candidate in Proposed only and marks its stage", async () => {
+    vi.stubGlobal("fetch", async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("status=candidate")) return { ok: true, status: 200, json: async () => ({ items: [], total: 1 }) };
+      if (url.includes("/api/rules")) return { ok: true, status: 200, json: async () => ({ items: [], total: 0 }) };
+      return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+    });
+    render(<LifecycleBar nonce={0} sideStatus="candidate" />);
+    expect(await screen.findByText("Proposed 1 (current)")).toBeTruthy();
+    expect(screen.getByText("Backtested 0")).toBeTruthy();
+    expect(screen.getByText("Shadow 0")).toBeTruthy();
+    expect(screen.getByText("Active 0")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
   it("stepper marks the current side state with its transition date", () => {
     const { container } = render(<LifecycleStepper status="rolled_back" transitions={[{ from: "active", to: "rolled_back", approver: "op", reason: "bad", at: "2026-11-01T00:00:00Z" }]} />);
     expect(container.querySelector(".lc-current")?.textContent).toContain("rolled_back");

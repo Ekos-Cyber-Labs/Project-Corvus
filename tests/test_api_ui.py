@@ -320,6 +320,41 @@ def test_list_filters_verdict_analyzed_min_floor(
     assert [item["id"] for item in combo["items"]] == [nh]
 
 
+def test_list_marks_quarantined_triage(
+    api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    quarantined_id = _seed_filter_row(
+        api_db,
+        "q-quar",
+        floor=4,
+        verdict=None,
+        analysis_verdict=None,
+    )
+    plain_id = _seed_filter_row(
+        api_db, "q-plain", floor=4, verdict=None, analysis_verdict=None
+    )
+    with psycopg.connect(api_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO llm_attempts (call_id, incident_id, model,"
+                " purpose, attempt_number, outcome)"
+                " VALUES ('call-q',%s,'glimmer','triage',1,'quarantined')",
+                (quarantined_id,),
+            )
+            cur.execute(
+                "INSERT INTO llm_attempts (call_id, incident_id, model,"
+                " purpose, attempt_number, outcome)"
+                " VALUES ('call-ok',%s,'glimmer','triage',1,'ok')",
+                (plain_id,),
+            )
+        conn.commit()
+    client = _client(api_db, monkeypatch)
+    body = client.get("/api/incidents").json()
+    flags = {item["id"]: item["quarantined"] for item in body["items"]}
+    assert flags[quarantined_id] is True
+    assert flags[plain_id] is False
+
+
 def test_list_default_sort_analyzed_floor_id(
     api_db: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -2,7 +2,7 @@ export type IncidentListItem = {
   id: number; title: string; severity_floor: number; severity_floor_name?: string | null;
   severity_id: number; severity_name?: string | null; ai_status: string; verdict?: string | null;
   first_seen?: string | null; last_seen?: string | null; event_count: number; has_injection: boolean;
-  analyzed?: boolean | null;
+  analyzed?: boolean | null; quarantined?: boolean | null;
 };
 export type LearnedRuleRef = {
   rule_db_id?: number | null; sigma_rule_id?: string | null; version?: number | null;

@@ -50,14 +50,14 @@ export function SettingsPage() {
                 <span className={sweep?.running ? pageStyles.dotRun : sweep?.last ? pageStyles.dotPause : pageStyles.dotNone} aria-hidden="true" />
                 {sweep?.running ? "Running" : sweep?.last ? "Paused" : "Not detected"}
               </p>
-              <dl className={pageStyles.grid}>
-                <div><dt>Poll interval</dt><dd className={pageStyles.ro}>{typeof settings.sweep_policy.policy?.interval_seconds === "number" ? `${settings.sweep_policy.policy.interval_seconds}s` : "not recorded"}</dd></div>
-                <div><dt>Analyze when floor is at least</dt><dd className={pageStyles.ro}>{typeof settings.sweep_policy.policy?.min_floor === "number" ? (FLOOR_NAMES[settings.sweep_policy.policy.min_floor] ?? settings.sweep_policy.policy.min_floor) : "not recorded"}</dd></div>
-                <div><dt>Max analyses per sweep</dt><dd className={pageStyles.ro}>{typeof settings.sweep_policy.policy?.max_analyses === "number" ? settings.sweep_policy.policy.max_analyses : "not recorded"}</dd></div>
-                <div><dt>Spend cap</dt><dd className={pageStyles.ro}>{typeof settings.spend_cap_usd === "number" ? `$${settings.spend_cap_usd}` : "not measured"}</dd></div>
+              <dl className={pageStyles.defList}>
+                <div><dt>Poll interval</dt><dd>{typeof settings.sweep_policy.policy?.interval_seconds === "number" ? `${settings.sweep_policy.policy.interval_seconds} s` : "not recorded"}</dd></div>
+                <div><dt>Analyze when floor is at least</dt><dd title={typeof settings.sweep_policy.policy?.min_floor === "number" ? String(settings.sweep_policy.policy.min_floor) : undefined}>{typeof settings.sweep_policy.policy?.min_floor === "number" ? (FLOOR_NAMES[settings.sweep_policy.policy.min_floor] ?? settings.sweep_policy.policy.min_floor) : "not recorded"}</dd></div>
+                <div><dt>Max analyses per sweep</dt><dd>{typeof settings.sweep_policy.policy?.max_analyses === "number" ? settings.sweep_policy.policy.max_analyses : "not recorded"}</dd></div>
+                <div><dt>Spend cap</dt><dd>{typeof settings.spend_cap_usd === "number" ? `$${settings.spend_cap_usd}` : "not measured"}</dd></div>
+                <div><dt>Injection signals always analyzed</dt><dd>{settings.sweep_policy.policy?.always_analyze_injection !== false ? "Yes" : "No"}</dd></div>
               </dl>
               <p className="muted">Set with corvus sweep flags or SWEEP_* environment variables</p>
-              <p><label><input type="checkbox" disabled checked={settings.sweep_policy.policy?.always_analyze_injection !== false} /> Always analyze incidents with an injection signal</label></p>
               <p className="muted">Anything below the threshold stays pending and can be analyzed by hand. When the spend cap is reached the sweep keeps collecting but stops analyzing.</p>
             </section>
             <section className="panel" aria-label="Connections">
@@ -65,8 +65,8 @@ export function SettingsPage() {
               <ul className={pageStyles.conns}>
                 {settings.connections.map((c) => (
                   <li key={c.name}>
-                    <span>{CONNECTION_LABELS[c.name]?.title ?? c.name}</span>
-                    <span className="mono">{mask(c.address ?? "not configured")}</span>
+                    <span>{CONNECTION_LABELS[c.name]?.title ?? c.name} <span className="mono muted" title={mask(`payload name: ${c.name}`)}>{mask(c.name)}</span></span>
+                    <span className="mono">{c.address ? mask(c.address) : "—"}</span>
                     <span className={connectionClass(c.state)}>{connectionText(c.state)}</span>
                   </li>
                 ))}
