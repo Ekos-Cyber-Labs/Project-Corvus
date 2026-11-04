@@ -365,7 +365,7 @@ describe("stat tiles name the field they count", () => {
     expect(container.querySelector(".triage-text")?.textContent).toBe(summary);
   });
 
-  it("clusters activity markers within 6 px into a count badge with ticks and a legend", () => {
+  it("clusters activity markers within 24 px into a count badge with ticks and a legend", () => {
     const clustered: IncidentDetail = {
       ...detail,
       first_seen: "2026-10-30T00:00:00Z",
@@ -389,9 +389,9 @@ describe("stat tiles name the field they count", () => {
     expect(screen.getByText(/A dot is one timeline claim/)).toBeTruthy();
     expect(screen.getByText(/break symbol means a gap/)).toBeTruthy();
     const ticks = Array.from(container.querySelectorAll(".svg-tick")).map((t) => t.textContent);
-    expect(ticks).toHaveLength(5);
-    expect(ticks[0]).toContain("2026-10-30 00:00:00");
-    expect(ticks[4]).toContain("2026-10-30 10:00:00");
+    expect(ticks).toHaveLength(6);
+    for (const tick of ticks) expect(tick).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    expect(container.querySelector("figcaption")?.textContent).toContain("2026-10-30");
   });
 });
 

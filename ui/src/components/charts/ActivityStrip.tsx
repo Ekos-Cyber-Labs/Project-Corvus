@@ -1,16 +1,10 @@
 import { TACTIC_NAMES, tacticForTechnique } from "../../lib/attackMap";
+import { useContainerWidth } from "../../lib/useContainerWidth";
 import activityStyles from "./ActivityStrip.module.css";
-export type TimelineEntry = { time: string; event_uid: string; description: string };
+import { layoutTimeline } from "./timelineLayout";
+import { clusterPositions } from "./timelineLayout";
 
-function parseMs(t: string): number { const n = Date.parse(t); return Number.isFinite(n) ? n : NaN; }
-function median(xs: number[]): number { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
-function fmtDur(ms: number): string {
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s gap`;
-  if (s < 3600) return `${Math.round(s / 60)}m gap`;
-  if (s < 86400) return `${(s / 3600).toFixed(1)}h gap`;
-  return `${(s / 86400).toFixed(1)}d gap`;
-}
+export type TimelineEntry = { time: string; event_uid: string; description: string };
 
 export function eventTactic(uid: string, evidence: { event_uid: string; event?: unknown }[] | undefined, techniques: { id: string }[] | undefined): string {
   const ev = evidence?.find((e) => e.event_uid === uid);
@@ -30,73 +24,64 @@ export const TACTIC_FILL: Record<string, string> = {
   "command-and-control": "var(--tactic-command-and-control)", exfiltration: "var(--tactic-exfiltration)", impact: "var(--tactic-impact)", other: "var(--tactic-other)",
 };
 
-function fmtTick(ms: number): string {
-  const d = new Date(ms);
-  return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 19).replace("T", " ") : "";
-}
 export type ActivityCluster = { indices: number[]; x: number };
-export function clusterIndices(xs: number[], threshold = 6): ActivityCluster[] {
-  const clusters: ActivityCluster[] = [];
-  xs.forEach((x, i) => {
-    const last = clusters[clusters.length - 1];
-    if (last && x - last.x <= threshold) last.indices.push(i);
-    else clusters.push({ indices: [i], x });
-  });
-  return clusters;
+export function clusterIndices(xs: number[], threshold = 24): ActivityCluster[] {
+  return clusterPositions(xs, threshold);
 }
+
 export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evidence, highlighted, onHighlight, onJump }: {
   timeline: TimelineEntry[]; firstSeen?: string | null; lastSeen?: string | null;
   techniques?: { id: string }[]; evidence?: { event_uid: string; event?: unknown }[];
   highlighted: number | null; onHighlight: (i: number | null) => void; onJump?: (i: number) => void;
 }) {
+  const [figureRef, containerWidth] = useContainerWidth<HTMLElement>(720);
   if (!timeline.length) return null;
-  const times = timeline.map((e) => parseMs(e.time));
-  const valid = times.filter(Number.isFinite);
-  const start = Math.min(...(firstSeen && Number.isFinite(parseMs(firstSeen)) ? [parseMs(firstSeen)] : []), ...valid);
-  const end = Math.max(...(lastSeen && Number.isFinite(parseMs(lastSeen)) ? [parseMs(lastSeen)] : []), ...valid);
-  const span = Math.max(1, end - start);
-  const gaps: number[] = [];
-  for (let i = 1; i < times.length; i++) if (Number.isFinite(times[i]) && Number.isFinite(times[i - 1])) gaps.push(times[i] - times[i - 1]);
-  const med = median(gaps.filter((g) => g > 0));
-  const W = 720; const H = 84;
-  const xFor = (t: number) => 8 + ((t - start) / span) * (W - 16);
-  const xs = times.map((t) => (Number.isFinite(t) ? xFor(t) : NaN));
-  const finiteIdx = xs.map((x, i) => ({ x, i })).filter((p) => Number.isFinite(p.x));
-  const clusters = clusterIndices(finiteIdx.map((p) => p.x)).map((c) => ({ x: c.x, indices: c.indices.map((k) => finiteIdx[k].i) }));
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => ({ ms: start + span * f, x: 8 + f * (W - 16) }));
+  const width = Math.max(320, containerWidth);
+  const layout = layoutTimeline(timeline, width, firstSeen, lastSeen);
   const presentTactics = Array.from(new Set(timeline.map((e) => eventTactic(e.event_uid, evidence, techniques))));
+  const captionParts: string[] = [];
+  if (layout.dateLabel) captionParts.push(`Activity on ${layout.dateLabel} (UTC)`);
+  captionParts.push(`${timeline.length} timeline claims`);
+  if (layout.marks.length) captionParts.push(`from ${timeline[layout.validIndices[0]].time} to ${timeline[layout.validIndices[layout.validIndices.length - 1]].time}`);
+  if (layout.outsideFirstSeen && firstSeen) captionParts.push(`incident first_seen ${firstSeen} lies outside the displayed axis range`);
+  if (layout.outsideLastSeen && lastSeen) captionParts.push(`incident last_seen ${lastSeen} lies outside the displayed axis range`);
+  if (layout.skippedIndices.length) captionParts.push(`${layout.skippedIndices.length} claims with invalid timestamps were skipped`);
+  const caption = `${captionParts.join(", ")}.`;
   return (
-    <figure className={`activity ${activityStyles.activityRoot}`}>
-      <figcaption className="sr-only">Activity from {firstSeen ?? timeline[0].time} to {lastSeen ?? timeline[timeline.length - 1].time} with {timeline.length} timeline claims.</figcaption>
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Activity strip: ${timeline.length} claims between ${timeline[0].time} and ${timeline[timeline.length - 1].time}`} className="activity-svg">
-        <line x1="8" y1="30" x2={W - 8} y2="30" stroke="currentColor" opacity="0.35" />
-        {ticks.map((tick, i) => (
+    <figure ref={figureRef} className={`activity ${activityStyles.activityRoot}`}>
+      <figcaption className="sr-only">{caption}</figcaption>
+      <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} role="img" aria-label={`Activity strip: ${timeline.length} claims between ${timeline[0].time} and ${timeline[timeline.length - 1].time}`} className={`activity-svg ${activityStyles.svg}`}>
+        <line x1="14" y1={layout.axisY} x2={layout.width - 14} y2={layout.axisY} stroke="currentColor" opacity="0.35" />
+        {layout.ticks.map((tick, i) => (
           <g key={i}>
-            <line x1={tick.x} y1="24" x2={tick.x} y2="36" stroke="currentColor" opacity="0.5" />
-            <text x={tick.x} y="50" textAnchor={i === 0 ? "start" : i === ticks.length - 1 ? "end" : "middle"} className="svg-tick">{fmtTick(tick.ms)}</text>
+            <line x1={tick.x} y1={layout.axisY - 6} x2={tick.x} y2={layout.axisY + 6} stroke="currentColor" opacity="0.5" />
+            <text x={tick.x} y="70" textAnchor={tick.anchor} className={`svg-tick ${activityStyles.tick}`}>{tick.label}</text>
           </g>
         ))}
-        {clusters.map((cluster) => {
-          const first = cluster.indices[0];
+        {layout.breaks.map((brk, i) => (
+          <g key={`break-${i}`}>
+            {brk.showSymbol ? (<><line x1={brk.x - 5} y1={brk.y2} x2={brk.x - 1} y2={brk.y1} stroke="currentColor" opacity="0.6" /><line x1={brk.x + 1} y1={brk.y2} x2={brk.x + 5} y2={brk.y1} stroke="currentColor" opacity="0.6" /></>) : null}
+            <text x={brk.labelX} y={brk.labelY} textAnchor="middle" className={`svg-gap ${activityStyles.gap}`}>{brk.label}</text>
+          </g>
+        ))}
+        {layout.marks.map((mark) => {
+          const first = mark.indices[0];
           const e = timeline[first];
-          const t = times[first];
           const tac = eventTactic(e.event_uid, evidence, techniques);
-          const isBreak = first > 0 && med > 0 && Number.isFinite(times[first - 1]) && (t - times[first - 1]) > med * 5;
-          const isCluster = cluster.indices.length > 1;
+          const isCluster = mark.kind === "cluster";
           return (
             <g key={first}>
-              {isBreak ? (<><line x1={cluster.x - 6} y1="14" x2={cluster.x - 2} y2="46" stroke="currentColor" opacity="0.6" /><line x1={cluster.x - 2} y1="14" x2={cluster.x + 2} y2="46" stroke="currentColor" opacity="0.6" /><text x={cluster.x} y="64" textAnchor="middle" className="svg-gap">{fmtDur(t - times[first - 1])}</text></>) : null}
               {isCluster ? (
-                <g tabIndex={0} role="button" aria-label={`${cluster.indices.length} claims clustered at ${e.time}. Jump to the first of them: claim ${first + 1}, ${e.description}, event ${e.event_uid}`}
+                <g tabIndex={0} role="button" aria-label={`${mark.indices.length} claims clustered at ${e.time}. Jump to the first of them: claim ${first + 1}, ${e.description}, event ${e.event_uid}`}
                   onMouseEnter={() => onHighlight(first)} onMouseLeave={() => onHighlight(null)}
                   onFocus={() => onHighlight(first)} onBlur={() => onHighlight(null)}
                   onClick={() => onJump?.(first)}
                   onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); onJump?.(first); } }}>
-                  <circle cx={cluster.x} cy="30" r="10" style={{ fill: TACTIC_FILL[tac] ?? TACTIC_FILL.other }} stroke={highlighted !== null && cluster.indices.includes(highlighted) ? "currentColor" : "none"} strokeWidth="2" />
-                  <text x={cluster.x} y="34" textAnchor="middle" className="svg-count">{cluster.indices.length}</text>
+                  <circle cx={mark.x} cy={mark.y} r={mark.r} style={{ fill: TACTIC_FILL[tac] ?? TACTIC_FILL.other }} stroke={highlighted !== null && mark.indices.includes(highlighted) ? "currentColor" : "none"} strokeWidth="2" />
+                  <text x={mark.x} y={mark.y + 3} textAnchor="middle" className={`svg-count ${activityStyles.count}`}>{mark.indices.length}</text>
                 </g>
               ) : (
-                <circle cx={cluster.x} cy="30" r={highlighted === first ? 7 : 5} style={{ fill: TACTIC_FILL[tac] ?? TACTIC_FILL.other }} stroke={highlighted === first ? "currentColor" : "none"} strokeWidth="2"
+                <circle cx={mark.x} cy={mark.y} r={mark.r} style={{ fill: TACTIC_FILL[tac] ?? TACTIC_FILL.other }} stroke={highlighted === first ? "currentColor" : "none"} strokeWidth="2"
                   tabIndex={0} role="button" aria-label={`Claim ${first + 1}: ${e.description} at ${e.time}, event ${e.event_uid}${tac !== "other" ? `, tactic ${TACTIC_NAMES[tac] ?? tac}` : ", neutral: no technique tied"}`}
                   onMouseEnter={() => onHighlight(first)} onMouseLeave={() => onHighlight(null)}
                   onFocus={() => onHighlight(first)} onBlur={() => onHighlight(null)} />
@@ -105,9 +90,9 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
           );
         })}
       </svg>
-      <ul className="activity-legend">
-        <li><span className="legend-dot" aria-hidden="true" /> A dot is one timeline claim at its timestamp; a numbered badge is several claims within 6 px, and activating it jumps to the first of them.</li>
-        <li><span aria-hidden="true">// </span>The break symbol means a gap longer than five times the median gap between claims; its duration is printed under it.</li>
+      <ul className={`activity-legend ${activityStyles.legend}`}>
+        <li><span className="legend-dot" aria-hidden="true" /> A dot is one timeline claim at its timestamp; claims closer than 24 px are grouped into a numbered badge; activate it to jump to the first of them.</li>
+        <li><svg className={activityStyles.breakIcon} width="18" height="16" viewBox="0 0 18 16" aria-hidden="true" focusable="false"><line x1="4" y1="15" x2="8" y2="1" stroke="currentColor" strokeWidth="1.5" /><line x1="10" y1="15" x2="14" y2="1" stroke="currentColor" strokeWidth="1.5" /></svg> The break symbol means a gap longer than five times the median gap between claims; its duration is printed above the axis.</li>
         <li>Color means the ATT&amp;CK tactic of the technique tied to that claim&apos;s event; <span className="legend-dot legend-neutral" aria-hidden="true" /> neutral: no technique tied.</li>
         {presentTactics.filter((t) => t !== "other").map((t) => (
           <li key={t}><span className="legend-dot" style={{ background: TACTIC_FILL[t] }} aria-hidden="true" /> {TACTIC_NAMES[t] ?? t}</li>
