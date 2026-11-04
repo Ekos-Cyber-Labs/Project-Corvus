@@ -259,6 +259,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Analyses per cycle, at most (default: 5, env SWEEP_MAX_ANALYSES, 0..50).",
     )
     sweep.add_argument(
+        "--triage-workers",
+        type=int,
+        default=None,
+        help="Concurrent analysis threads per cycle "
+        "(default: 4, env SWEEP_TRIAGE_WORKERS, 1..16; 1 is sequential).",
+    )
+    sweep.add_argument(
         "--always-analyze-injection",
         dest="always_analyze_injection",
         action="store_true",
@@ -1047,6 +1054,7 @@ def main(argv: list[str] | None = None) -> int:
                 spend_cap_usd=args.spend_cap_usd,
                 lang=args.lang,
                 interval_seconds=args.interval,
+                triage_workers=args.triage_workers,
             )
         except ValueError as exc:
             parser.error(str(exc))

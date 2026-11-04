@@ -476,9 +476,21 @@ or model inputs. Details: `datasets/README.md`.
   `SWEEP_ALWAYS_INJECTION`; ranked floor-first, capped at
   `SWEEP_MAX_ANALYSES` per cycle; past `SPEND_CAP_USD` everything is
   `skipped_budget`). Selection runs the Glimmer triage worker then
-  `run_analysis` exactly as `corvus analyze` does; one incident's
-  failure never stops the cycle, resolved analyses are never re-run,
+  `run_analysis` exactly as `corvus analyze` does, on a
+  `ThreadPoolExecutor` with `SWEEP_TRIAGE_WORKERS` threads (default 4,
+  1..16; 1 is sequential): decisions and submission order stay
+  deterministic, only completion order varies, each task opens its
+  own database connections, re-checks recorded spend plus a per-task
+  spend hold right before its model calls (a task finding the cap
+  reached calls no model and is recorded `skipped_budget`, bounding
+  overshoot to one hold), and one task's exception never cancels the
+  others. One incident's failure never stops the cycle, resolved
+  analyses are never re-run, a `busy` claim is recorded
+  `skipped_policy`/`already_running` instead of analyzed twice,
   and one Postgres advisory lock keeps two sweeps from overlapping.
+  SIGINT/SIGTERM stop submitting new tasks while running ones finish
+  within a bounded grace time, and the cycle log line prints elapsed
+  seconds and the worker count.
   Sweep rows (`sweep_runs` plus per-incident `sweep_decisions`,
   migration `0013_sweep_runs.sql`) carry counts and the effective
   policy only — no credentials, raw events, or model text — and three

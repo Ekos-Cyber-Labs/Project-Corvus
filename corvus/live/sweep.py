@@ -8,9 +8,10 @@ Every N seconds (default 300) one cycle runs:
 2. selection of the incidents this cycle created or grew whose
    ``ai_status`` is still ``pending``;
 3. a pure per-incident policy decision (:func:`decide`);
-4. sequential analysis of the chosen incidents through the exact code
+4. concurrent analysis of the chosen incidents through the exact code
    path ``corvus analyze`` uses (triage worker, then the Spark agent
-   loop), one failure never stopping the cycle;
+   loop) on a ``ThreadPoolExecutor`` with ``triage_workers`` threads,
+   one failure never stopping the cycle;
 5. the sweep row plus one decision row per candidate.
 
 Nothing is deleted. Incidents the policy skips stay ``pending`` and
@@ -22,8 +23,11 @@ from __future__ import annotations
 
 import os
 import signal
+import threading
 import time
+from collections import deque
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -58,6 +62,17 @@ FLOOR_NAMES = {2: "low", 3: "medium", 4: "high", 5: "critical"}
 DEFAULT_INTERVAL_SECONDS = 300.0
 DEFAULT_MIN_FLOOR = "high"
 DEFAULT_MAX_ANALYSES = 5
+DEFAULT_TRIAGE_WORKERS = 4
+MIN_TRIAGE_WORKERS = 1
+MAX_TRIAGE_WORKERS = 16
+
+#: Seconds of grace for in-flight tasks after a stop request before
+#: the cycle records and returns; running threads are never killed.
+STOP_GRACE_SECONDS = 600.0
+
+#: Fallback per-task spend reservation (USD) when no backend resolves
+#: (tests with fake runners monkeypatch :func:`_task_reservation_usd`).
+DEFAULT_TASK_RESERVATION_USD = 0.05
 
 
 @dataclass(frozen=True)
@@ -70,6 +85,7 @@ class SweepPolicy:
     spend_cap_usd: float = 100.0
     lang: str = "en"
     interval_seconds: float = 300.0
+    triage_workers: int = 4
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-serializable form stored on the sweep row."""
@@ -100,12 +116,13 @@ def effective_policy(
     spend_cap_usd: float | None = None,
     lang: str | None = None,
     interval_seconds: float | None = None,
+    triage_workers: int | None = None,
 ) -> SweepPolicy:
     """Resolve flag > env > default (``SWEEP_*`` env, ``SPEND_CAP_USD`` cap).
 
     Raises :class:`ValueError` with a clear message for any invalid
     value (unknown level, interval < 30, max analyses outside 0..50,
-    bad lang, negative cap).
+    bad lang, negative cap, workers outside 1..16).
     """
 
     level_raw = (
@@ -190,6 +207,25 @@ def effective_policy(
     ):
         raise ValueError(f"interval must be >= 30 seconds, got {interval!r}")
 
+    if triage_workers is not None:
+        workers = triage_workers
+    else:
+        raw_workers = _env("SWEEP_TRIAGE_WORKERS")
+        if raw_workers is None:
+            workers = DEFAULT_TRIAGE_WORKERS
+        else:
+            try:
+                workers = int(raw_workers)
+            except ValueError:
+                raise ValueError(
+                    "SWEEP_TRIAGE_WORKERS must be an integer 1..16,"
+                    f" got {raw_workers!r}"
+                ) from None
+    if isinstance(workers, bool) or not isinstance(workers, int):
+        raise ValueError(f"triage_workers must be an integer 1..16, got {workers!r}")
+    if workers < MIN_TRIAGE_WORKERS or workers > MAX_TRIAGE_WORKERS:
+        raise ValueError(f"triage_workers must be 1..16, got {workers!r}")
+
     return SweepPolicy(
         min_floor=LEVEL_TO_FLOOR[level_key],
         max_analyses=max_n,
@@ -197,6 +233,7 @@ def effective_policy(
         spend_cap_usd=float(cap),
         lang=lang_raw,
         interval_seconds=float(interval),
+        triage_workers=workers,
     )
 
 
@@ -398,6 +435,38 @@ def _record_sweep_end(
         conn.commit()
 
 
+def _task_reservation_usd() -> float:
+    """Worst-case USD of one sweep task (triage attempt plus analysis).
+
+    Sums the single-attempt worst case of the serving triage and
+    analysis backends under the price book, so the per-task hold
+    covers the most one task can spend. Falls back to
+    ``DEFAULT_TASK_RESERVATION_USD`` when no backend resolves (fake
+    runners in tests); tests needing an exact bound monkeypatch this
+    function. Only the returned amount is used, never model text.
+    """
+    try:
+        from corvus.llm.config import get_backend
+        from corvus.llm.price_book import cost_usd, load_price_book
+
+        prices = load_price_book()
+        total = 0.0
+        for purpose in ("triage", "analysis"):
+            backend = get_backend(purpose)
+            total += cost_usd(
+                prices,
+                backend.model,
+                backend.max_input_tokens,
+                0,
+                backend.max_output_tokens,
+            )
+        if total > 0.0:
+            return float(total)
+    except Exception:
+        pass
+    return DEFAULT_TASK_RESERVATION_USD
+
+
 def _analyze_one(
     database_url: str,
     incident_id: int,
@@ -409,21 +478,30 @@ def _analyze_one(
 ) -> str:
     """Run one incident through the ``corvus analyze`` path; return outcome.
 
-    Returns the analysis outcome status (``resolved`` and friends) or a
+    Returns the analysis outcome status (``resolved`` and friends),
+    ``busy`` when another worker holds the incident's job (the caller
+    records it skipped, never analyzed twice), or a
     ``backend_unavailable:<Class>`` / ``failed:<Class>`` marker. Never
     raises for per-incident failures: the sweep records and continues.
+    Only the exception class name is recorded, never the message.
     """
     from corvus.llm.agent import TriageMissingError
 
     try:
         if triage_runner is not None:
-            triage_runner(database_url, incident_id, replay_dir=replay_dir)
+            triage_status = triage_runner(
+                database_url, incident_id, replay_dir=replay_dir
+            )
         else:
             from corvus.llm.triage_worker import process_incident_triage
 
-            process_incident_triage(database_url, incident_id, replay_dir=replay_dir)
+            triage_status = process_incident_triage(
+                database_url, incident_id, replay_dir=replay_dir
+            )
     except Exception as exc:
         return f"failed:{type(exc).__name__}"
+    if triage_status == "busy":
+        return "busy"
     try:
         if analysis_runner is not None:
             outcome = analysis_runner(
@@ -450,6 +528,91 @@ def _analyze_one(
         return f"failed:{type(exc).__name__}"
 
 
+def _can_submit(
+    pending: deque[Candidate],
+    inflight: dict[Future[tuple[str, str, str]], Candidate],
+    workers: int,
+    stop_event: threading.Event,
+) -> bool:
+    """True when another task may be submitted this turn."""
+    return bool(pending) and len(inflight) < workers and not stop_event.is_set()
+
+
+def _install_cycle_stop_handlers(stop: threading.Event) -> dict[int, Any]:
+    """Point SIGINT/SIGTERM at ``stop``; return the previous handlers."""
+
+    def _handle(signum: int, _frame: object) -> None:
+        stop.set()
+
+    return {sig: signal.signal(sig, _handle) for sig in (signal.SIGINT, signal.SIGTERM)}
+
+
+def _run_guarded_task(
+    database_url: str,
+    candidate: Candidate,
+    policy: SweepPolicy,
+    replay_dir: str | Path,
+    reservation_usd: float,
+    triage_runner: Callable[..., str] | None,
+    analysis_runner: Callable[..., Any] | None,
+) -> tuple[str, str, str]:
+    """Run one selected incident; return ``(decision, reason, bucket)``.
+
+    The bucket is ``analyzed``, ``failed``, ``skipped_budget`` or
+    ``skipped_policy``. Never raises: every failure path returns
+    ``failed`` with the exception class only. Each task opens its own
+    database connections (nothing shared is mutated), re-checks the
+    recorded spend plus a spend reservation right before any model
+    call, and re-checks that the incident is still unanalyzed.
+    """
+    from corvus.llm.spend import (
+        BudgetExceededError,
+        release_reservation,
+        reserve,
+        spent_usd,
+    )
+
+    try:
+        try:
+            spent = spent_usd(database_url)
+        except Exception:
+            spent = 0.0
+        if spent >= policy.spend_cap_usd:
+            return ("skipped_budget", "over_spend_cap", "skipped_budget")
+        if _already_analyzed(database_url, candidate.incident_id):
+            return ("skipped_policy", "already_analyzed", "skipped_policy")
+        try:
+            reservation = reserve(
+                reservation_usd,
+                database_url=database_url,
+                cap_usd=policy.spend_cap_usd,
+                ttl_seconds=STOP_GRACE_SECONDS + 300.0,
+            )
+        except BudgetExceededError:
+            return ("skipped_budget", "over_spend_cap", "skipped_budget")
+        try:
+            result = _analyze_one(
+                database_url,
+                candidate.incident_id,
+                policy.lang,
+                replay_dir,
+                triage_runner=triage_runner,
+                analysis_runner=analysis_runner,
+            )
+        finally:
+            try:
+                release_reservation(reservation.id, database_url)
+            except Exception:
+                pass
+        if result == "resolved":
+            return ("analyze", "selected", "analyzed")
+        if result == "busy":
+            return ("skipped_policy", "already_running", "skipped_policy")
+        return ("analyze", "selected", "failed")
+    except Exception:
+        return ("analyze", "selected", "failed")
+
+
 def sweep_once(
     *,
     database_url: str,
@@ -466,6 +629,8 @@ def sweep_once(
     with_archives: bool = False,
     archives_limit: int = 200,
     now_ms: int | None = None,
+    stop_event: threading.Event | None = None,
+    stop_grace_seconds: float = STOP_GRACE_SECONDS,
 ) -> dict[str, Any]:
     """Run one sweep cycle; return the recorded counts.
 
@@ -475,12 +640,82 @@ def sweep_once(
     ``resolved``; ``failed_analyses`` counts the rest; attempts
     (``analyzed + failed_analyses``) drive ``max_analyses``.
 
+    The cycle is (a) poll, (b) deterministic selection, (c) the
+    selected incidents through a ``ThreadPoolExecutor`` with
+    ``policy.triage_workers`` threads (``1`` runs them one at a time,
+    exactly like the old sequential loop), (d) collection as tasks
+    finish, (e) decisions and counters recorded at the end. Decisions
+    and submission order stay deterministic (floor descending, event
+    count descending); only completion order varies.
+
     Raises the poll exception after recording a failed sweep row, so
     the loop can log one redacted line and continue. Per-incident
     analysis failures are recorded, never raised. Any other exception
     after the start record also ends the row as ``failed`` with the
     exception class name, so no exit path leaves it ``running``.
+    SIGINT/SIGTERM (or ``stop_event``) stop submitting new tasks,
+    let running ones finish within ``stop_grace_seconds``, and end
+    the row ``ok`` (``error_code`` ``"stopped"``) when nothing else
+    failed. The advisory lock stays held by the calling thread.
     """
+    cycle_started = time.monotonic()
+    if stop_event is None:
+        stop_event = threading.Event()
+        old_handlers: dict[int, Any] | None = None
+        if threading.current_thread() is threading.main_thread():
+            old_handlers = _install_cycle_stop_handlers(stop_event)
+    else:
+        old_handlers = None
+    try:
+        return _sweep_once_inner(
+            database_url=database_url,
+            store_dir=store_dir,
+            replay_dir=replay_dir,
+            policy=policy,
+            adapter_factory=adapter_factory,
+            triage_runner=triage_runner,
+            analysis_runner=analysis_runner,
+            attack_path=attack_path,
+            page_size=page_size,
+            max_docs=max_docs,
+            since_ms=since_ms,
+            with_archives=with_archives,
+            archives_limit=archives_limit,
+            now_ms=now_ms,
+            stop_event=stop_event,
+            stop_grace_seconds=stop_grace_seconds,
+            cycle_started=cycle_started,
+        )
+    finally:
+        if old_handlers is not None:
+            for sig, handler in old_handlers.items():
+                try:
+                    signal.signal(sig, handler)
+                except Exception:
+                    pass
+
+
+def _sweep_once_inner(
+    *,
+    database_url: str,
+    store_dir: str | Path,
+    replay_dir: str | Path | None,
+    policy: SweepPolicy,
+    adapter_factory: Callable[[], Any] | None,
+    triage_runner: Callable[..., str] | None,
+    analysis_runner: Callable[..., Any] | None,
+    attack_path: str | Path,
+    page_size: int,
+    max_docs: int,
+    since_ms: int | None,
+    with_archives: bool,
+    archives_limit: int,
+    now_ms: int | None,
+    stop_event: threading.Event,
+    stop_grace_seconds: float,
+    cycle_started: float,
+) -> dict[str, Any]:
+    """Poll, select, run the task pool, and record (see :func:`sweep_once`)."""
     from corvus.llm.spend import spent_usd
 
     sweep_run_id = _record_sweep_start(database_url, policy)
@@ -492,6 +727,7 @@ def sweep_once(
     adapter: Any = None
     analyzed = failed = skipped_policy = skipped_budget = attempts = 0
     candidates: list[Candidate] = []
+    stopped_early = False
     try:
         before = _snapshot_incidents(database_url)
         adapter = (
@@ -513,6 +749,7 @@ def sweep_once(
         )
         candidates = _pending_candidates(database_url, before)
         decisions: list[tuple[int, str, str]] = []
+        to_run: list[Candidate] = []
         for candidate in candidates:
             if _already_analyzed(database_url, candidate.incident_id):
                 decisions.append(
@@ -533,25 +770,103 @@ def sweep_once(
                     skipped_policy += 1
                 continue
             attempts += 1
-            result = _analyze_one(
-                database_url,
-                candidate.incident_id,
-                policy.lang,
-                effective_replay,
-                adapter_factory=adapter_factory,
-                triage_runner=triage_runner,
-                analysis_runner=analysis_runner,
+            to_run.append(candidate)
+        reservation_usd = _task_reservation_usd()
+        outcomes: dict[int, tuple[str, str, str]] = {}
+        workers = max(1, policy.triage_workers)
+        if to_run:
+            executor = ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="sweep-task"
             )
-            if result == "resolved":
+            try:
+                pending: deque[Candidate] = deque(to_run)
+                inflight: dict[Future[tuple[str, str, str]], Candidate] = {}
+                stop_deadline: float | None = None
+                while pending or inflight:
+                    while _can_submit(pending, inflight, workers, stop_event):
+                        cand = pending.popleft()
+                        fut = executor.submit(
+                            _run_guarded_task,
+                            database_url,
+                            cand,
+                            policy,
+                            effective_replay,
+                            reservation_usd,
+                            triage_runner,
+                            analysis_runner,
+                        )
+                        inflight[fut] = cand
+                    if stop_event.is_set() and stop_deadline is None:
+                        stop_deadline = time.monotonic() + stop_grace_seconds
+                        stopped_early = True
+                    if not inflight:
+                        break
+                    if stop_deadline is not None:
+                        remaining = stop_deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        done, _ = wait(
+                            set(inflight),
+                            timeout=min(0.2, remaining),
+                            return_when=FIRST_COMPLETED,
+                        )
+                    else:
+                        done, _ = wait(
+                            set(inflight),
+                            timeout=0.2,
+                            return_when=FIRST_COMPLETED,
+                        )
+                    for fut in done:
+                        cand = inflight.pop(fut)
+                        try:
+                            outcomes[cand.incident_id] = fut.result()
+                        except Exception:
+                            outcomes[cand.incident_id] = (
+                                "analyze",
+                                "selected",
+                                "failed",
+                            )
+                dec_idx = {d[0]: i for i, d in enumerate(decisions)}
+                for cand in pending:
+                    decisions[dec_idx[cand.incident_id]] = (
+                        cand.incident_id,
+                        "skipped_policy",
+                        "cycle_stopped",
+                    )
+                    skipped_policy += 1
+                for _fut, cand in inflight.items():
+                    if cand.incident_id not in outcomes:
+                        outcomes[cand.incident_id] = (
+                            "analyze",
+                            "selected",
+                            "failed",
+                        )
+            finally:
+                if stop_deadline is not None and inflight_remaining(executor):
+                    executor.shutdown(wait=False, cancel_futures=False)
+                else:
+                    executor.shutdown(wait=True)
+        for cand in to_run:
+            outcome = outcomes.get(cand.incident_id)
+            if outcome is None:
+                continue
+            bucket = outcome[2]
+            idx = next(i for i, d in enumerate(decisions) if d[0] == cand.incident_id)
+            decisions[idx] = (cand.incident_id, outcome[0], outcome[1])
+            if bucket == "analyzed":
                 analyzed += 1
-            else:
+            elif bucket == "failed":
                 failed += 1
+            elif bucket == "skipped_budget":
+                skipped_budget += 1
+            else:
+                skipped_policy += 1
         _record_decisions(database_url, sweep_run_id, decisions)
         _record_sweep_end(
             database_url,
             sweep_run_id,
             "ok",
-            "",
+            "stopped" if stopped_early else "",
             analyzed,
             failed,
             skipped_policy,
@@ -590,7 +905,21 @@ def sweep_once(
         "failed_analyses": failed,
         "skipped_policy": skipped_policy,
         "skipped_budget": skipped_budget,
+        "elapsed_seconds": time.monotonic() - cycle_started,
+        "triage_workers": max(1, policy.triage_workers),
+        "stopped_early": stopped_early,
     }
+
+
+def inflight_remaining(executor: ThreadPoolExecutor) -> bool:
+    """True when the executor may still have threads doing work."""
+    try:
+        work_queue = getattr(executor, "_work_queue", None)
+        threads: set[Any] = getattr(executor, "_threads", set())
+        alive = any(t.is_alive() for t in set(threads))
+        return bool(alive or (work_queue is not None and work_queue.qsize() > 0))
+    except Exception:
+        return True
 
 
 def _default_adapter(database_url: str) -> Any:
@@ -672,15 +1001,20 @@ def run_sweep_loop(
     from corvus.guardrails.egress import redact
 
     stop = stop_flag if stop_flag is not None else [False]
+    cycle_events: list[threading.Event] = []
 
     def _request_stop(signum: int, frame: object) -> None:
         stop[0] = True
+        for event in list(cycle_events):
+            event.set()
 
     old_int = signal.signal(signal.SIGINT, _request_stop)
     old_term = signal.signal(signal.SIGTERM, _request_stop)
     try:
         while True:
             started = time.monotonic()
+            cycle_stop = threading.Event()
+            cycle_events.append(cycle_stop)
             try:
                 summary = sweep_once(
                     database_url=database_url,
@@ -694,6 +1028,7 @@ def run_sweep_loop(
                     since_ms=since_ms,
                     with_archives=with_archives,
                     archives_limit=archives_limit,
+                    stop_event=cycle_stop,
                 )
             except ValueError:
                 raise
@@ -703,6 +1038,11 @@ def run_sweep_loop(
                     return 1
                 _interruptible_sleep(policy.interval_seconds, stop)
                 continue
+            finally:
+                try:
+                    cycle_events.remove(cycle_stop)
+                except ValueError:
+                    pass
             attempted = int(summary["analyzed"]) + int(summary["failed_analyses"])
             print(
                 f"sweep cycle: candidates={summary['candidates']}"
@@ -711,10 +1051,12 @@ def run_sweep_loop(
                 f" failed={summary['failed_analyses']}"
                 f" skipped_policy={summary['skipped_policy']}"
                 f" skipped_budget={summary['skipped_budget']}"
+                f" elapsed={float(summary.get('elapsed_seconds', 0.0)):.1f}s"
+                f" workers={policy.triage_workers}"
             )
             if on_cycle is not None:
                 on_cycle(summary)
-            if once or stop[0]:
+            if once or stop[0] or bool(summary.get("stopped_early")):
                 return 0
             elapsed = time.monotonic() - started
             _interruptible_sleep(max(0.0, policy.interval_seconds - elapsed), stop)
