@@ -531,6 +531,16 @@ Only public datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) or lab-genera
 
 All product code in this repo has been written since Oct 26, 2026, for the Meta Global AI Developer Hackathon. The commit history shows what was built when.
 
+## Disclaimer and responsible use
+
+1. Corvus is provided under AGPL-3.0 «as is», without warranty of any kind, as stated in sections 15 and 16 of [LICENSE](LICENSE).
+2. It is a decision-support tool: model output (verdicts, severity, response plans, learned rules) can be wrong or incomplete and must be reviewed by a qualified person before any action; Corvus never changes a Wazuh rule or an alert by itself, and every learned rule needs human approval and starts in shadow mode.
+3. Use it only on systems and data you own or are authorized to monitor; authorization, privacy, and data-protection obligations (including what you send to a cloud model, even pseudonymized) are the operator's responsibility.
+4. It is not a substitute for a managed security service, incident response retainer, or compliance program; ATT&CK, OCSF, and Sigma content is third-party material under the notices in [NOTICE](NOTICE).
+5. The project was built during the Meta Global AI Developer Hackathon (2026); results in this README come from public datasets and a synthetic lab and say nothing about performance in other environments.
+
 ## License
+
+Copyright (c) 2026 Ekos Cyber Labs, LLC. Licensed under AGPL-3.0.
 
 AGPL-3.0 (see [LICENSE](LICENSE)). Third-party notices: [NOTICE](NOTICE) (MITRE ATT&CK, SigmaHQ rules, OCSF schema).
