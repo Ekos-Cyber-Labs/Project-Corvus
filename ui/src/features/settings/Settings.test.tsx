@@ -48,8 +48,11 @@ describe("SettingsPage", () => {
     expect(screen.getByText("Unreachable")).toBeTruthy();
     expect(screen.getAllByText("Connected").length).toBe(2);
     expect(screen.getAllByText("Not configured")).toHaveLength(1);
-    expect(screen.getByText("triage_model")).toBeTruthy();
-    expect(screen.getByText("reasoning_model")).toBeTruthy();
+    expect(screen.queryByText("triage_model")).toBeNull();
+    expect(screen.queryByText("wazuh_indexer")).toBeNull();
+    expect(container.querySelector('[title="triage_model"]')?.textContent).toBe("Triage model (on-prem)");
+    expect(container.querySelector('[title="wazuh_indexer"]')?.textContent).toBe("Wazuh indexer");
+    expect(screen.getByText("Start the SSH tunnel or check the address; see docs/wazuh.md")).toBeTruthy();
     expect(screen.getByText(/pseudonymized on-prem/)).toBeTruthy();
     expect(screen.getByText(/Shadow rules never change alerts/)).toBeTruthy();
     expect(screen.getByText(/rendered as plain text/)).toBeTruthy();

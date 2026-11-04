@@ -5,6 +5,7 @@
 .count { font-size: 11px; font-weight: 700; fill: var(--ink-on-fill); pointer-events: none; }
 .legend { list-style: none; display: grid; gap: 0.25rem; padding: 0; margin: 0.4rem 0 0; font-size: var(--text-sm); color: var(--muted); }
 .legend li { min-height: 1.25rem; }
+.tz { margin: 0.4rem 0 0; font-size: var(--text-sm); }
 .breakIcon { display: inline-block; vertical-align: middle; margin-right: 0.3rem; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   .svg * { transition: none; animation: none; }

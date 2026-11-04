@@ -38,6 +38,10 @@ export function verdictLabel(kind: string | null | undefined): string {
   if (!kind) return "Pending";
   return VERDICT_LABELS[kind] ?? kind;
 }
+export function recentChip(row: { verdict?: string | null; verdict_kind: string }): { text: string; className: string } {
+  if (typeof row.verdict === "string" && VERDICT_LABELS[row.verdict]) return verdictChip(row.verdict);
+  return verdictChip(row.verdict_kind);
+}
 export function verdictChip(kind: string): { text: string; className: string } {
   if (kind === "true_positive" || kind === "verdict") return { text: kind === "verdict" ? "Verdict" : "True positive", className: "dash-verdict-tp" };
   if (kind === "benign_authorized" || kind === "false_positive") return { text: kind === "benign_authorized" ? "Benign" : "False positive", className: "dash-verdict-benign" };

@@ -81,7 +81,14 @@ export function formatGapLabel(ms: number): string {
   return `${(s / 86400).toFixed(1)}d gap`;
 }
 function timeLabel(ms: number): string {
-  return new Date(ms).toISOString().slice(11, 19);
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function localDate(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 export function clusterPositions(xs: number[], threshold = CLUSTER_DISTANCE_PX): { indices: number[]; x: number }[] {
   const groups: { indices: number[]; xs: number[]; lastX: number }[] = [];
@@ -225,7 +232,7 @@ export function layoutTimeline(claims: TimelineClaimInput[], width: number, firs
     clusters: marks.filter((m) => m.kind === "cluster"),
     ticks,
     breaks,
-    dateLabel: new Date(minMs).toISOString().slice(0, 10),
+    dateLabel: localDate(minMs),
     validIndices: entries.map((e) => e.index),
     skippedIndices,
     outsideFirstSeen: Number.isFinite(firstMs) && (firstMs < axisStartMs || firstMs > axisEndMs),

@@ -63,7 +63,7 @@ export type DashboardSweepMarker = {
   analyzed: number; failed_analyses: number; skipped_policy: number; skipped_budget: number;
 };
 export type DashboardRecent = {
-  id: number; title: string; final_severity: number; verdict_kind: string; analyzed_at: string | null;
+  id: number; title: string; final_severity: number; verdict_kind: string; verdict?: string | null; analyzed_at: string | null;
 };
 export type Dashboard = {
   totals: DashboardTotals; spend: { total_usd: number | null; cap_usd: number | null };

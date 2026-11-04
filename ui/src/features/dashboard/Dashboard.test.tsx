@@ -14,8 +14,8 @@ function dashboard(over: Partial<Dashboard> = {}): Dashboard {
     window: { start: "2026-11-01T00:00:00Z", end: "2026-11-02T00:00:00Z", anchored_to: "now" },
     sweep_runs: [{ id: 3, started_at: "2026-11-02T05:00:00Z", finished_at: "2026-11-02T05:01:00Z", status: "ok", analyzed: 5, failed_analyses: 0, skipped_policy: 2, skipped_budget: 0 }],
     recent: [
-      { id: 11, title: "recent one", final_severity: 5, verdict_kind: "verdict", analyzed_at: "2026-11-02T05:02:00Z" },
-      { id: 12, title: HOSTILE, final_severity: 4, verdict_kind: "quarantined", analyzed_at: "2026-11-02T05:03:00Z" },
+      { id: 11, title: "recent one", final_severity: 5, verdict_kind: "verdict", verdict: "true_positive", analyzed_at: "2026-11-02T05:02:00Z" },
+      { id: 12, title: HOSTILE, final_severity: 4, verdict_kind: "quarantined", verdict: null, analyzed_at: "2026-11-02T05:03:00Z" },
     ],
     ...over,
   };
@@ -177,6 +177,37 @@ describe("sidebar sweep countdown", () => {
     expect(screen.getByText(/Last sweep/)).toBeTruthy();
   });
 });
+describe("severity distribution scaling", () => {
+  afterEach(() => { vi.unstubAllGlobals(); window.location.hash = "#/"; });
+  it("scales the four levels to their own max with Informational separate", async () => {
+    const base = dashboard();
+    const d = dashboard({
+      totals: { ...base.totals, by_severity: { critical: 5, high: 6, medium: 0, low: 2, informational: 162 } },
+    });
+    const calls: string[] = [];
+    stub(d, sweep(), calls);
+    window.location.hash = "#/dashboard";
+    render(<App />);
+    const heading = await screen.findByText("Incidents by final severity");
+    const root = heading.closest("section")!;
+    const scoped = within(root);
+    const widthOf = (name: string): string | null => {
+      const row = scoped.getByText(name).closest("li")!;
+      const fill = row.querySelector('span[style*="width"]');
+      return fill ? (fill as HTMLElement).style.width : null;
+    };
+    const high = widthOf("High");
+    const critical = widthOf("Critical");
+    expect(high).toBe("100%");
+    expect(critical).not.toBeNull();
+    expect(parseFloat(high!)).toBeGreaterThan(parseFloat(critical!));
+    expect(widthOf("Medium")).toBeNull();
+    const info = scoped.getByText("Informational").closest("li")!;
+    expect(info.querySelector('span[style*="width"]')).toBeNull();
+    expect(info.textContent).toContain("162");
+    expect(scoped.getByText("Critical includes Fatal.")).toBeTruthy();
+  });
+});
 describe("dashboard hostile rendering", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
   it("renders hostile titles as plain text", async () => {
@@ -216,7 +247,7 @@ describe("dashboard hostile rendering", () => {
     const base = dashboard();
     const d = dashboard({
       totals: { ...base.totals, by_verdict: {} },
-      recent: kinds.map(([kind], i) => ({ id: 100 + i, title: `row ${kind}`, final_severity: 4, verdict_kind: kind, analyzed_at: `2026-11-02T05:${String(10 + i).padStart(2, "0")}:00Z` })),
+      recent: kinds.map(([kind], i) => ({ id: 100 + i, title: `row ${kind}`, final_severity: 4, verdict_kind: kind, verdict: null, analyzed_at: `2026-11-02T05:${String(10 + i).padStart(2, "0")}:00Z` })),
     });
     const calls: string[] = [];
     stub(d, sweep(), calls);
@@ -230,5 +261,30 @@ describe("dashboard hostile rendering", () => {
       const timeCell = within(table).getByTitle(`2026-11-02T05:${String(10 + i).padStart(2, "0")}:00Z`);
       expect(timeCell.textContent).not.toMatch(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
     }
+  });
+  it("reads the stored verdict field so no pill reads Verdict", async () => {
+    const rows: [string | null, string, string, string][] = [
+      ["true_positive", "verdict", "True positive", "dash-verdict-tp"],
+      ["benign_authorized", "verdict", "Benign", "dash-verdict-benign"],
+      ["false_positive", "verdict", "False positive", "dash-verdict-benign"],
+      ["needs_human", "verdict", "Needs human", "dash-verdict-quar"],
+      [null, "quarantined", "Quarantined", "dash-verdict-quar"],
+      [null, "failed", "Failed", "dash-verdict-failed"],
+    ];
+    const base = dashboard();
+    const d = dashboard({
+      totals: { ...base.totals, by_verdict: {} },
+      recent: rows.map(([verdict, kind], i) => ({ id: 200 + i, title: `stored ${kind} ${i}`, final_severity: 4, verdict_kind: kind, verdict, analyzed_at: `2026-11-02T06:${String(10 + i).padStart(2, "0")}:00Z` })),
+    });
+    const calls: string[] = [];
+    stub(d, sweep(), calls);
+    window.location.hash = "#/dashboard";
+    render(<App />);
+    const table = await screen.findByRole("table", { name: "Latest verdicts from the sweep" });
+    expect(within(table).queryByText("Verdict", { selector: "span" })).toBeNull();
+    for (const [, , text, cls] of rows) {
+      expect(within(table).getByText(text).className).toContain(cls);
+    }
+    expect(within(table).getByText("True positive").getAttribute("title")).toBe("true_positive");
   });
 });

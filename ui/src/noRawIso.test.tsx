@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router";
 import { App } from "./app/App";
+import { IncidentPreview } from "./features/incidents/components/IncidentPreview";
 import type { Dashboard, IncidentDetail, IncidentListItem, RuleDetail, RuleListItem, SettingsView, SweepStatus } from "./api/types";
 
 const ISO = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/;
@@ -14,6 +16,8 @@ function visibleText(): string {
     if (!el) continue;
     if (el.closest(".sr-only")) continue;
     if (el.closest("script,style")) continue;
+    const details = el.closest("details");
+    if (details && !details.hasAttribute("open")) continue;
     parts.push(node.textContent ?? "");
   }
   return parts.join(" ");
@@ -60,7 +64,7 @@ function incidentDetail(): IncidentDetail {
       timeline: [{ time: "2026-11-02T05:10:11Z", event_uid: "evt-1", description: "first claim" }],
       response_plan: ["Isolate host"], visibility_gaps: [], language: "en", model: "muse-spark-1.3", status: "resolved",
     },
-    agent_trace: [{ step: 1, tool: "get_events", arguments: { host: "HOST-0001" }, result_summary: "returned 2 events", tokens: 9 }],
+    agent_trace: [{ step: 1, tool: "get_events", arguments: { host: "HOST-0001", limit: 50 }, result_summary: "limit reached; more events may exist (2026-11-01T02:49:35Z..2026-11-01T03:23:36Z)", tokens: 9 }],
     llm_attempts: [{ purpose: "analysis", model: "muse-spark-1.3", attempt_number: 1, outcome: "ok", failed_validator: null, tokens: 9, token_source: "usage", usd: 0.01 }],
     severity_factors: { level_cap: { applied: true, contribution: "capped" } },
     injection_signals: [],
@@ -149,5 +153,34 @@ describe("no raw ISO timestamps in visible text", () => {
     render(<App />);
     await screen.findByText("Latest verdicts from the sweep");
     expect(document.body.innerHTML).toContain("2026-11-02T05:02:00Z");
+  });
+  it("renders the strip with local ticks, a local caption and the time-zone line", async () => {
+    stubAll();
+    window.location.hash = "#/incidents/1";
+    render(<App />);
+    await screen.findByText("As seen by the cloud model (pseudonymized).");
+    const ticks = Array.from(document.querySelectorAll(".svg-tick")).map((t) => t.textContent ?? "");
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const tick of ticks) {
+      expect(tick).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+      expect(tick).not.toContain("T");
+      expect(tick).not.toContain("Z");
+    }
+    expect(screen.getByText((_, el) => (el?.textContent ?? "").startsWith("Times in your local time zone ("))).toBeTruthy();
+  });
+  it("renders the agent trace window in local time", async () => {
+    stubAll();
+    window.location.hash = "#/incidents/1";
+    render(<App />);
+    const matches = await screen.findAllByText(/limit reached; more events may exist/);
+    const sentence = matches.map((e) => e.textContent ?? "").find((t) => t.startsWith("Asked for events")) ?? "";
+    expect(sentence).toContain(" to ");
+    expect(sentence).not.toMatch(ISO);
+  });
+  it("renders the incident preview with no raw ISO text", async () => {
+    stubAll();
+    render(<MemoryRouter><IncidentPreview id={1} /></MemoryRouter>);
+    await screen.findByText("Open full analysis");
+    expect(visibleText()).not.toMatch(ISO);
   });
 });

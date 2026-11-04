@@ -8,6 +8,12 @@ for secrets, passwords, userinfo ``@`` in URLs, and env secret values.
 
 from __future__ import annotations
 
+import shutil
+import socket
+import ssl
+import subprocess
+import threading
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -15,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
-from corvus.api.main import app
+from corvus.api.main import app, check_wazuh_indexer
 from corvus.state.migrate import migrate
 from tests.conftest import _create_database, _drop_database, _test_database_urls
 
@@ -230,6 +236,53 @@ def test_hostile_titles_do_not_break_responses(
     assert recent[0]["verdict_kind"] == "verdict"
 
 
+def test_dashboard_recent_carries_stored_verdict(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key, verdict in (
+        ("rv-tp", "true_positive"),
+        ("rv-benign", "benign_authorized"),
+        ("rv-fp", "false_positive"),
+        ("rv-nh", "needs_human"),
+    ):
+        _seed_incident(
+            sweep_api_db, key, 4, 4, verdict, "done", f"Row {key}", analysed=True
+        )
+    quar_id = _seed_incident(
+        sweep_api_db, "rv-quar", 4, 4, None, "pending", "Row quar", analysed=True
+    )
+    with psycopg.connect(sweep_api_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE incident_analyses SET payload = %s"
+                " WHERE incident_id = %s AND stage = 'analysis'",
+                (Jsonb({}), quar_id),
+            )
+            cur.execute(
+                "INSERT INTO llm_attempts (call_id, incident_id, model, purpose,"
+                " attempt_number, outcome) VALUES"
+                " ('c-quar', %s, 'glimmer', 'triage', 1, 'quarantined')",
+                (quar_id,),
+            )
+        conn.commit()
+    client = _client(sweep_api_db, monkeypatch)
+    recent = client.get("/api/dashboard").json()["recent"]
+    assert len(recent) == 5
+    by_title = {r["title"]: r for r in recent}
+    for key, verdict in (
+        ("rv-tp", "true_positive"),
+        ("rv-benign", "benign_authorized"),
+        ("rv-fp", "false_positive"),
+        ("rv-nh", "needs_human"),
+    ):
+        row = by_title[f"Row {key}"]
+        assert row["verdict"] == verdict
+        assert row["verdict_kind"] == "verdict"
+    quar = by_title["Row quar"]
+    assert quar["verdict"] is None
+    assert quar["verdict_kind"] == "quarantined"
+
+
 def test_no_secrets_or_userinfo_in_responses(
     sweep_api_db: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -426,3 +479,220 @@ def test_settings_all_local_routing_shares_triage_address(
     by_name = {e["name"]: e for e in body["connections"]}
     assert by_name["triage_model"]["address"] == "http://127.0.0.1:9"
     assert by_name["reasoning_model"]["address"] == "http://127.0.0.1:9"
+
+
+WAZUH_TLS = pytest.mark.skipif(
+    shutil.which("openssl") is None, reason="openssl CLI is missing"
+)
+
+
+def _wazuh_openssl(*args: str, cwd: Path) -> None:
+    subprocess.run(["openssl", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _wazuh_make_ca(workdir: Path) -> tuple[Path, Path]:
+    key = workdir / "check-ca.key"
+    crt = workdir / "check-ca.pem"
+    _wazuh_openssl(
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-keyout",
+        str(key),
+        "-out",
+        str(crt),
+        "-days",
+        "2",
+        "-nodes",
+        "-subj",
+        "/CN=check-ca",
+        "-addext",
+        "basicConstraints=critical,CA:TRUE",
+        cwd=workdir,
+    )
+    return key, crt
+
+
+def _wazuh_issue_cert(workdir: Path, ca_key: Path, ca_crt: Path) -> tuple[Path, Path]:
+    key = workdir / "check-srv.key"
+    csr = workdir / "check-srv.csr"
+    crt = workdir / "check-srv.pem"
+    ext = workdir / "check-srv.ext"
+    ext.write_text("subjectAltName=IP:127.0.0.1\n", encoding="utf-8")
+    _wazuh_openssl(
+        "req",
+        "-newkey",
+        "rsa:2048",
+        "-keyout",
+        str(key),
+        "-out",
+        str(csr),
+        "-nodes",
+        "-subj",
+        "/CN=srv",
+        cwd=workdir,
+    )
+    _wazuh_openssl(
+        "x509",
+        "-req",
+        "-in",
+        str(csr),
+        "-CA",
+        str(ca_crt),
+        "-CAkey",
+        str(ca_key),
+        "-CAcreateserial",
+        "-out",
+        str(crt),
+        "-days",
+        "2",
+        "-extfile",
+        str(ext),
+        cwd=workdir,
+    )
+    return key, crt
+
+
+class _RootStatusStub:
+    """Minimal TLS stub answering GET / with a fixed status, no auth."""
+
+    def __init__(self, certfile: str, keyfile: str, status: int) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile, keyfile)
+        self._context = context
+        self._status = status
+        self.seen_auth = False
+        self.seen_paths: list[str] = []
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind(("127.0.0.1", 0))
+        self._socket.listen(16)
+        self._socket.settimeout(0.5)
+        self.port = self._socket.getsockname()[1]
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+
+    def start(self) -> _RootStatusStub:
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=10)
+        self._socket.close()
+
+    def _serve(self) -> None:
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._socket.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            try:
+                with self._context.wrap_socket(conn, server_side=True) as tls:
+                    self._handle(tls)
+            except ssl.SSLError, OSError, ValueError:
+                pass
+
+    def _handle(self, tls: ssl.SSLSocket) -> None:
+        request = b""
+        while b"\r\n\r\n" not in request:
+            chunk = tls.recv(4096)
+            if not chunk:
+                return
+            request += chunk
+        lines = request.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
+        target = lines[0].split(" ", 2)[1]
+        self.seen_auth = self.seen_auth or any(
+            line.lower().startswith("authorization:") for line in lines[1:]
+        )
+        self.seen_paths.append(target.split("?", 1)[0])
+        reason = {200: "OK", 401: "Unauthorized"}.get(self._status, "Error")
+        raw = b"{}"
+        tls.sendall(
+            f"HTTP/1.1 {self._status} {reason}\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {len(raw)}\r\nConnection: close\r\n\r\n".encode()
+            + raw
+        )
+
+
+@WAZUH_TLS
+def test_wazuh_indexer_root_probe_with_lab_ca(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ca_key, ca_crt = _wazuh_make_ca(tmp_path)
+    srv_key, srv_crt = _wazuh_issue_cert(tmp_path, ca_key, ca_crt)
+    stub = _RootStatusStub(str(srv_crt), str(srv_key), 200).start()
+    try:
+        client = _client(sweep_api_db, monkeypatch)
+        monkeypatch.setenv(
+            "WAZUH_INDEXER_URL", f"https://wzxu:wzpz9-secret@127.0.0.1:{stub.port}"
+        )
+        monkeypatch.setenv("WAZUH_INDEXER_CA", str(ca_crt))
+        response = client.get("/api/settings")
+        assert response.status_code == 200
+        body = response.json()
+        entry = {e["name"]: e for e in body["connections"]}["wazuh_indexer"]
+        assert entry["state"] == "connected"
+        assert entry["address"] == f"https://127.0.0.1:{stub.port}"
+        assert not stub.seen_auth
+        assert stub.seen_paths == ["/"]
+        assert "wzpz9-secret" not in response.text
+        assert "wzxu" not in response.text
+    finally:
+        stub.stop()
+
+
+@WAZUH_TLS
+def test_wazuh_indexer_401_counts_as_reachable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ca_key, ca_crt = _wazuh_make_ca(tmp_path)
+    srv_key, srv_crt = _wazuh_issue_cert(tmp_path, ca_key, ca_crt)
+    stub = _RootStatusStub(str(srv_crt), str(srv_key), 401).start()
+    try:
+        monkeypatch.setenv("WAZUH_INDEXER_CA", str(ca_crt))
+        result = check_wazuh_indexer(f"https://127.0.0.1:{stub.port}")
+        assert result == {"reachable": True, "detail": "HTTP 401"}
+        assert not stub.seen_auth
+    finally:
+        stub.stop()
+
+
+@WAZUH_TLS
+def test_wazuh_indexer_fails_closed_without_ca(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ca_key, ca_crt = _wazuh_make_ca(tmp_path)
+    srv_key, srv_crt = _wazuh_issue_cert(tmp_path, ca_key, ca_crt)
+    stub = _RootStatusStub(str(srv_crt), str(srv_key), 200).start()
+    try:
+        monkeypatch.delenv("WAZUH_INDEXER_CA", raising=False)
+        url = f"https://wzxu:wzpz9-secret@127.0.0.1:{stub.port}"
+        result = check_wazuh_indexer(url)
+        assert result["reachable"] is False
+        detail = str(result["detail"])
+        assert detail and detail.isidentifier()
+        assert "wzpz9-secret" not in detail
+        assert "wzxu" not in detail
+    finally:
+        stub.stop()
+
+
+def test_wazuh_indexer_refused_and_missing_ca(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    closed = probe.getsockname()[1]
+    probe.close()
+    monkeypatch.delenv("WAZUH_INDEXER_CA", raising=False)
+    refused = check_wazuh_indexer(f"https://127.0.0.1:{closed}")
+    assert refused["reachable"] is False
+    assert str(refused["detail"]) and str(refused["detail"]).isidentifier()
+    monkeypatch.setenv("WAZUH_INDEXER_CA", str(tmp_path / "absent-ca.pem"))
+    missing = check_wazuh_indexer(f"https://127.0.0.1:{closed}")
+    assert missing == {"reachable": False, "detail": "FileNotFoundError"}
+    assert check_wazuh_indexer(None)["reachable"] is False

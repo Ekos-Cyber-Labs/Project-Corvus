@@ -164,6 +164,22 @@ describe("verdict labels", () => {
     expect(screen.getByText(/1 event ·/)).toBeTruthy();
     expect(screen.getByText(/41 events ·/)).toBeTruthy();
   });
+  it("leaves a space after the severity arrow", () => {
+    const raised: IncidentListItem = { ...base, id: 22, title: "raised one", severity_floor: 4, severity_id: 5, severity_floor_name: "High", severity_name: "Critical", ai_status: "done", verdict: "true_positive", event_count: 2, has_injection: false };
+    render(<IncidentList items={[raised]} total={1} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} />);
+    const cell = screen.getByText("raised one").closest("tr")?.querySelector(".cell-sev");
+    expect(cell?.innerHTML ?? "").toContain("→</span> <span");
+  });
+  it("uses the chip status word in the secondary line, never the raw ai_status", () => {
+    const quar: IncidentListItem = { ...base, id: 23, title: "quar secondary", verdict: null, ai_status: "failed", has_injection: true, quarantined: true, event_count: 566 };
+    const tp: IncidentListItem = { ...base, id: 24, title: "tp secondary", verdict: "true_positive", ai_status: "done", has_injection: false, event_count: 3 };
+    render(<IncidentList items={[quar, tp]} total={2} page={0} setPage={() => undefined} pageSize={20} onSelect={() => undefined} />);
+    const quarRow = screen.getByText("quar secondary").closest("tr")?.textContent ?? "";
+    expect(quarRow).toContain("566 events · Quarantined · injection");
+    expect(quarRow.toLowerCase()).not.toContain("failed");
+    const tpRow = screen.getByText("tp secondary").closest("tr")?.textContent ?? "";
+    expect(tpRow).toContain("3 events · True positive");
+  });
 
   it("renders rows as keyboard-focusable links with link-styled titles", () => {
     const { container } = render(
@@ -337,6 +353,21 @@ describe("IncidentView readability and guards", () => {
     expect(screen.getByText(new RegExp(`Asked for events on HOST-0001, ${clock(start)} to ${clock(end)}, up to 50 → 50 returned, limit reached; more events may exist`))).toBeTruthy();
     expect(screen.getByText(/Looked up technique T1059 → Command and Scripting Interpreter/)).toBeTruthy();
   });
+  it("localizes the raw result window in the trace sentence and keeps the exact ISO in the collapsed result", () => {
+    const withWindow: IncidentDetail = {
+      ...detail,
+      agent_trace: [
+        { step: 1, tool: "get_events", arguments: { host: "HOST-0001", limit: 50 }, result_summary: "limit reached; more events may exist (2026-11-01T02:49:35Z..2026-11-01T03:23:36Z)", tokens: 9 },
+      ],
+    };
+    const { container } = render(<IncidentView detail={withWindow} />);
+    const matches = screen.getAllByText(/limit reached; more events may exist/);
+    const sentence = matches.map((e) => e.closest("p")?.textContent ?? "").find((t) => t.startsWith("Asked for events")) ?? "";
+    expect(sentence).toContain("Asked for events on HOST-0001");
+    expect(sentence).toContain(" to ");
+    expect(sentence).not.toMatch(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
+    expect(container.innerHTML).toContain("2026-11-01T02:49:35Z");
+  });
 
   it("shows severity factors as a readable list with raw JSON collapsed", () => {
     render(
@@ -459,7 +490,11 @@ describe("stat tiles name the field they count", () => {
     const ticks = Array.from(container.querySelectorAll(".svg-tick")).map((t) => t.textContent);
     expect(ticks).toHaveLength(6);
     for (const tick of ticks) expect(tick).toMatch(/^\d{2}:\d{2}:\d{2}$/);
-    expect(container.querySelector("figcaption")?.textContent).toContain("2026-10-30");
+    for (const tick of ticks) expect(tick).not.toContain("T");
+    const firstClaim = new Date("2026-10-30T00:00:00Z");
+    const pad = (n: number) => String(n).padStart(2, "0");
+    expect(container.querySelector("figcaption")?.textContent).toContain(`${firstClaim.getFullYear()}-${pad(firstClaim.getMonth() + 1)}-${pad(firstClaim.getDate())}`);
+    expect(screen.getByText((_, el) => (el?.textContent ?? "").startsWith("Times in your local time zone ("))).toBeTruthy();
   });
 });
 

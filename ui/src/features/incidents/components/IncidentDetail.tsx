@@ -314,6 +314,10 @@ function attemptRawTitle(outcome: string, tokenSource?: string | null, failedVal
   const base = `${outcome} · ${tokenSource ?? "not measured"}`;
   return failedValidator ? `${base} (failed validator: ${failedValidator})` : base;
 }
+const ISO_WINDOW = /\((\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)\s*(?:\.\.|to|–|—)\s*(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)\)/g;
+function localizeWindow(text: string): string {
+  return text.replace(ISO_WINDOW, (_m: string, a: string, b: string) => `(${formatDateTime(a)} to ${formatDateTime(b)})`);
+}
 function traceSentence(tool: string, args: Record<string, unknown>, result: string): string {
   if (tool === "get_events") {
     const entity = ["host", "user", "ip"].map((k) => args[k]).find((v) => typeof v === "string" && v !== "") as string | undefined;
@@ -328,7 +332,7 @@ function traceSentence(tool: string, args: Record<string, unknown>, result: stri
       return `${head} → ${count} returned${capped}`;
     }
     const oneLine = oneLineSummary(result);
-    return oneLine ? `${head} → ${oneLine}` : head;
+    return oneLine ? `${head} → ${localizeWindow(oneLine)}` : head;
   }
   if (tool === "get_attack_technique") {
     const id = typeof args.id === "string" && args.id ? args.id : null;

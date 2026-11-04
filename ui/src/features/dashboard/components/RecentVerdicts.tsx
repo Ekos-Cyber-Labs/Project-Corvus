@@ -1,7 +1,7 @@
 import type { DashboardRecent } from "../../../api/types";
 import { formatDateTime } from "../../../lib/formatDateTime";
 import { useMaskFn } from "../../../lib/presentation";
-import { severityName, verdictChip } from "../utils/dashboard";
+import { recentChip, severityName } from "../utils/dashboard";
 import recentStyles from "./RecentVerdicts.module.css";
 export function RecentVerdicts({ recent }: { recent: DashboardRecent[] }) {
   const mask = useMaskFn();
@@ -14,14 +14,14 @@ export function RecentVerdicts({ recent }: { recent: DashboardRecent[] }) {
             <thead><tr><th>ID</th><th>Incident</th><th>Severity</th><th>Verdict</th><th>Time</th></tr></thead>
             <tbody>
               {recent.map((r) => {
-                const chip = verdictChip(r.verdict_kind);
+                const chip = recentChip(r);
                 const iso = r.analyzed_at ?? "not recorded";
                 return (
                   <tr key={r.id}>
                     <td className={`mono ${recentStyles.id}`}>{r.id}</td>
                     <td className={recentStyles.title}><a href={`#/incidents/${r.id}`}>{mask(r.title || `Incident ${r.id}`)}</a></td>
                     <td className={recentStyles.sev}><span className={recentStyles.sevCell}><span className={`sev-dot sev-dot-${r.final_severity}`} aria-hidden="true" />{severityName(r.final_severity)}</span></td>
-                    <td className={recentStyles.verdict}><span className={chip.className} title={mask(r.verdict_kind)}>{chip.text}</span></td>
+                    <td className={recentStyles.verdict}><span className={chip.className} title={mask(r.verdict ?? r.verdict_kind)}>{chip.text}</span></td>
                     <td className={`mono ${recentStyles.time}`} title={mask(iso)}>{mask(formatDateTime(r.analyzed_at))}</td>
                   </tr>
                 );

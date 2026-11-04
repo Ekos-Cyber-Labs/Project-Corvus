@@ -9,6 +9,7 @@
 .dotNone { background: var(--muted); }
 .conns { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .conns li { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.hint { grid-column: 1 / -1; }
 .connected { color: var(--accent); font-weight: 700; }
 .unreachable { color: var(--danger); font-weight: 700; }
 .unknown { color: var(--muted); }

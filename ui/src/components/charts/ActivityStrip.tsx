@@ -1,4 +1,5 @@
 import { TACTIC_NAMES, tacticForTechnique } from "../../lib/attackMap";
+import { formatDate, formatTime } from "../../lib/formatDateTime";
 import { useMaskFn } from "../../lib/presentation";
 import { useContainerWidth } from "../../lib/useContainerWidth";
 import activityStyles from "./ActivityStrip.module.css";
@@ -6,6 +7,18 @@ import { layoutTimeline } from "./timelineLayout";
 import { clusterPositions } from "./timelineLayout";
 
 export type TimelineEntry = { time: string; event_uid: string; description: string };
+export function localStamp(value: string): string {
+  return `${formatDate(value)}, ${formatTime(value, { seconds: true })}`;
+}
+export function localZoneLabel(now = new Date()): string {
+  const off = -now.getTimezoneOffset();
+  if (off === 0) return "UTC";
+  const sign = off < 0 ? "−" : "+";
+  const abs = Math.abs(off);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  return m ? `UTC${sign}${h}:${String(m).padStart(2, "0")}` : `UTC${sign}${h}`;
+}
 
 export function eventTactic(uid: string, evidence: { event_uid: string; event?: unknown }[] | undefined, techniques: { id: string }[] | undefined): string {
   const ev = evidence?.find((e) => e.event_uid === uid);
@@ -41,10 +54,12 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
   const width = Math.max(320, containerWidth);
   const layout = layoutTimeline(timeline, width, firstSeen, lastSeen);
   const presentTactics = Array.from(new Set(timeline.map((e) => eventTactic(e.event_uid, evidence, techniques))));
+  const zone = localZoneLabel();
   const captionParts: string[] = [];
-  if (layout.dateLabel) captionParts.push(`Activity on ${layout.dateLabel} (UTC)`);
+  if (layout.dateLabel) captionParts.push(`Activity on ${layout.dateLabel}`);
+  captionParts.push(`Times in your local time zone (${zone})`);
   captionParts.push(`${timeline.length} timeline claims`);
-  if (layout.marks.length) captionParts.push(`from ${timeline[layout.validIndices[0]].time} to ${timeline[layout.validIndices[layout.validIndices.length - 1]].time}`);
+  if (layout.marks.length) captionParts.push(`from ${localStamp(timeline[layout.validIndices[0]].time)} to ${localStamp(timeline[layout.validIndices[layout.validIndices.length - 1]].time)}`);
   if (layout.outsideFirstSeen && firstSeen) captionParts.push(`incident first_seen ${firstSeen} lies outside the displayed axis range`);
   if (layout.outsideLastSeen && lastSeen) captionParts.push(`incident last_seen ${lastSeen} lies outside the displayed axis range`);
   if (layout.skippedIndices.length) captionParts.push(`${layout.skippedIndices.length} claims with invalid timestamps were skipped`);
@@ -92,6 +107,7 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
           );
         })}
       </svg>
+      <p className={`muted ${activityStyles.tz}`}>Times in your local time zone ({zone}).</p>
       <ul className={`activity-legend ${activityStyles.legend}`}>
         <li><span className="legend-dot" aria-hidden="true" /> A dot is one timeline claim at its timestamp; claims closer than 24 px are grouped into a numbered badge; activate it to jump to the first of them.</li>
         <li><svg className={activityStyles.breakIcon} width="18" height="16" viewBox="0 0 18 16" aria-hidden="true" focusable="false"><line x1="4" y1="15" x2="8" y2="1" stroke="currentColor" strokeWidth="1.5" /><line x1="10" y1="15" x2="14" y2="1" stroke="currentColor" strokeWidth="1.5" /></svg> The break symbol means a gap longer than five times the median gap between claims; its duration is printed above the axis.</li>
@@ -100,7 +116,7 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
           <li key={t}><span className="legend-dot" style={{ background: TACTIC_FILL[t] }} aria-hidden="true" /> {TACTIC_NAMES[t] ?? t}</li>
         ))}
       </ul>
-      <ul className="sr-only">{timeline.map((e, i) => <li key={i}>{mask(`${e.time}: ${e.description} (event ${e.event_uid})`)}</li>)}</ul>
+      <ul className="sr-only">{timeline.map((e, i) => <li key={i}>{mask(`${localStamp(e.time)}: ${e.description} (event ${e.event_uid})`)}</li>)}</ul>
     </figure>
   );
 }

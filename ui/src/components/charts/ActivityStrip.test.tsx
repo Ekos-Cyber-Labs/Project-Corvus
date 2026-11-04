@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ActivityStrip } from "./ActivityStrip";
+import { ActivityStrip, localZoneLabel } from "./ActivityStrip";
 import type { TimelineEntry } from "./ActivityStrip";
 
 const realTimes = ["13:14:38", "13:14:38", "13:14:39", "13:15:17", "13:15:18", "13:15:23", "13:15:25", "13:15:30", "13:15:33", "13:15:33", "13:15:34", "13:15:56"];
@@ -37,7 +37,15 @@ describe("ActivityStrip in real pixels", () => {
     expect(svgAt1800?.getAttribute("width")).toBe("1800");
     const radiiAt1800 = Array.from(container.querySelectorAll("circle")).map((c) => c.getAttribute("r")).sort();
     expect(radiiAt1800).toEqual(["10", "10", "10", "5", "5", "5", "5"].sort());
-    expect(container.querySelector("figcaption")?.textContent).toContain("2026-11-03");
+    const localDay = (iso: string) => {
+      const d = new Date(iso);
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    };
+    expect(container.querySelector("figcaption")?.textContent).toContain(localDay("2026-11-03T13:14:38Z"));
+    expect(container.querySelector("figcaption")?.textContent).not.toContain("(UTC)");
+    expect(container.querySelector("figcaption")?.textContent).toContain(`Times in your local time zone (${localZoneLabel()})`);
+    expect(screen.getByText((_, el) => el?.textContent === `Times in your local time zone (${localZoneLabel()}).`)).toBeTruthy();
     expect(container.querySelector("figcaption")?.textContent).toContain("incident last_seen 2026-11-03T13:17:14Z lies outside the displayed axis range");
     expect(Array.from(container.querySelectorAll(".svg-gap")).map((t) => t.textContent)).toEqual(["38s gap", "22s gap"]);
     setWidth(390);
@@ -64,6 +72,18 @@ describe("ActivityStrip in real pixels", () => {
     expect(legend?.textContent).not.toContain("6 px");
     expect(legend?.querySelector("svg")).toBeTruthy();
     expect(screen.getByText(/break symbol means a gap longer than five times the median/)).toBeTruthy();
+  });
+
+  it("keeps the screen-reader caption and claim list in local time", () => {
+    delete (globalThis as Record<string, unknown>).ResizeObserver;
+    const { container } = render(<ActivityStrip timeline={realTimeline} firstSeen="2026-11-03T13:14:38Z" lastSeen="2026-11-03T13:17:14Z" highlighted={null} onHighlight={() => {}} onJump={() => {}} />);
+    const caption = container.querySelector("figcaption")?.textContent ?? "";
+    const withoutOutside = caption.replace(/incident (first_seen|last_seen) \S+ lies outside[^,]*/g, "");
+    expect(withoutOutside).not.toMatch(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
+    expect(withoutOutside).toContain("from ");
+    const srItems = Array.from(container.querySelectorAll(".sr-only li")).map((li) => li.textContent ?? "");
+    expect(srItems).toHaveLength(realTimeline.length);
+    for (const item of srItems) expect(item).not.toMatch(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
   });
 
   it("keeps badge jump, highlight sync and keyboard activation", () => {

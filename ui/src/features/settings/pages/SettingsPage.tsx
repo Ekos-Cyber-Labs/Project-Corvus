@@ -65,9 +65,10 @@ export function SettingsPage() {
               <ul className={pageStyles.conns}>
                 {settings.connections.map((c) => (
                   <li key={c.name}>
-                    <span>{CONNECTION_LABELS[c.name]?.title ?? c.name} <span className="mono muted" title={mask(`payload name: ${c.name}`)}>{mask(c.name)}</span></span>
+                    <span title={mask(c.name)}>{CONNECTION_LABELS[c.name]?.title ?? c.name}</span>
                     <span className="mono">{c.address ? mask(c.address) : "—"}</span>
                     <span className={connectionClass(c.state)}>{connectionText(c.state)}</span>
+                    {c.name === "wazuh_indexer" && c.state === "unreachable" ? <span className={`muted ${pageStyles.hint}`}>Start the SSH tunnel or check the address; see docs/wazuh.md</span> : null}
                   </li>
                 ))}
               </ul>

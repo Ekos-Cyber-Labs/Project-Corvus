@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
+from corvus.adapters.wazuh.client import _tls_context
 from corvus.settings import get_settings
 
 app = FastAPI(title="corvus-api")
@@ -116,6 +117,52 @@ def check_endpoint(name: str, base_url: str | None) -> dict[str, Any]:
     url = base_url.rstrip("/") + "/models"
     try:
         response = httpx2.get(url, timeout=3.0)
+        return {
+            "reachable": response.status_code < 500,
+            "detail": f"HTTP {response.status_code}",
+        }
+    except Exception as exc:
+        return {"reachable": False, "detail": type(exc).__name__}
+
+
+def check_wazuh_indexer(base_url: str | None) -> dict[str, Any]:
+    """Probe the Wazuh indexer root without sending credentials.
+
+    GETs the base URL only (no path suffix: ``/models`` is a model
+    endpoint path and 404s on an indexer). TLS verifies against the
+    ``WAZUH_INDEXER_CA`` bundle when set and the default store
+    otherwise; verification is never disabled. Any HTTP answer below
+    500 — including 401 — counts as reachable: the endpoint is alive,
+    only the (unsent) credentials would be refused. Every failure
+    reports the exception class only, never the message or any URL.
+    """
+    if not base_url:
+        return {"reachable": False, "detail": "wazuh_indexer URL is not set"}
+    try:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(base_url)
+        if not parts.hostname:
+            return {"reachable": False, "detail": "invalid wazuh_indexer URL"}
+        host = parts.hostname.lower()
+        port = f":{parts.port}" if parts.port else ""
+        scheme = (parts.scheme or "https").lower()
+        probe = f"{scheme}://{host}{port}"
+    except Exception:
+        return {"reachable": False, "detail": "invalid wazuh_indexer URL"}
+    try:
+        ca_path = os.environ.get("WAZUH_INDEXER_CA")
+        verify: Any = True
+        if ca_path:
+            from pathlib import Path
+
+            if not Path(ca_path).is_file():
+                return {"reachable": False, "detail": "FileNotFoundError"}
+            verify = _tls_context(ca_path)
+    except Exception as exc:
+        return {"reachable": False, "detail": type(exc).__name__}
+    try:
+        response = httpx2.get(probe, timeout=3.0, verify=verify)
         return {
             "reachable": response.status_code < 500,
             "detail": f"HTTP {response.status_code}",
@@ -1180,7 +1227,8 @@ def get_dashboard() -> Any:
                     " a.created_at,"
                     " EXISTS(SELECT 1 FROM llm_attempts t"
                     " WHERE t.incident_id = i.id AND t.purpose = 'triage'"
-                    " AND t.outcome LIKE '%quarantin%')"
+                    " AND t.outcome LIKE '%quarantin%'),"
+                    " a.payload->>'verdict'"
                     " FROM incidents i JOIN incident_analyses a"
                     " ON a.incident_id = i.id AND a.stage = 'analysis'"
                     " AND a.status = 'resolved'"
@@ -1192,6 +1240,9 @@ def get_dashboard() -> Any:
                         "title": str(r[1] or ""),
                         "final_severity": int(r[2]),
                         "verdict_kind": _verdict_kind(r[4], str(r[3]), bool(r[6])),
+                        "verdict": str(r[7])
+                        if isinstance(r[7], str) and r[7] in _REAL_VERDICTS
+                        else None,
                         "analyzed_at": _iso(r[5]),
                     }
                     for r in cur.fetchall()
@@ -1339,6 +1390,9 @@ def _endpoint_entry(name: str, url: str | None, kind: str) -> dict[str, Any]:
     if kind == "database":
         check = check_database(url)
         display = _redacted_address(url)
+    elif kind == "wazuh":
+        check = check_wazuh_indexer(url)
+        display = _redacted_address(url)
     else:
         check = check_endpoint(name, url)
         display = _redacted_address(url)
@@ -1370,7 +1424,7 @@ def get_settings_view() -> Any:
     database_url = _database_url()
     entries = [
         _endpoint_entry("database", database_url, "database"),
-        _endpoint_entry("wazuh_indexer", wazuh_url, "http"),
+        _endpoint_entry("wazuh_indexer", wazuh_url, "wazuh"),
         _endpoint_entry("triage_model", triage_url, "http"),
         _endpoint_entry("reasoning_model", analysis_url, "http"),
     ]

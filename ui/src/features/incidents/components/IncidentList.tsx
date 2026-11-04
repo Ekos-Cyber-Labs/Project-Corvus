@@ -6,7 +6,7 @@ import { Pagination } from "../../../components/ui/Pagination";
 import { Table } from "../../../components/ui/Table";
 import { MaskedText } from "../../../lib/presentation";
 import { VerdictBadge } from "./VerdictBadge";
-import { listQuarantined, verdictKind } from "../utils/incidents";
+import { listQuarantined, statusLabel, verdictKind } from "../utils/incidents";
 import listStyles from "./IncidentList.module.css";
 const SEV_NAMES: Record<number, string> = { 1: "Informational", 2: "Low", 3: "Medium", 4: "High", 5: "Critical", 6: "Fatal" };
 function sevName(id: number, fallback: string | null | undefined): string {
@@ -34,15 +34,17 @@ export function IncidentList({ items, total, page, setPage, pageSize, onSelect, 
               const floorName = sevName(it.severity_floor, it.severity_floor_name);
               const finalName = sevName(it.severity_id, it.severity_name);
               const sameSev = it.severity_floor === it.severity_id && floorName === finalName;
+              const kind = verdictKind(it.verdict, it.ai_status, null, listQuarantined(it) ? true : null);
+              const statusWord = kind === "verdict" ? statusLabel(it.verdict ?? "", "True positive") : statusLabel(kind);
               return (
               <tr key={it.id} className={`rowlink${selectedId === it.id ? " selected" : ""}`} tabIndex={0} onClick={() => open(it.id)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(it.id); } }}>
                 <td className="mono cell-id">{it.id}</td>
                 <td>
                   <a className="title-link" href={buildDetailHash(it.id)}><MaskedText text={it.title || `Incident ${it.id}`} /></a>
-                  <p className={listStyles.second}>{it.event_count} {it.event_count === 1 ? "event" : "events"} · {it.ai_status}{it.has_injection ? " · injection" : ""}</p>
+                  <p className={listStyles.second}>{it.event_count} {it.event_count === 1 ? "event" : "events"} · {statusWord}{it.has_injection ? " · injection" : ""}</p>
                 </td>
-                <td className="cell-sev" title={sameSev ? `${floorName} (${it.severity_floor})` : `Floor ${floorName} (${it.severity_floor}) to ${finalName} (${it.severity_id})`}><span className={`sev-dot sev-dot-${it.severity_floor}`} aria-hidden="true" />{sameSev ? floorName : <>{floorName} <span aria-hidden="true">→</span><span className="sr-only"> to </span>{finalName}</>}</td>
+                <td className="cell-sev" title={sameSev ? `${floorName} (${it.severity_floor})` : `Floor ${floorName} (${it.severity_floor}) to ${finalName} (${it.severity_id})`}><span className={`sev-dot sev-dot-${it.severity_floor}`} aria-hidden="true" />{sameSev ? floorName : <>{floorName} <span aria-hidden="true">→</span> <span className="sr-only">to</span> {finalName}</>}</td>
                 <td className="cell-verdict"><VerdictBadge verdict={it.verdict} aiStatus={it.ai_status} quarantined={listQuarantined(it)} /></td>
                 <td className={`mono cell-events ${listStyles.events}`}><span className="num">{it.event_count}</span></td>
               </tr>

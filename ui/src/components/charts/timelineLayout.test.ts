@@ -4,6 +4,15 @@ import { layoutTimeline } from "./timelineLayout";
 const base = Date.parse("2026-11-03T00:00:00Z");
 const at = (sec: number) => new Date(base + sec * 1000).toISOString();
 const claims = (...secs: number[]) => secs.map((s) => ({ time: at(s) }));
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const localDay = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
+const localClock = (ms: number) => {
+  const d = new Date(ms);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+};
 
 function overlaps(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
@@ -17,7 +26,18 @@ describe("layoutTimeline table cases", () => {
     expect(layout.clusters).toHaveLength(0);
     expect(layout.marks[0].r).toBe(5);
     expect(layout.marks[0].x).toBeCloseTo(360, 0);
-    expect(layout.dateLabel).toBe("2026-11-03");
+    expect(layout.dateLabel).toBe(localDay(base + 60000));
+  });
+
+  it("labels ticks and the caption date in local time, never UTC", () => {
+    const layout = layoutTimeline(claims(60, 3660), 720, null, null);
+    expect(layout.dateLabel).toBe(localDay(base + 60000));
+    expect(layout.dateLabel).not.toContain("T");
+    for (const tick of layout.ticks) {
+      expect(tick.label).toBe(localClock(tick.ms));
+      expect(tick.label).not.toContain("T");
+      expect(tick.label).not.toContain("Z");
+    }
   });
 
   it("two claims at the same timestamp form one 20 px badge", () => {
@@ -91,7 +111,8 @@ describe("layoutTimeline on the real incident fixture", () => {
     expect(layout.outsideLastSeen).toBe(true);
     expect(layout.ticks).toHaveLength(6);
     expect(layout.ticks[0].label).toMatch(/^\d{2}:\d{2}:\d{2}$/);
-    expect(layout.dateLabel).toBe("2026-11-03");
+    expect(layout.ticks[0].label).toBe(localClock(layout.ticks[0].ms));
+    expect(layout.dateLabel).toBe(localDay(Date.parse("2026-11-03T13:14:38Z")));
   });
 
   it("at 390 px keeps the same breaks with wider clustering", () => {
