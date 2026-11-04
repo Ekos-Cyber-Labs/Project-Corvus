@@ -9,6 +9,7 @@ import { SeverityScale } from "../../../components/charts/SeverityScale";
 import { SeverityChip } from "../../../components/charts/SeverityChip";
 import { groupTechniques } from "../../../lib/attack";
 import { scrollToSection } from "../../../lib/a11y";
+import { useMaskFn } from "../../../lib/presentation";
 import { agentTraceEmptyMessage, attemptOutcomeKind, attemptOutcomeText } from "../utils/incidents";
 import { VerdictBadge } from "./VerdictBadge";
 import { LearnedRuleRefs } from "../../rules/components/LearnedRuleRefs";
@@ -41,6 +42,7 @@ const SECTIONS: { id: string; label: string }[] = [
 ];
 
 export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
+  const mask = useMaskFn();
   const [highlighted, setHighlighted] = useState<number | null>(null);
   const [triageExpanded, setTriageExpanded] = useState(false);
   const [selectedTactic, setSelectedTactic] = useState<string | null>(null);
@@ -82,7 +84,7 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
       </nav>
 
       <section id="section-summary" className="panel hero" aria-label="Incident summary">
-        <h2>{detail.title || `Incident ${detail.id}`}</h2>
+        <h2>{mask(detail.title || `Incident ${detail.id}`)}</h2>
         <p className="hero-badges">
           <VerdictBadge verdict={analysis?.verdict ?? detail.verdict} aiStatus={detail.ai_status} attempts={detail.llm_attempts} />{" "}
           <SeverityChip floor={floor} final={final} />
@@ -90,9 +92,9 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
         <SeverityGauge floor={floor} final={final} />
         {typeof analysis?.confidence === "number" ? <ConfidenceMeter value={analysis.confidence} /> : null}
         <p className="hero-facts">
-          Models used: <span className="mono">{models.length ? models.join(", ") : "not recorded"}</span>
-          {" · "}Language: {analysis?.language ?? "not recorded"}
-          {" · "}Time range: <span className="mono">{timeRange}</span>
+          Models used: <span className="mono">{mask(models.length ? models.join(", ") : "not recorded")}</span>
+          {" · "}Language: {mask(analysis?.language ?? "not recorded")}
+          {" · "}Time range: <span className="mono">{mask(timeRange)}</span>
         </p>
         <ul className="stat-tiles">
           <li><Monitor /> <strong className="num">{eventCount}</strong><span>events (event_count)</span></li>
@@ -101,7 +103,7 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
           <li><TriangleAlert /> <strong className="num">{detail.injection_signals?.length ?? 0}</strong><span>injection signals</span></li>
           <li><Sparkles /> <strong className="num">{detail.spend_total_usd ?? "not measured"}</strong><span>spend (USD)</span></li>
         </ul>
-        {detail.pseudonym_resolution ? <p className="muted">{detail.pseudonym_resolution.note} {detail.pseudonym_resolution.resolved ? "(resolved locally)" : ""}</p> : null}
+        {detail.pseudonym_resolution ? <p className="muted">{mask(detail.pseudonym_resolution.note)} {detail.pseudonym_resolution.resolved ? "(resolved locally)" : ""}</p> : null}
       </section>
 
       {detail.triage?.summary ? (
@@ -109,12 +111,12 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
           <h3><Clock /> Triage summary</h3>
           {triageLong ? (
             <>
-              <p className={triageExpanded ? "triage-text expanded" : "triage-text clamped"}>{triageSummary}</p>
+              <p className={triageExpanded ? "triage-text expanded" : "triage-text clamped"}>{mask(triageSummary)}</p>
               <button type="button" aria-expanded={triageExpanded} onClick={() => setTriageExpanded((v) => !v)}>
                 {triageExpanded ? "Show less" : "Show full summary"} <ChevronDown />
               </button>
             </>
-          ) : <p className="triage-text">{triageSummary}</p>}
+          ) : <p className="triage-text">{mask(triageSummary)}</p>}
         </section>
       ) : null}
       {detail.learned_rules?.length ? <LearnedRuleRefs refs={detail.learned_rules} /> : null}
@@ -131,13 +133,13 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
                 <li key={`${entry.event_uid}-${i}`} id={`timeline-row-${i}`} tabIndex={-1} className={`tl-row ${highlighted === i ? "highlighted" : ""}`}
                   onMouseEnter={() => setHighlighted(i)} onMouseLeave={() => setHighlighted(null)}
                   onFocus={() => setHighlighted(i)} onBlur={() => setHighlighted(null)}>
-                  <span className="mono tl-time">{entry.time}</span>
+                  <span className="mono tl-time">{mask(entry.time)}</span>
                   <span className="tl-body">
-                    <span className="tl-claim">{entry.description}</span>{" "}
-                    <span className="mono">event_uid: {entry.event_uid}</span>
+                    <span className="tl-claim">{mask(entry.description)}</span>{" "}
+                    <span className="mono">event_uid: {mask(entry.event_uid)}</span>
                     <details>
-                      <summary>Evidence for {entry.event_uid}</summary>
-                      {ev?.found ? <pre className="payload">{JSON.stringify(ev.event, null, 2)}</pre> : <p>Missing: no event with this uid in the replay store. This citation could not be verified.</p>}
+                      <summary>Evidence for {mask(entry.event_uid)}</summary>
+                      {ev?.found ? <pre className="payload">{mask(JSON.stringify(ev.event, null, 2))}</pre> : <p>Missing: no event with this uid in the replay store. This citation could not be verified.</p>}
                     </details>
                   </span>
                 </li>
@@ -158,8 +160,8 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
                 <h4>{g.name} ({g.items.length})</h4>
                 <ul className="chips-tech">
                   {g.items.map((t) => (
-                    <li key={t.id} className="tech-chip" title={`${t.id} — ${t.name ?? "name not measured"}`}>
-                      <span className="mono tech-id">{t.id}</span> <span className="tech-name">{t.name ?? "name not measured"}</span>
+                    <li key={t.id} className="tech-chip" title={mask(`${t.id} — ${t.name ?? "name not measured"}`)}>
+                      <span className="mono tech-id">{t.id}</span> <span className="tech-name">{mask(t.name ?? "name not measured")}</span>
                     </li>
                   ))}
                 </ul>
@@ -182,14 +184,14 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
               const args = s.arguments ?? {};
               return (
                 <li key={s.step}>
-                  <span className="mono">{s.tool}</span> · tokens: {s.tokens}
+                  <span className="mono">{mask(s.tool)}</span> · tokens: {s.tokens}
                   {Object.keys(args).length ? (
-                    <dl className="args">{Object.entries(args).map(([k, v]) => (<div key={k}><dt className="mono">{k}</dt><dd className="mono">{formatArgValue(v)}</dd></div>))}</dl>
+                    <dl className="args">{Object.entries(args).map(([k, v]) => (<div key={k}><dt className="mono">{mask(k)}</dt><dd className="mono">{mask(formatArgValue(v))}</dd></div>))}</dl>
                   ) : <p className="muted">No arguments.</p>}
-                  <p>Result: {oneLineSummary(full) || "—"}</p>
+                  <p>Result: {mask(oneLineSummary(full) || "—")}</p>
                   <details>
                     <summary>Full result (text only)</summary>
-                    <pre className="payload mono">{shown}</pre>
+                    <pre className="payload mono">{mask(shown)}</pre>
                     {truncated ? <p className="muted">Result truncated to {TRACE_RESULT_CAP} characters.</p> : null}
                   </details>
                 </li>
@@ -210,8 +212,8 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
                 const outcomeText = attemptOutcomeText(a.outcome, a.failed_validator);
                 return (
                   <tr key={i}>
-                    <td>{a.purpose}</td><td className="mono">{a.model}</td><td className="num">{a.attempt_number}</td>
-                    <td><span className={`outcome-dot outcome-${outcomeKind}`} aria-hidden="true" />{a.outcome}{a.failed_validator ? ` (failed validator: ${a.failed_validator})` : ""} · {a.token_source ?? "not measured"}<span className="sr-only"> Outcome: {outcomeText}</span></td>
+                    <td>{mask(a.purpose)}</td><td className="mono">{mask(a.model)}</td><td className="num">{a.attempt_number}</td>
+                    <td><span className={`outcome-dot outcome-${outcomeKind}`} aria-hidden="true" />{mask(a.outcome)}{a.failed_validator ? ` (failed validator: ${mask(a.failed_validator)})` : ""} · {mask(a.token_source ?? "not measured")}<span className="sr-only"> Outcome: {mask(outcomeText)}</span></td>
                     <td><span className="num">{a.tokens}</span><span className="token-bar" aria-hidden="true"><span className="token-fill grow" style={{ width: `${(a.tokens / maxTokens) * 100}%` }} /></span></td>
                     <td className="num col-usd">{a.usd ?? "not measured"}</td>
                   </tr>
@@ -232,10 +234,10 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
             <ul className="plain">
               {Object.entries(factors).map(([name, factor]) => {
                 const status = factorStatus(factor);
-                return <li key={name}><span className="mono">{name}</span> — {status.applied === null ? "not measured" : status.applied ? "applied" : "not applied"}{": "}{status.contribution}</li>;
+                return <li key={name}><span className="mono">{mask(name)}</span> — {status.applied === null ? "not measured" : status.applied ? "applied" : "not applied"}{": "}{mask(status.contribution)}</li>;
               })}
             </ul>
-            <details><summary>Raw severity factors (JSON)</summary><pre className="payload">{JSON.stringify(factors, null, 2)}</pre></details>
+            <details><summary>Raw severity factors (JSON)</summary><pre className="payload">{mask(JSON.stringify(factors, null, 2))}</pre></details>
           </>
         ) : <p>No severity factors recorded.</p>}
       </section>
@@ -246,8 +248,8 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
           <div className="inj-cards">
             {detail.injection_signals.map((s, i) => (
               <article key={i} className="inj-card">
-                <p><TriangleAlert /> <strong>Injection signal</strong> · <span className="mono">{s.pattern_id}</span> in <span className="mono">{s.field}</span> (event <span className="mono">{s.event_uid}</span>, effect: {s.requested_effect})</p>
-                {s.payload_text ? <><p>{s.payload_label ?? "payload (shown as text)"}:</p><pre className="payload mono">{s.payload_text}</pre></> : null}
+                <p><TriangleAlert /> <strong>Injection signal</strong> · <span className="mono">{mask(s.pattern_id)}</span> in <span className="mono">{mask(s.field)}</span> (event <span className="mono">{mask(s.event_uid)}</span>, effect: {mask(s.requested_effect)})</p>
+                {s.payload_text ? <><p>{mask(s.payload_label ?? "payload (shown as text)")}: </p><pre className="payload mono">{mask(s.payload_text)}</pre></> : null}
               </article>
             ))}
           </div>
@@ -256,20 +258,20 @@ export function IncidentDetailView({ detail }: { detail: IncidentDetail }) {
 
       <section id="section-gaps" aria-label="Visibility gaps">
         <h3>Visibility gaps</h3>
-        {analysis?.visibility_gaps?.length ? <ul className="plain">{analysis.visibility_gaps.map((g, i) => <li key={i}>{g}</li>)}</ul> : <p>None recorded.</p>}
+        {analysis?.visibility_gaps?.length ? <ul className="plain">{analysis.visibility_gaps.map((g, i) => <li key={i}>{mask(g)}</li>)}</ul> : <p>None recorded.</p>}
       </section>
 
       <section id="section-response" aria-label="Response plan">
         <h3>Response plan</h3>
         {analysis?.response_plan?.length ? (
-          <ol className="response-plan">{analysis.response_plan.map((r, i) => <li key={i}><span className="resp-num" aria-hidden="true">{i + 1}</span><span>{r}</span></li>)}</ol>
+          <ol className="response-plan">{analysis.response_plan.map((r, i) => <li key={i}><span className="resp-num" aria-hidden="true">{i + 1}</span><span>{mask(r)}</span></li>)}</ol>
         ) : <p>No response plan recorded.</p>}
       </section>
 
       {reasoningText.trim() ? (
         <section>
           <h3>Unverified reasoning</h3>
-          <details><summary>Stored on-prem reasoning (not evidence)</summary><pre className="payload">{reasoningText}</pre></details>
+          <details><summary>Stored on-prem reasoning (not evidence)</summary><pre className="payload">{mask(reasoningText)}</pre></details>
         </section>
       ) : null}
     </article>

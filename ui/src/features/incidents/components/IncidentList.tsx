@@ -4,6 +4,7 @@ import type { ListFilters } from "../../../lib/hash";
 import { buildDetailHash } from "../../../lib/hash";
 import { Pagination } from "../../../components/ui/Pagination";
 import { Table } from "../../../components/ui/Table";
+import { MaskedText } from "../../../lib/presentation";
 import { VerdictBadge } from "./VerdictBadge";
 import { verdictKind } from "../utils/incidents";
 import listStyles from "./IncidentList.module.css";
@@ -34,7 +35,7 @@ export function IncidentList({ items, total, page, setPage, pageSize, onSelect, 
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(it.id); } }}>
                 <td className="mono cell-id">{it.id}</td>
                 <td>
-                  <a className="title-link" href={buildDetailHash(it.id)}>{it.title || `Incident ${it.id}`}</a>
+                  <a className="title-link" href={buildDetailHash(it.id)}><MaskedText text={it.title || `Incident ${it.id}`} /></a>
                   <p className={listStyles.second}>{it.event_count} events · {it.ai_status}{it.has_injection ? " · injection" : ""}</p>
                 </td>
                 <td className="cell-sev"><span className={`sev-dot sev-dot-${it.severity_floor}`} aria-hidden="true" />{sevName(it.severity_floor, it.severity_floor_name)} <span aria-hidden="true">→</span><span className="sr-only">floor to final</span> <span className={`sev-dot sev-dot-${it.severity_id}`} aria-hidden="true" />{sevName(it.severity_id, it.severity_name)}</td>

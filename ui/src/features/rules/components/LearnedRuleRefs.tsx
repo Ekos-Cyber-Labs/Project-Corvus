@@ -1,6 +1,8 @@
 import type { LearnedRuleRef } from "../../../api/types";
 import { buildRuleHash } from "../../../lib/hash";
+import { useMaskFn } from "../../../lib/presentation";
 export function LearnedRuleRefs({ refs }: { refs: LearnedRuleRef[] }) {
+  const mask = useMaskFn();
   if (!refs.length) return null;
   return (
     <section className="panel" aria-label="Learned-rule findings">
@@ -16,7 +18,7 @@ export function LearnedRuleRefs({ refs }: { refs: LearnedRuleRef[] }) {
           const modeClass = mode === "shadow" ? "learned-shadow" : mode === "active" ? "learned-active" : "learned-other";
           return (
             <li key={i}>
-              <a className={`badge learned-rule ${modeClass}`} href={buildRuleHash(id)}>learned rule v{r.version ?? "?"} ({mode})</a>
+              <a className={`badge learned-rule ${modeClass}`} href={buildRuleHash(id)}>learned rule v{r.version ?? "?"} ({mask(mode)})</a>
               {typeof r.findings === "number" ? <> · {r.findings} finding{r.findings === 1 ? "" : "s"}</> : null}
             </li>
           );

@@ -1,8 +1,8 @@
 .activityRoot { margin: var(--space-3) 0; }
 .svg { display: block; width: 100%; height: auto; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm); }
-.tick { font-size: 9px; fill: var(--muted); }
-.gap { font-size: 9px; fill: var(--muted); }
-.count { font-size: 9px; font-weight: 700; fill: var(--ink-on-fill); pointer-events: none; }
+.tick { font-size: 11px; fill: var(--muted); }
+.gap { font-size: 11px; fill: var(--muted); }
+.count { font-size: 11px; font-weight: 700; fill: var(--ink-on-fill); pointer-events: none; }
 .legend { list-style: none; display: grid; gap: 0.25rem; padding: 0; margin: 0.4rem 0 0; font-size: var(--text-sm); color: var(--muted); }
 .legend li { min-height: 1.25rem; }
 .breakIcon { display: inline-block; vertical-align: middle; margin-right: 0.3rem; color: var(--muted); }

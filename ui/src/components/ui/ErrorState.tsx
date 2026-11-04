@@ -1,4 +1,6 @@
+import { useMaskedText } from "../../lib/presentation";
 import errorStyles from "./ErrorState.module.css";
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  return <p role="alert" className={errorStyles.errorRoot}>{message} {onRetry ? <button type="button" onClick={onRetry}>Retry</button> : null}</p>;
+  const masked = useMaskedText(message);
+  return <p role="alert" className={errorStyles.errorRoot}>{masked} {onRetry ? <button type="button" onClick={onRetry}>Retry</button> : null}</p>;
 }

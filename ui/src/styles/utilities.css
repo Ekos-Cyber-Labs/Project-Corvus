@@ -137,9 +137,6 @@ button.dist-seg { cursor:pointer; }
 .activity-svg { width:100%; height:auto; color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-sm); }
 .activity-svg circle { cursor:pointer; }
 .activity-svg circle:focus-visible, .activity-svg g[role="button"]:focus-visible { outline:2px solid var(--accent); }
-.svg-gap { font-size:9px; fill:var(--muted); }
-.svg-tick { font-size:8px; fill:var(--muted); }
-.svg-count { font-size:9px; font-weight:700; fill:var(--ink-on-fill); pointer-events:none; }
 .activity-legend { list-style:none; display:grid; gap:.25rem; padding:0; margin:.4rem 0 0; font-size:var(--text-sm); color:var(--muted); }
 .legend-dot { display:inline-block; width:.65rem; height:.65rem; border-radius:50%; background:var(--accent2); vertical-align:middle; }
 .legend-neutral { background:var(--neutral); }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { LayoutDashboard, ScrollText, Settings, Shield } from "lucide-react";
 import { getJson } from "../../api/client";
+import { usePresentation } from "../../app/providers";
 import sidebarStyles from "./Sidebar.module.css";
 function usePendingHighCritical(): number | null {
   const [count, setCount] = useState<number | null>(null);
@@ -50,6 +51,7 @@ export function Sidebar() {
   const isSettings = path === "/settings";
   const pendingHigh = usePendingHighCritical();
   const sweep = useSweepCountdown();
+  const { enabled: presentation } = usePresentation();
   const nextText = sweep.seconds === null ? "—" : `${Math.floor(sweep.seconds / 60)}:${String(sweep.seconds % 60).padStart(2, "0")}`;
   return (
     <div className={sidebarStyles.sidebarRoot}>
@@ -69,6 +71,7 @@ export function Sidebar() {
         <Link to="/rules" aria-current={isRules ? "page" : undefined}><ScrollText size={18} /> Rules</Link>
         <Link to="/settings" aria-current={isSettings ? "page" : undefined}><Settings size={18} /> Settings</Link>
       </nav>
+      {presentation ? <p className={sidebarStyles.presentBadge} role="status">Presentation mode</p> : null}
       <div className={sidebarStyles.sweepBox} aria-live="polite">
         <p className={sidebarStyles.sweepRow}><span className={sidebarStyles.sweepDot} aria-hidden="true" />{sweep.label}</p>
         <p className={sidebarStyles.sweepNext}>Next in {nextText}</p>

@@ -1,4 +1,5 @@
 import { TACTIC_NAMES, tacticForTechnique } from "../../lib/attackMap";
+import { useMaskFn } from "../../lib/presentation";
 import { useContainerWidth } from "../../lib/useContainerWidth";
 import activityStyles from "./ActivityStrip.module.css";
 import { layoutTimeline } from "./timelineLayout";
@@ -35,6 +36,7 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
   highlighted: number | null; onHighlight: (i: number | null) => void; onJump?: (i: number) => void;
 }) {
   const [figureRef, containerWidth] = useContainerWidth<HTMLElement>(720);
+  const mask = useMaskFn();
   if (!timeline.length) return null;
   const width = Math.max(320, containerWidth);
   const layout = layoutTimeline(timeline, width, firstSeen, lastSeen);
@@ -46,11 +48,11 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
   if (layout.outsideFirstSeen && firstSeen) captionParts.push(`incident first_seen ${firstSeen} lies outside the displayed axis range`);
   if (layout.outsideLastSeen && lastSeen) captionParts.push(`incident last_seen ${lastSeen} lies outside the displayed axis range`);
   if (layout.skippedIndices.length) captionParts.push(`${layout.skippedIndices.length} claims with invalid timestamps were skipped`);
-  const caption = `${captionParts.join(", ")}.`;
+  const caption = mask(`${captionParts.join(", ")}.`);
   return (
     <figure ref={figureRef} className={`activity ${activityStyles.activityRoot}`}>
       <figcaption className="sr-only">{caption}</figcaption>
-      <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} role="img" aria-label={`Activity strip: ${timeline.length} claims between ${timeline[0].time} and ${timeline[timeline.length - 1].time}`} className={`activity-svg ${activityStyles.svg}`}>
+      <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} role="img" aria-label={mask(`Activity strip: ${timeline.length} claims between ${timeline[0].time} and ${timeline[timeline.length - 1].time}`)} className={`activity-svg ${activityStyles.svg}`}>
         <line x1="14" y1={layout.axisY} x2={layout.width - 14} y2={layout.axisY} stroke="currentColor" opacity="0.35" />
         {layout.ticks.map((tick, i) => (
           <g key={i}>
@@ -72,7 +74,7 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
           return (
             <g key={first}>
               {isCluster ? (
-                <g tabIndex={0} role="button" aria-label={`${mark.indices.length} claims clustered at ${e.time}. Jump to the first of them: claim ${first + 1}, ${e.description}, event ${e.event_uid}`}
+                <g tabIndex={0} role="button" aria-label={mask(`${mark.indices.length} claims clustered at ${e.time}. Jump to the first of them: claim ${first + 1}, ${e.description}, event ${e.event_uid}`)}
                   onMouseEnter={() => onHighlight(first)} onMouseLeave={() => onHighlight(null)}
                   onFocus={() => onHighlight(first)} onBlur={() => onHighlight(null)}
                   onClick={() => onJump?.(first)}
@@ -82,7 +84,7 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
                 </g>
               ) : (
                 <circle cx={mark.x} cy={mark.y} r={mark.r} style={{ fill: TACTIC_FILL[tac] ?? TACTIC_FILL.other }} stroke={highlighted === first ? "currentColor" : "none"} strokeWidth="2"
-                  tabIndex={0} role="button" aria-label={`Claim ${first + 1}: ${e.description} at ${e.time}, event ${e.event_uid}${tac !== "other" ? `, tactic ${TACTIC_NAMES[tac] ?? tac}` : ", neutral: no technique tied"}`}
+                  tabIndex={0} role="button" aria-label={mask(`Claim ${first + 1}: ${e.description} at ${e.time}, event ${e.event_uid}${tac !== "other" ? `, tactic ${TACTIC_NAMES[tac] ?? tac}` : ", neutral: no technique tied"}`)}
                   onMouseEnter={() => onHighlight(first)} onMouseLeave={() => onHighlight(null)}
                   onFocus={() => onHighlight(first)} onBlur={() => onHighlight(null)} />
               )}
@@ -98,7 +100,7 @@ export function ActivityStrip({ timeline, firstSeen, lastSeen, techniques, evide
           <li key={t}><span className="legend-dot" style={{ background: TACTIC_FILL[t] }} aria-hidden="true" /> {TACTIC_NAMES[t] ?? t}</li>
         ))}
       </ul>
-      <ul className="sr-only">{timeline.map((e, i) => <li key={i}>{e.time}: {e.description} (event {e.event_uid})</li>)}</ul>
+      <ul className="sr-only">{timeline.map((e, i) => <li key={i}>{mask(`${e.time}: ${e.description} (event ${e.event_uid})`)}</li>)}</ul>
     </figure>
   );
 }

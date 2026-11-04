@@ -54,11 +54,11 @@ export const TIMELINE_AXIS_Y = 38;
 export const TIMELINE_MIN_WIDTH = 320;
 export const CLUSTER_DISTANCE_PX = 24;
 const PLOT_LEFT = 14;
-const CHAR_WIDTH = 7;
+const CHAR_WIDTH = 6;
 const TICK_LABEL_Y = 62;
-const TICK_LABEL_HEIGHT = 8;
+const TICK_LABEL_HEIGHT = 11;
 const GAP_LABEL_Y = 12;
-const GAP_LABEL_HEIGHT = 8;
+const GAP_LABEL_HEIGHT = 11;
 
 function box(x: number, y: number, width: number, height: number): LabelBox {
   return { x, y, width, height, right: x + width, bottom: y + height };

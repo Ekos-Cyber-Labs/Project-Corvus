@@ -1,8 +1,10 @@
 import type { DashboardRecent } from "../../../api/types";
 import { formatCompactTime } from "../../../lib/format";
+import { useMaskFn } from "../../../lib/presentation";
 import { severityName, verdictChip } from "../utils/dashboard";
 import recentStyles from "./RecentVerdicts.module.css";
 export function RecentVerdicts({ recent }: { recent: DashboardRecent[] }) {
+  const mask = useMaskFn();
   return (
     <section className="panel" aria-label="Latest verdicts from the sweep">
       <h2>Latest verdicts from the sweep</h2>
@@ -17,10 +19,10 @@ export function RecentVerdicts({ recent }: { recent: DashboardRecent[] }) {
                 return (
                   <tr key={r.id}>
                     <td className={`mono ${recentStyles.id}`}>{r.id}</td>
-                    <td className={recentStyles.title}><a href={`#/incidents/${r.id}`}>{r.title || `Incident ${r.id}`}</a></td>
+                    <td className={recentStyles.title}><a href={`#/incidents/${r.id}`}>{mask(r.title || `Incident ${r.id}`)}</a></td>
                     <td className={recentStyles.sev}><span className={recentStyles.sevCell}><span className={`sev-dot sev-dot-${r.final_severity}`} aria-hidden="true" />{severityName(r.final_severity)}</span></td>
                     <td className={recentStyles.verdict}><span className={chip.className}>{chip.text}</span></td>
-                    <td className={`mono ${recentStyles.time}`} title={iso}><span aria-hidden="true">{formatCompactTime(r.analyzed_at)}</span><span className="sr-only">{iso}</span></td>
+                    <td className={`mono ${recentStyles.time}`} title={mask(iso)}><span aria-hidden="true">{mask(formatCompactTime(r.analyzed_at))}</span><span className="sr-only">{mask(iso)}</span></td>
                   </tr>
                 );
               })}

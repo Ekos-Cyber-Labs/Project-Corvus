@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSettingsPage } from "../hooks/useSettingsPage";
-import { useTheme } from "../../../app/providers";
+import { useMaskFn, usePresentation, useTheme } from "../../../app/providers";
 import type { ThemeChoice } from "../../../app/providers";
 import { PageHeader } from "../../../components/layout/PageHeader";
 import { Skeleton } from "../../../components/ui/Skeleton";
@@ -26,6 +26,8 @@ function connectionText(state: string): string {
 export function SettingsPage() {
   const { settings, sweep, state, retry } = useSettingsPage();
   const { choice, setTheme } = useTheme();
+  const { enabled: presentation, setEnabled: setPresentation } = usePresentation();
+  const mask = useMaskFn();
   const [reduceMotion, setReduceMotion] = useState<boolean>(() => {
     try { return localStorage.getItem("corvus-reduce-motion") === "true"; } catch { return false; }
   });
@@ -64,7 +66,7 @@ export function SettingsPage() {
                 {settings.connections.map((c) => (
                   <li key={c.name}>
                     <span>{CONNECTION_LABELS[c.name]?.title ?? c.name}</span>
-                    <span className="mono">{c.address ?? "not configured"}</span>
+                    <span className="mono">{mask(c.address ?? "not configured")}</span>
                     <span className={connectionClass(c.state)}>{connectionText(c.state)}</span>
                   </li>
                 ))}
@@ -78,6 +80,7 @@ export function SettingsPage() {
                 ))}
               </div>
               <p><label><input type="checkbox" checked={reduceMotion} onChange={(e) => setReduceMotion(e.target.checked)} /> Reduce motion</label></p>
+              <p><label><input type="checkbox" checked={presentation} onChange={(e) => setPresentation(e.target.checked)} /> Presentation mode: mask public IP addresses</label></p>
             </section>
             <section className="panel" aria-label="Privacy">
               <h2>Privacy</h2>

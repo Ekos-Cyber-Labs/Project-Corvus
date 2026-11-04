@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { preferredTheme, type ThemeName } from "../lib/theme";
+export { PresentationProvider, usePresentation, useMaskedText, useMaskFn, MaskedText, PRESENTATION_STORAGE_KEY } from "../lib/presentation";
 export type ThemeChoice = ThemeName | "system";
 type ThemeContextValue = { theme: ThemeName; choice: ThemeChoice; setTheme: (c: ThemeChoice) => void; toggleTheme: () => void };
 const ThemeContext = createContext<ThemeContextValue>({ theme: "dark", choice: "dark", setTheme: () => undefined, toggleTheme: () => undefined });

@@ -1,5 +1,6 @@
 import type { RuleListItem } from "../../../api/types";
 import { buildRuleHash } from "../../../lib/hash";
+import { MaskedText } from "../../../lib/presentation";
 import { Pagination } from "../../../components/ui/Pagination";
 import { ruleCountLine } from "../utils/rules";
 import { RuleStatusBadge } from "./RuleStatusBadge";
@@ -22,7 +23,7 @@ export function RulesList({ items, total, page, setPage, pageSize, onSelect, sel
               onKeyDown={(e) => { if (e.key === " ") { e.preventDefault(); onSelect(it.id); } }}
             >
               <span className={`mono ${cardsStyles.id}`}>{it.id}</span>
-              <span className={cardsStyles.name}>{it.title || `Rule ${it.id}`}</span>
+              <span className={cardsStyles.name}><MaskedText text={it.title || `Rule ${it.id}`} /></span>
               <span className={cardsStyles.meta}><RuleStatusBadge status={it.status} /></span>
               <span className={cardsStyles.sub}>From incident {it.source_incident_id ?? "unknown"}{it.techniques?.length ? ` · ${it.techniques[0]}` : ""}</span>
             </a>
