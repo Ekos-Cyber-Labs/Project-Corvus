@@ -40,6 +40,51 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SIGMA_RULES_SHA256 = "5725c91b5813587ad6a4b0b8e0233fa44348b1595f818d8b7fd39d6033385085"
 SIGMA_RULES_TAG = "r2026-07-01"
 
+#: Stock Wazuh decoders and rules that ``corvus.learning.wazuh_xml`` and
+#: ``export_wazuh`` read as reference, pinned to the ``v4.14.9`` release
+#: commit (the lab manager's version, 2026-10-08) and fetched from that
+#: commit rather than the mutable tag. Wazuh licenses decoders and rules
+#: under GPLv2 (see the LICENSE fetched beside them), so they are fetched
+#: here and never committed. Each digest is enforced on every download.
+#: Moving to a newer Wazuh release is a separate, deliberate step: re-pin
+#: the commit and digests, then re-run the tests to diff behavior.
+WAZUH_RULESET_COMMIT = "bed556db3f4f535cb3a585f3d9e7f35a6acf0f58"
+WAZUH_RULESET_VERSION = "v4.14.9"
+_WAZUH_RAW = f"https://raw.githubusercontent.com/wazuh/wazuh/{WAZUH_RULESET_COMMIT}/"
+#: (path in the wazuh/wazuh repo, file name under data/wazuh-ruleset/, SHA-256)
+WAZUH_RULESET_FILES: tuple[tuple[str, str, str], ...] = (
+    (
+        "ruleset/rules/0020-syslog_rules.xml",
+        "0020-syslog_rules.xml",
+        "31d475e980b17bd375c5bc940582373c5949a50b096500803b9de7ca7723fa11",
+    ),
+    (
+        "ruleset/decoders/0040-auditd_decoders.xml",
+        "0040-auditd_decoders.xml",
+        "c6d7a9abe48af3b8c85814733ba5f186c9a2a7e3ffe4a24c75fb548d869ddea2",
+    ),
+    (
+        "ruleset/decoders/0320-sudo_decoders.xml",
+        "0320-sudo_decoders.xml",
+        "aa7dec351c08af0bf69c877610fb998b1e1cceef7f9c9e218a75bcfd37154fa0",
+    ),
+    (
+        "ruleset/rules/0365-auditd_rules.xml",
+        "0365-auditd_rules.xml",
+        "026f9aeab3c170b9154ec1bb306688d17d3059a97147d6472715fe66b28fc39f",
+    ),
+    (
+        "etc/local_rules.xml",
+        "local_rules.xml",
+        "991dc926bd2e3aec88bd79be1c8b458777f64f489b3e6524e682ac33620425f4",
+    ),
+    (
+        "LICENSE",
+        "LICENSE",
+        "9136fd9ef577a45b1bcea8c8cd761e8c9c21e15cc2a09e7c139755e581bde00e",
+    ),
+)
+
 DATASETS: list[dict[str, object]] = [
     {
         "name": "sigma",
@@ -74,6 +119,20 @@ DATASETS: list[dict[str, object]] = [
                 "prefix": "rules/windows/",
                 "dest": "sigma/rules/",
             },
+        ],
+    },
+    {
+        "name": "wazuh-ruleset",
+        "kind": "release_asset",
+        "rev": WAZUH_RULESET_VERSION,
+        "dest": "wazuh-ruleset",
+        "assets": [
+            {
+                "url": _WAZUH_RAW + path,
+                "sha256": digest,
+                "dest": f"wazuh-ruleset/{name}",
+            }
+            for path, name, digest in WAZUH_RULESET_FILES
         ],
     },
     {

@@ -241,6 +241,27 @@ the environment, never stored.
   extracted `rules/windows/**` files are fetched; everything lives
   under git-ignored `data/sigma/` and is never committed.
 
+## 6. Wazuh stock decoders and rules (reference for the Wazuh exporter)
+
+- Source: <https://github.com/wazuh/wazuh>, release `v4.14.9`, fetched
+  from the release commit `bed556db3f4f535cb3a585f3d9e7f35a6acf0f58`
+  (not the mutable tag): `ruleset/rules/0020-syslog_rules.xml`,
+  `ruleset/decoders/0040-auditd_decoders.xml`,
+  `ruleset/decoders/0320-sudo_decoders.xml`,
+  `ruleset/rules/0365-auditd_rules.xml`, the example `etc/local_rules.xml`
+  and the `LICENSE`.
+- SHA-256: enforced on every download for each file (pinned in
+  `scripts/fetch_datasets.py`, also recorded in `checksums.txt`).
+- License: Wazuh licenses its decoders and rules under GPLv2 (see the
+  `LICENSE` fetched beside them). They are fetched at use time into
+  git-ignored `data/wazuh-ruleset/` and are never committed or
+  redistributed by this repository.
+- What we use it for: `corvus.learning.wazuh_xml` and `export_wazuh`
+  are checked against these files (decoder fields, rule-id sibling
+  precedence), and their tests read them. The version is pinned so test
+  runs are comparable; moving to a newer Wazuh release is a separate
+  step that re-pins the commit and digests and re-runs those tests.
+
 ## Checksums
 
 `checksums.txt` holds `SHA-256  data-relative-path` lines for every

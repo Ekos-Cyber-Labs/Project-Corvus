@@ -146,7 +146,7 @@ def test_wanted_picks_only_apt29_day1_host_zip() -> None:
 
 
 def test_dataset_pins_are_well_formed() -> None:
-    assert len(fetch.DATASETS) == 5
+    assert len(fetch.DATASETS) == 6
     for dataset in fetch.DATASETS:
         assert dataset["dest"] and dataset["rev"]
         # dest is joined onto the data dir; a "data/" prefix would nest data/.
@@ -162,7 +162,35 @@ def test_dataset_pins_are_well_formed() -> None:
         "mitre-cti",
         "ocsf-schema",
         "sigma",
+        "wazuh-ruleset",
     }
+
+
+def test_wazuh_ruleset_is_pinned_to_one_release_commit() -> None:
+    wazuh = [d for d in fetch.DATASETS if d["name"] == "wazuh-ruleset"][0]
+    assert wazuh["kind"] == "release_asset"
+    assert wazuh["rev"] == "v4.14.9"
+    assert re.fullmatch(r"[0-9a-f]{40}", fetch.WAZUH_RULESET_COMMIT)
+    assets = [dict(a) for a in wazuh["assets"]]  # type: ignore[union-attr]
+    # the five files the learning modules read, plus the license that
+    # travels with them (GPLv2: fetched, never committed)
+    assert sorted(str(a["dest"]) for a in assets) == [
+        "wazuh-ruleset/0020-syslog_rules.xml",
+        "wazuh-ruleset/0040-auditd_decoders.xml",
+        "wazuh-ruleset/0320-sudo_decoders.xml",
+        "wazuh-ruleset/0365-auditd_rules.xml",
+        "wazuh-ruleset/LICENSE",
+        "wazuh-ruleset/local_rules.xml",
+    ]
+    for asset in assets:
+        assert re.fullmatch(r"[0-9a-f]{64}", str(asset["sha256"])), asset
+        # fetched from the commit, never from a mutable tag or branch
+        assert f"/wazuh/wazuh/{fetch.WAZUH_RULESET_COMMIT}/" in str(asset["url"])
+    # every digest is also recorded in the committed checksums file
+    checksums = Path(fetch.REPO_ROOT) / "datasets" / "checksums.txt"
+    recorded = fetch.read_checksums(checksums)
+    for asset in assets:
+        assert recorded[f"data/{asset['dest']}"] == asset["sha256"]
 
 
 def test_sigma_release_asset_is_pinned() -> None:
