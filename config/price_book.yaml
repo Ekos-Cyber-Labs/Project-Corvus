@@ -14,3 +14,17 @@ glimmer:
   source: "on-prem model, no per-token charge"
   date: "2026-10-28"
   note: "on-prem: electricity not included"
+gemma4:
+  input_per_mtok: 0
+  cached_input_per_mtok: 0
+  output_per_mtok: 0
+  source: "NaN membership, models without a credit counter (request and token rate limits still apply)"
+  date: "2026-11-10"
+  note: "hosted by a third party; no per-token charge on this plan"
+qwen3.6:
+  input_per_mtok: 0
+  cached_input_per_mtok: 0
+  output_per_mtok: 0
+  source: "NaN membership, models without a credit counter (request and token rate limits still apply)"
+  date: "2026-11-10"
+  note: "hosted by a third party; no per-token charge on this plan"
