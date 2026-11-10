@@ -2,6 +2,8 @@
 
 On-prem AI SOC analyst for small teams: it turns Wazuh alerts into a few explained attack chains, without logs leaving the network.
 
+> **Status: alpha.** Development happens on the `dev` branch; `main` gets a release only when `dev` is stable. The hackathon submission is frozen at tag `v1.0-submission`. Corvus is model-agnostic: it talks to any OpenAI-compatible chat API (see [Models](#models)).
+
 ## The problem
 
 Small teams run Linux servers and Windows endpoints with Wazuh as their only security tool and no 24/7 SOC. Existing AI SOC tools are enterprise-priced SaaS that require shipping raw logs to a vendor cloud. Real attacks stay buried in uncorrelated alerts.
@@ -15,9 +17,9 @@ flowchart LR
     W[Wazuh alerts/archives] --> S[SiemAdapter]
     S --> O[OCSF events]
     O --> C[Deterministic correlation + ATT&CK<br/>explainable severity floor]
-    C --> G[Glimmer triage on-prem]
+    C --> G[Triage model on-prem]
     G --> P[Pseudonymizer]
-    P --> R[Spark reasoning<br/>bounded tool loop]
+    P --> R[Analysis model<br/>bounded tool loop]
     R --> Sigma[Sigma rule proposal]
     Sigma --> B[Backtest]
     B --> SH[Wazuh shadow deployment]
@@ -28,34 +30,38 @@ flowchart LR
 flowchart TB
     subgraph onprem [On-prem network]
         W2[Wazuh alerts, archives, raw logs]
-        G2[Glimmer triage]
+        G2[Triage model]
         P2[Pseudonymizer]
     end
     subgraph cloud [Cloud, pseudonymized only]
-        R2[Spark reasoning + rule drafting]
+        R2[Analysis model + rule drafting]
     end
     W2 --> G2 --> P2 --> R2
 ```
 
 Pipeline, in order (`docs/architecture.md` has the module for each step):
 
-1. Wazuh alerts and archives enter through a `SiemAdapter` (`corvus/adapters/wazuh/`, `corvus/adapters/replay/`). No raw log parsing in hackathon scope.
+1. Wazuh alerts and archives enter through a `SiemAdapter` (`corvus/adapters/wazuh/`, `corvus/adapters/replay/`). No raw log parsing yet (planned, see `docs/architecture.md`).
 2. Alerts become OCSF events (pinned schema v1.9.0). There is no local event store: PostgreSQL is the system of record (incidents, queue, checkpoints, agent steps, rules, dispositions, pseudonyms, spend, LLM attempts; migration `corvus/state/migrations/0002_core_tables.sql`). The SIEM stays the log store, queried on demand.
 3. Deterministic correlation (host, user, IP, process, time window) plus MITRE ATT&CK mapping (`corvus/correlate/`, `corvus/attack/`) builds candidate incidents with an explainable severity floor. The database keeps `severity_id` between the floor and one level above it, so models can never silently lower or raise scores.
-4. Muse Glimmer triages each cluster on-prem through an async batch queue (`corvus/llm/triage_worker.py`). Glimmer alone sees raw evidence.
+4. The triage model (on-prem by default) triages each cluster through an async batch queue (`corvus/llm/triage_worker.py`). It alone sees raw evidence.
 5. A pseudonymizer (`corvus/guardrails/pseudonymizer.py`) condenses and pseudonymizes the incident before any cloud call.
-6. Muse Spark reasons over the pseudonymized incident in a bounded agent loop with two read-only tools (`get_events`, `get_attack_technique`) and returns verdict, timeline, and response in English or Spanish (`corvus/llm/agent.py`).
+6. The analysis model reasons over the pseudonymized incident in a bounded agent loop with two read-only tools (`get_events`, `get_attack_technique`) and returns verdict, timeline, and response in English or Spanish (`corvus/llm/agent.py`).
 7. Proposed Sigma rules are backtested (`corvus/learning/backtest.py`), deployed to Wazuh in shadow mode (`corvus/learning/wazuh_xml.py`, `corvus/learning/shadow.py`), and need human approval (`corvus rules approve`). Promotion is never a model tool.
 8. A reduced web UI (read-only API) and an eval harness sit alongside.
 
-## Where Meta models are used
+## Models
 
-Stated exactly as the code does it (`corvus/llm/config.py`, `corvus/llm/prompts/triage.py`):
+Corvus is not tied to a model or a vendor. It talks to **any OpenAI-compatible chat-completions API**: you give each purpose a base URL, a model name and, when the endpoint needs one, an API key. Two purposes exist (`corvus/llm/config.py`):
 
-- On-prem triage: Muse Glimmer, served as model `glimmer` via vLLM at `GLIMMER_BASE_URL` (required, no default) on the team's own hardware. Default purpose config: output cap 4500 tokens, reasoning strength medium via `TRIAGE_REASONING_STRENGTH`, up to 16 concurrent queue workers. Glimmer reads raw evidence and produces the condensed incident.
-- Reasoning and rule drafting: `muse-spark-1.3` at `META_BASE_URL` (`https://api.meta.ai/v1`) with `META_API_KEY`. Default purpose config: output cap 6000 tokens. Spark sees only condensed, pseudonymized incidents.
-- `MODEL_PROFILE` selects the backend per purpose: `hybrid` (default), `all-local` (Glimmer serves both, no cloud key needed), `all-cloud`.
-- Muse Code is the coding agent used to build this repo.
+- **Triage** (trust `onprem`): reads the raw evidence and produces the condensed incident. Meant for a model on your own hardware; an `onprem` backend pointing at a public address is refused unless you say so explicitly.
+- **Analysis** (trust `cloud`): reasons over the pseudonymized incident in a bounded tool loop and drafts rules. It can be a hosted API or the same local model.
+
+`MODEL_PROFILE` chooses the layout: `hybrid` (default: triage local, analysis on the analysis endpoint), `all-local` (the triage backend serves both, no cloud key needed) or `all-cloud`. Per-purpose `TRIAGE_*` / `ANALYSIS_*` variables override model, base URL, API key, trust and limits.
+
+Requirements on an endpoint: `/v1/chat/completions`, tool calls for the analysis loop, `response_format` of type `json_schema` (strict), and a context window that fits the configured caps. Every configured model also needs a row in `config/price_book.yaml` (price 0 for a local model, declared explicitly); Corvus refuses to start without it.
+
+What has been evaluated: every number in this README was measured with Muse Glimmer 30B (FP8, vLLM, on-prem triage) and `muse-spark-1.3` (analysis), the defaults below. Other models work through the same contract but their quality, validity rate and cost are **not measured here**; run `corvus eval` before trusting one. The names `GLIMMER_BASE_URL` and `META_API_KEY` are historical: you can point both purposes at other endpoints with `TRIAGE_BASE_URL`, `ANALYSIS_BASE_URL`, `ANALYSIS_API_KEY` and the `*_MODEL` variables, but `GLIMMER_BASE_URL` is still a required setting (give it the triage endpoint). Neutral names are on the to-do list.
 
 ## Security by design
 
@@ -78,7 +84,7 @@ Details and attacker model: `docs/threat-model.md`.
 - The pseudonymizer hides only entity-shaped spans of registered values; bare words with no recognizable shape pass through verbatim, as do novel encodings such as compressed payloads or short hex (`corvus/guardrails/pseudonymizer.py`).
 - The pseudonymizer registers ordinary words it finds in free text as hosts, and a pseudonym-shaped string typed by an attacker passes through unchanged (`corvus/guardrails/pseudonymizer.py`, `tests/test_pseudonymizer_single_pass.py`).
 - Values that are not mapped to a typed slot are kept whole under `unmapped` in the Windows and Wazuh normalizers; the 65536-character cap applies to typed slots and `raw_data` only (`corvus/normalize/windows.py`, `corvus/normalize/wazuh.py`).
-- The UI has no login in hackathon scope.
+- The UI has no login yet (planned); expose it only behind your own access controls.
 - One-node PostgreSQL; no replica or failover.
 - One model output repeated an attacker's markdown image and link into the stored verdict (fixture `v2-render-username-persist`); inert in the React UI, which renders text (`ui/src/` has no HTML rendering path); the stored value is not sanitized.
 - Gate 2 covers 1 step of 8 in the variant chain (step 7); the other 7 steps are missed, which the report calls the rule's confirmed limit (`eval/reports/gate2_variant_2026-11-01.md`).
@@ -87,7 +93,7 @@ Details and attacker model: `docs/threat-model.md`.
 
 ## Results
 
-Every number below names its producing report. Anything not yet measured is marked so explicitly.
+Every number below names its producing report. Anything not yet measured is marked so explicitly. Model figures were measured with the default models named in [Models](#models) (Muse Glimmer 30B on-prem, `muse-spark-1.3`); they do not transfer to other models.
 
 | What | Number | Source |
 |---|---|---|
@@ -136,8 +142,8 @@ and what is **not verified here** and why. `corvus version` prints
 | Docker with Compose | Postgres 18, the API, and the worker as one stack (`docker-compose.yml`: `postgres`, `corvus-api`, `corvus-worker`) | Run the API and CLI directly on the host (part 4); you still need a Postgres 18 reachable at `DATABASE_URL` |
 | Python 3.14 with `uv` | The `corvus` CLI, migrations, polls, sweeps, tests. `pyproject.toml` requires Python >= 3.14; `uv` provides it | Nothing Python-side runs |
 | Node 22 | Building the console (`ui/package.json`; the Docker build uses `node:22` too) | The Docker stack still works (it builds the UI itself); only host-side UI development stops |
-| A Meta API key | The reasoning model under the default `hybrid` profile | Use `MODEL_PROFILE=all-local` (part 5); correlation, polls, and the console still work, analysis runs on the on-prem model |
-| An NVIDIA GPU host (optional) | Serving the on-prem triage model yourself | Point `GLIMMER_BASE_URL` at any OpenAI-compatible endpoint you already have; without any triage endpoint, polls and correlation still work and analysis fails safe (part 5) |
+| An API key for an OpenAI-compatible analysis endpoint | The analysis model under the default `hybrid` profile (any provider; the defaults use the Meta API) | Use `MODEL_PROFILE=all-local` (part 5); correlation, polls, and the console still work, analysis runs on the on-prem model |
+| A GPU host or any OpenAI-compatible endpoint (optional) | Serving the on-prem triage model yourself | Point the triage base URL (`GLIMMER_BASE_URL`, historical name) at any OpenAI-compatible endpoint you already have; without any triage endpoint, polls and correlation still work and analysis fails safe (part 5) |
 | A Wazuh 4.x indexer you can read | Live alerts (part 7, `docs/wazuh.md`) | Use the public replay path instead (part 6); everything except live polling works |
 
 Postgres 18 comes from the compose file; you do not install it
@@ -188,9 +194,9 @@ paste it into an issue, never let it reach a log.
 | `POSTGRES_PASSWORD` | **Secret.** Password for the Corvus Postgres user; also embedded in `DATABASE_URL`. |
 | `POSTGRES_USER`, `POSTGRES_DB` | Postgres role and database the compose service creates (defaults `corvus` / `corvus`). |
 | `DATABASE_URL` | Postgres URL. Inside Compose use host `postgres`; on the dev machine use `postgresql://corvus:<password>@127.0.0.1:55432/corvus`. Compose publishes Postgres on `127.0.0.1:55432` only. |
-| `GLIMMER_BASE_URL` | On-prem triage endpoint (OpenAI-compatible). Required, no default; not itself a secret. |
-| `META_BASE_URL` | Reasoning-model endpoint (default `https://api.meta.ai/v1`). |
-| `META_API_KEY` | **Secret.** Meta API key. Optional only with `MODEL_PROFILE=all-local`. |
+| `GLIMMER_BASE_URL` | Triage endpoint, OpenAI-compatible (historical name; `TRIAGE_BASE_URL` overrides it). Required, no default; not itself a secret. |
+| `META_BASE_URL` | Analysis endpoint, OpenAI-compatible (historical name; default `https://api.meta.ai/v1`; `ANALYSIS_BASE_URL` overrides it). |
+| `META_API_KEY` | **Secret.** API key for the analysis endpoint (historical name; `ANALYSIS_API_KEY` overrides it). Optional only with `MODEL_PROFILE=all-local`. |
 | `MODEL_PROFILE` | `hybrid` (default), `all-local`, or `all-cloud`; selects which backend serves triage and analysis (part 5). |
 | `WAZUH_INDEXER_URL` | Indexer base URL, `https` only. Blank until part 7. |
 | `WAZUH_INDEXER_USER` | Dedicated read-only indexer user (never the indexer admin). Blank until part 7. |
@@ -268,47 +274,15 @@ on the Vite port it prints.
 
 ### 5. Models
 
-**On-prem triage (Glimmer).** Corvus expects an OpenAI-compatible
-endpoint at `GLIMMER_BASE_URL` (required, no default) serving the
-model name `glimmer` (override with `TRIAGE_MODEL`). That is the
-whole contract: any server that speaks the OpenAI chat API under
-that name works. In our tests the model is Muse Glimmer 30B, FP8,
-served by vLLM on the team's own hardware. This repository pins no
-vLLM version and no serve flags, and measures no GPU memory figure,
-so treat any specific `vllm serve` command as your own deployment
-choice, sized by the model you serve; nothing about vLLM here is
-verified beyond the client contract. Default triage limits
-(`corvus/llm/config.py`): output cap 4500 tokens, reasoning strength
-medium (`TRIAGE_REASONING_STRENGTH`), up to 16 concurrent queue
-workers, and a read timeout derived for a slow single GPU (about
-1275 s by default). Keep `max_tokens` high: both models reason by
-default, reasoning tokens count against the cap, and a low cap
-returns HTTP 200 with empty content, which Corvus treats as an
-error.
+The contract is described in [Models](#models). In practice:
 
-When the triage endpoint is unreachable, Corvus fails safe, by
-design (`corvus/llm/call.py`): `/health` reports `degraded`; triage
-and analysis attempts are recorded in `llm_attempts`; validation
-retries (up to 3, security failures never) and then falls back to
-the deterministic result marked "AI analysis failed" (`ai_failed`).
-Incidents, severity floors, polls, and the console keep working; no
-score is ever invented by a fallback.
+**Triage (on-prem).** An OpenAI-compatible endpoint at `GLIMMER_BASE_URL` (required, no default; or `TRIAGE_BASE_URL`) serving the model name `glimmer` (override with `TRIAGE_MODEL`). Any server that speaks the OpenAI chat API under that name works. In our tests the model is Muse Glimmer 30B, FP8, served by vLLM on our own hardware. Only the model name `glimmer` switches on the vLLM-specific token accounting (`return_token_ids`); any other name uses the generic path and the `usage` the server reports. This repository pins no vLLM version and no serve flags, and measures no GPU memory figure, so treat any specific serve command as your own deployment choice. Default triage limits (`corvus/llm/config.py`): output cap 4500 tokens, reasoning strength medium (`TRIAGE_REASONING_STRENGTH`), up to 16 concurrent queue workers, and a read timeout derived for a slow single GPU (about 1275 s). Keep `max_tokens` high: reasoning models count reasoning tokens against the cap, and a low cap returns HTTP 200 with empty content, which Corvus treats as an error.
 
-**Reasoning (Spark).** `muse-spark-1.3` at `META_BASE_URL`
-(default `https://api.meta.ai/v1`) with `META_API_KEY`. Spark sees
-only condensed, pseudonymized incidents — never raw events. Every
-attempt is priced from `config/price_book.yaml` and recorded in
-`llm_attempts` and the `spend` ledger; `SPEND_CAP_USD` (default
-100) caps recorded spend, past which the system degrades instead of
-spending. Not verified here: any live model call (needs the Meta
-API key and, for triage quality, a served Glimmer); no paid call was
-made for this guide.
+When the triage endpoint is unreachable, Corvus fails safe, by design (`corvus/llm/call.py`): `/health` reports `degraded`; attempts are recorded in `llm_attempts`; validation retries (up to 3, security failures never) and then falls back to the deterministic result marked "AI analysis failed" (`ai_failed`). Incidents, severity floors, polls, and the console keep working; no score is ever invented by a fallback.
 
-**`MODEL_PROFILE`** (`corvus/llm/config.py`): `hybrid` (default —
-Glimmer triages on-prem, Spark reasons in the cloud), `all-local`
-(Glimmer serves both, no cloud key needed), `all-cloud` (Spark
-serves both). Per-purpose `TRIAGE_*` / `ANALYSIS_*` variables can
-override model, endpoint, key, trust, and limits for either profile.
+**Analysis.** Default `muse-spark-1.3` at `META_BASE_URL` (default `https://api.meta.ai/v1`) with `META_API_KEY`; change them with `ANALYSIS_MODEL`, `ANALYSIS_BASE_URL` and `ANALYSIS_API_KEY`. The analysis model sees only condensed, pseudonymized incidents, never raw events. Every attempt is priced from `config/price_book.yaml` (add a row for any other model) and recorded in `llm_attempts` and the `spend` ledger; `SPEND_CAP_USD` (default 100) caps recorded spend, past which the system degrades instead of spending. Not verified here: any live model call.
+
+**`MODEL_PROFILE`**: `hybrid` (default), `all-local` (the triage backend serves both purposes, no cloud key needed), `all-cloud` (the analysis backend serves both).
 
 ### 6. Try it without Wazuh: the public replay path
 
@@ -354,8 +328,8 @@ uv run corvus analyze --incident <id>
   should show: the mechanics work before the data is interesting.
 - `corvus analyze --incident <id>` runs triage if missing, then the
   bounded reasoning loop (`--lang en|es`). **Not verified here:
-  needs a reachable triage model and, under `hybrid`, the Meta API
-  key; it spends money under the spend cap.** Help verified here for
+  needs a reachable triage model and, under `hybrid`, the analysis
+  API key; it spends money under the spend cap.** Help verified here for
   every command above (`-h`).
 
 ### 7. Connect to your Wazuh
@@ -527,9 +501,28 @@ Shadow and approval guarantees are unchanged: the sweep only reads and analyzes 
 
 Only public datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) or lab-generated data. No customer data, no real names. Most fixtures use reserved documentation ranges and private lab ranges with `example.com`. The Linux corpus (`tests/fixtures/linux/sshd_real_corpus.jsonl` and the tests that use it) is real traffic from our own lab and may contain public addresses of lab hosts and of the people who logged in. Datasets are fetched with checksums and never committed.
 
-## Built during the hackathon
+## Development
 
-All product code in this repo has been written since Oct 26, 2026, for the Meta Global AI Developer Hackathon. The commit history shows what was built when.
+Corvus is alpha and is developed on the `dev` branch. `main` only receives a version when `dev` is stable; the hackathon submission is the tag `v1.0-submission` and is never moved.
+
+Commands (full detail in [Run it yourself](#run-it-yourself)): `make install`, `make lint` (ruff, ruff format check, mypy), `make test` (full pytest; needs Postgres, see part 10), `make ui-test`, `make up` / `make down`, `corvus version`, `corvus db migrate`. Secrets reach the services only through a file outside the repository (`CORVUS_ENV_FILE`).
+
+Layout: `corvus/adapters` (SIEM interface, `wazuh/`, `replay/`), `corvus/normalize` (OCSF), `corvus/state` (Postgres schema, migrations, queue), `corvus/correlate`, `corvus/llm` (clients, prompts, schemas, agent loop), `corvus/guardrails` (validators, pseudonymizer, egress filter), `corvus/learning` (rule generation, backtest, shadow, lifecycle), `corvus/api`, `ui/`, `eval/` (harness and ground truth), `lab/`, `tests/`, `docs/`.
+
+Rules for contributions:
+
+1. Public datasets (OTRF Security-Datasets, EVTX-ATTACK-SAMPLES) or your own lab data only; never real customer logs, company names or people. Fixtures use RFC 5737 addresses and `example.com`. Datasets are never committed: use `scripts/fetch_datasets.py` (checksums and licence notes).
+2. Secrets only from environment variables; never in code, fixtures, logs or test output.
+3. The cloud model sees only condensed, pseudonymized incidents; raw events never leave the on-prem path, and every cloud call goes through the pseudonymizer and the egress filter.
+4. Correlation and severity stay deterministic and explainable; models triage, summarize and narrate but never silently decide scores. A rule learned by a model starts in shadow mode and needs human approval.
+5. Any change to normalizers, correlation, prompts or models runs the eval harness and reports the metric delta; false positives are the primary gate and detected attack chains must not regress.
+6. Python 3.14 with type hints and small modules; code, comments and docs in English. OCSF classes, activity ids and attributes are checked against the pinned v1.9.0 schema, and every normalizer ships with a fixture-based test. Every pin (schema, runtime, image, dependency, dataset, rule release) is the latest stable release when it is pinned, with the date recorded.
+7. Anything sent to a hosted model is checked against the real API before it counts as done; stub transports cannot reveal schema or punctuation behaviour. Every reported number names what it counts and reproduces from a committed script.
+8. Pitfalls to check before finishing: graceful SIGTERM, lease expiry races and idempotent jobs, bounded queues, backoff with jitter, timezone-aware UTC, null vs missing fields, idempotent migrations, bounded tool loops, strict JSON validation, escaped untrusted data in prompts, no timing-dependent tests, and filters that reject empty or placeholder values instead of matching everything.
+
+## History
+
+The product code in this repository was written since Oct 26, 2026, for the Meta Global AI Developer Hackathon (coding agent: Muse Code); the submission is frozen at tag `v1.0-submission`. Work after the hackathon continues on `dev`; the commit history shows what was built when.
 
 ## Disclaimer and responsible use
 
@@ -537,7 +530,7 @@ All product code in this repo has been written since Oct 26, 2026, for the Meta 
 2. It is a decision-support tool: model output (verdicts, severity, response plans, learned rules) can be wrong or incomplete and must be reviewed by a qualified person before any action; Corvus never changes a Wazuh rule or an alert by itself, and every learned rule needs human approval and starts in shadow mode.
 3. Use it only on systems and data you own or are authorized to monitor; authorization, privacy, and data-protection obligations (including what you send to a cloud model, even pseudonymized) are the operator's responsibility.
 4. It is not a substitute for a managed security service, incident response retainer, or compliance program; ATT&CK, OCSF, and Sigma content is third-party material under the notices in [NOTICE](NOTICE).
-5. The project was built during the Meta Global AI Developer Hackathon (2026); results in this README come from public datasets and a synthetic lab and say nothing about performance in other environments.
+5. The project began during the Meta Global AI Developer Hackathon (2026); results in this README come from public datasets and a synthetic lab and say nothing about performance in other environments.
 
 ## License
 

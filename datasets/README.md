@@ -1,7 +1,7 @@
 # Evaluation datasets
 
 Public Windows atomic datasets used by the eval harness. Dataset files
-are never committed (AGENTS.md rule 2): they live under `data/` (git
+are never committed (see "Data policy" in the top-level README): they live under `data/` (git
 ignored) and are fetched with [fetch_datasets.py](../scripts/fetch_datasets.py).
 Ground truth (per-file ATT&CK techniques and tactics) is derived with
 [ground_truth.py](../eval/ground_truth.py) and written to

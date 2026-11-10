@@ -25,8 +25,8 @@ Wazuh alerts/archives -> SiemAdapter -> OCSF -> deterministic correlation + ATT&
 ```
 
 Items tagged `[ROADMAP]` are designed but not implemented now (see Part 2).
-Rule 8 in [AGENTS.md](../AGENTS.md) forbids implementing them unless the
-maintainer explicitly asks.
+They are implemented one at a time on the `dev` branch when the maintainer
+asks for them; an item's tag is removed in the same change that lands it.
 
 ## Part 1 — Hackathon scope (Oct 27 - Nov 4)
 
@@ -615,7 +615,8 @@ or model inputs. Details: `datasets/README.md`.
 
 ## Part 2 — Roadmap (designed, not implemented now)
 
-Brief design notes. Do not implement (AGENTS.md rule 8).
+Brief design notes. Implemented one at a time on `dev` when the maintainer
+asks for them.
 
 - **Circuit breaker, semantic canary, model health** (roadmap, no module exists yet: there is no `corvus/llm/health.py`):
   per-model transport + semantic health. A high semantic failure rate opens
