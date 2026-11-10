@@ -262,3 +262,7 @@ ui/dist/
 ui/node_modules/
 
 !ui/src/lib/
+
+# Generated evaluation reports (local)
+eval/reports/llm_latest.json
+eval/reports/llm_latest.md
