@@ -92,6 +92,28 @@ def test_pam_session_closed_maps_logoff() -> None:
     assert event.unmapped.get("linux.cron") is True
 
 
+def test_pam_sshd_session_closed_names_the_user_as_actor() -> None:
+    """Synthetic: the fixture rewritten as an sshd close (no ``by``)."""
+    doc = _doc("pam_close")
+    doc["full_log"] = (
+        "2026-10-28T00:05:01.805585+00:00 web01 sshd[2155]:"
+        " pam_unix(sshd:session): session closed for user root"
+    )
+    doc["predecoder"]["program_name"] = "sshd"
+    doc["rule"] = {"id": "5502", "level": 3, "description": "Login session closed."}
+    finding, event, key, _dedupe = wazuh.map_linux_doc(doc)
+    assert key is None
+    assert isinstance(event, Authentication)
+    assert event.activity_id == 2
+    assert "linux.cron" not in event.unmapped
+    assert event.actor is not None and event.actor.user is not None
+    assert event.actor.user.name == "root"
+    assert finding is not None and finding.evidences
+    actor = finding.evidences[0].actor
+    assert actor is not None and actor.user is not None
+    assert actor.user.name == "root"
+
+
 def test_auth_journald_copies_share_dedupe_key() -> None:
     _f1, e1, _k1, dedupe1 = _map("pam_open")
     _f2, e2, _k2, dedupe2 = _map("pam_open_j")

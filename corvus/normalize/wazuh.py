@@ -1755,7 +1755,8 @@ def _map_pam(
 
     ``session opened`` is activity 1 Logon Success, ``session
     closed`` activity 2 Logoff Success; the ``by <user>`` opener
-    becomes the actor. A ``pam_unix(...:auth): authentication
+    becomes the actor, and a close line (no opener) uses the session's
+    user as the actor. A ``pam_unix(...:auth): authentication
     failure`` line is activity 1 Logon Failure when it names a user.
     The pinned schema has no session class for these (the 1.9.0
     ``authorize_session`` activities are privilege/group assignments),
@@ -1797,6 +1798,12 @@ def _map_pam(
     program = predecoder.get("program_name") if isinstance(predecoder, dict) else None
     if program == "CRON" or "(cron:session)" in full_log:
         unmapped["linux.cron"] = True
+        actor_name = actor_name or username
+    elif session_match is not None and activity_id == 2:
+        # A close line names only the session's user (``data.dstuser``);
+        # that user ends their own session, so it is also the actor.
+        # Without it the finding carries no user at all and cannot join
+        # the session it closes.
         actor_name = actor_name or username
     user = User(name=username)
     return Authentication(
