@@ -268,7 +268,7 @@ Every flag (from `corvus wazuh poll -h`, verified here):
 | `--page-size N` | Alerts per indexer page, at most 1000 (default 500). |
 | `--max-docs N` | Documents per cycle, at most (default 5000). Start small (500) on a first run. |
 | `--database-url URL` | Postgres URL (default: `$DATABASE_URL`). |
-| `--attack PATH` | Compact ATT&CK dictionary (default `data/attack/enterprise.json`). Build it once with the replay path in the README if it is missing. |
+| `--attack PATH` | Compact ATT&CK dictionary (default `data/attack/enterprise.json`). Required: `corvus wazuh poll` fails with `FileNotFoundError` without it. Build it once with `python3 scripts/fetch_datasets.py --only mitre-cti` and `uv run corvus attack build` (about 49 MB; see the README, part 7). |
 
 How resuming works: the adapter pages with `search_after` on
 `[timestamp, _id]` inside a fresh point in time, re-reads a 120-second

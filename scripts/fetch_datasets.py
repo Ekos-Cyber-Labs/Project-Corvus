@@ -553,6 +553,23 @@ def verify_extra_files(dest: Path, expected_rels: set[str]) -> list[str]:
     return extras
 
 
+def select_datasets(only: list[str] | None) -> list[dict[str, object]]:
+    """Return the datasets named in ``only`` (all of them when empty).
+
+    An unknown name raises ``ValueError`` listing the valid names, so a
+    typo never silently fetches nothing.
+    """
+    if not only:
+        return list(DATASETS)
+    known = [str(dataset["name"]) for dataset in DATASETS]
+    unknown = sorted(set(only) - set(known))
+    if unknown:
+        raise ValueError(
+            f"unknown dataset(s): {', '.join(unknown)}; valid names: {', '.join(known)}"
+        )
+    return [dataset for dataset in DATASETS if str(dataset["name"]) in set(only)]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", default="data")
@@ -562,7 +579,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="rewrite the checksums file from downloaded files",
     )
+    parser.add_argument(
+        "--only",
+        action="append",
+        metavar="NAME",
+        help="fetch only this dataset (repeatable), e.g. --only mitre-cti; "
+        "default: all. Not combinable with --update-checksums",
+    )
     args = parser.parse_args(argv)
+    if args.only and args.update_checksums:
+        print(
+            "refusing: --only cannot be combined with --update-checksums "
+            "(the checksums file is rebuilt from scratch and would lose the "
+            "datasets left out)"
+        )
+        return 2
+    try:
+        selected = select_datasets(args.only)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     data_dir = (REPO_ROOT / args.data_dir).resolve()
     checks_path = (REPO_ROOT / args.checksums).resolve()
@@ -575,8 +611,9 @@ def main(argv: list[str] | None = None) -> int:
     # pinned revisions contain, so stale keys from older layouts vanish.
     merged = {} if args.update_checksums else dict(checks)
     pending: list[str] = []
+    verified = 0
     try:
-        for dataset in DATASETS:
+        for dataset in selected:
             if dataset.get("kind") == "release_asset":
                 entries, unverified = fetch_release_asset(
                     dataset, data_dir, checks, args.update_checksums
@@ -586,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
                     dataset, data_dir, checks, args.update_checksums
                 )
             pending.extend(unverified)
+            verified += len(entries)
             rel_data = data_dir.relative_to(REPO_ROOT).as_posix()
             dest_prefix = f"{rel_data}/{dataset['dest']}/"
             for key in [key for key in merged if key.startswith(dest_prefix)]:
@@ -610,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {rel}")
             print("re-run with --update-checksums, review the diff, and commit it.")
             return 1
-        print(f"verified {len(merged)} files against {checks_path}")
+        print(f"verified {verified} files against {checks_path}")
     except (OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

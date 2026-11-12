@@ -312,9 +312,9 @@ uv run corvus analyze --incident <id>
   dictionary already built under `data/` was used instead.
 - `corvus replay load <path>` normalizes dataset files into Parquet
   under `data/replay/` (flags: `--replay-dir`, `--data-dir`,
-  `--batch-size`). `corvus replay detect` evaluates the shipped Sigma
-  rules over that store (defaults: rules `data/sigma/rules`, store
-  `data/replay`). Both need the fetched datasets.
+  `--batch-size`). `corvus replay detect` evaluates the Sigma rules
+  fetched above over that store (defaults: rules `data/sigma/rules`,
+  store `data/replay`). Both need the fetched datasets.
 - `corvus correlate replay` correlates the store into Postgres
   incidents (needs `DATABASE_URL` and `GLIMMER_BASE_URL` set; it
   calls no model). Verified here on a tiny Linux store (below):
@@ -336,7 +336,25 @@ uv run corvus analyze --incident <id>
 
 Follow `docs/wazuh.md`: create the read-only indexer user, copy the
 CA, set the four `WAZUH_INDEXER_*` variables, prove access with the
-read-only `curl`, then poll. The short version, once configured:
+read-only `curl`, then poll.
+
+Before the first poll or sweep, build the ATT&CK dictionary the
+correlator reads. A clean clone does not have it, and polling fails
+with `FileNotFoundError: data/attack/enterprise.json` without it. It
+needs only the ATT&CK bundle (about 49 MB), not the replay datasets:
+
+```bash
+python3 scripts/fetch_datasets.py --only mitre-cti
+uv run corvus attack build
+```
+
+Verified here from a clone with no `data/`: that fetch took about one
+minute (47 MB) and `corvus attack build` wrote `data/attack/enterprise.json`
+(867 techniques, 15 tactics). The Docker stack does not need this to
+start (the API and Postgres come up without it), but `corvus wazuh poll`
+and `corvus sweep` run from the host and do.
+
+The short version, once configured:
 
 ```bash
 corvus wazuh poll --once --since 2026-11-01T00:00:00Z --max-docs 500 --store data/live
@@ -421,6 +439,20 @@ corvus rules logtest <rule-id> --bundle <bundle-dir>
   help verified here for the whole `corvus rules` surface.
 
 ### 10. Run the tests and the evals
+
+A fresh clone needs the public reference data before the full suite
+passes (about 50 MB; the replay datasets are not needed):
+
+```bash
+python3 scripts/fetch_datasets.py --only mitre-cti --only ocsf-schema --only wazuh-ruleset
+uv run corvus attack build
+```
+
+Tests marked `lab_data` read the maintainer's recorded lab runs
+(`data/replay-linux-*`), which are not published; they skip with that
+reason when `data/replay-linux-chain1` is absent, and run when it is
+present. A missing public dataset is a setup error, so those tests
+fail with the fetch command in the message instead of skipping.
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache make lint

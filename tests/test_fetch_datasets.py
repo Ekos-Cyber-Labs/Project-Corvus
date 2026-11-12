@@ -193,6 +193,27 @@ def test_wazuh_ruleset_is_pinned_to_one_release_commit() -> None:
         assert recorded[f"data/{asset['dest']}"] == asset["sha256"]
 
 
+def test_select_datasets_filters_by_name_and_rejects_typos() -> None:
+    assert [d["name"] for d in fetch.select_datasets(None)] == [
+        d["name"] for d in fetch.DATASETS
+    ]
+    assert fetch.select_datasets([]) == list(fetch.DATASETS)
+    picked = fetch.select_datasets(["mitre-cti", "wazuh-ruleset"])
+    assert sorted(str(d["name"]) for d in picked) == ["mitre-cti", "wazuh-ruleset"]
+    with pytest.raises(ValueError, match="unknown dataset.*mitre-ctx.*valid names"):
+        fetch.select_datasets(["mitre-ctx"])
+
+
+def test_only_is_refused_with_update_checksums_and_with_unknown_names(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # neither call may touch the network or the checksums file
+    assert fetch.main(["--only", "mitre-cti", "--update-checksums"]) == 2
+    assert "cannot be combined" in capsys.readouterr().out
+    assert fetch.main(["--only", "nope"]) == 2
+    assert "unknown dataset" in capsys.readouterr().err
+
+
 def test_sigma_release_asset_is_pinned() -> None:
     sigma = [d for d in fetch.DATASETS if d["name"] == "sigma"][0]
     assert sigma["kind"] == "release_asset"
