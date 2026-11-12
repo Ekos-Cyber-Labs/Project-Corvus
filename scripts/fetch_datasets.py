@@ -41,15 +41,15 @@ SIGMA_RULES_SHA256 = "5725c91b5813587ad6a4b0b8e0233fa44348b1595f818d8b7fd39d6033
 SIGMA_RULES_TAG = "r2026-07-01"
 
 #: Stock Wazuh decoders and rules that ``corvus.learning.wazuh_xml`` and
-#: ``export_wazuh`` read as reference, pinned to the ``v4.14.9`` release
-#: commit (the lab manager's version, 2026-10-08) and fetched from that
+#: ``export_wazuh`` read as reference, pinned to the ``v4.14.10`` release
+#: commit (2026-11-09; the lab manager ran 4.14.9) and fetched from that
 #: commit rather than the mutable tag. Wazuh licenses decoders and rules
 #: under GPLv2 (see the LICENSE fetched beside them), so they are fetched
 #: here and never committed. Each digest is enforced on every download.
 #: Moving to a newer Wazuh release is a separate, deliberate step: re-pin
 #: the commit and digests, then re-run the tests to diff behavior.
-WAZUH_RULESET_COMMIT = "bed556db3f4f535cb3a585f3d9e7f35a6acf0f58"
-WAZUH_RULESET_VERSION = "v4.14.9"
+WAZUH_RULESET_COMMIT = "6e7835b4880c3210ef30e855a6bb43432be792e1"
+WAZUH_RULESET_VERSION = "v4.14.10"
 _WAZUH_RAW = f"https://raw.githubusercontent.com/wazuh/wazuh/{WAZUH_RULESET_COMMIT}/"
 #: (path in the wazuh/wazuh repo, file name under data/wazuh-ruleset/, SHA-256)
 WAZUH_RULESET_FILES: tuple[tuple[str, str, str], ...] = (
@@ -61,7 +61,7 @@ WAZUH_RULESET_FILES: tuple[tuple[str, str, str], ...] = (
     (
         "ruleset/decoders/0040-auditd_decoders.xml",
         "0040-auditd_decoders.xml",
-        "c6d7a9abe48af3b8c85814733ba5f186c9a2a7e3ffe4a24c75fb548d869ddea2",
+        "93470ddc78f88ea7717950b7a97d2d68e4cfac2cdb3a7bedb5edfcfff2c56b0f",
     ),
     (
         "ruleset/decoders/0320-sudo_decoders.xml",

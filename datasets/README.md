@@ -243,8 +243,8 @@ the environment, never stored.
 
 ## 6. Wazuh stock decoders and rules (reference for the Wazuh exporter)
 
-- Source: <https://github.com/wazuh/wazuh>, release `v4.14.9`, fetched
-  from the release commit `bed556db3f4f535cb3a585f3d9e7f35a6acf0f58`
+- Source: <https://github.com/wazuh/wazuh>, release `v4.14.10`, fetched
+  from the release commit `6e7835b4880c3210ef30e855a6bb43432be792e1`
   (not the mutable tag): `ruleset/rules/0020-syslog_rules.xml`,
   `ruleset/decoders/0040-auditd_decoders.xml`,
   `ruleset/decoders/0320-sudo_decoders.xml`,
@@ -261,6 +261,17 @@ the environment, never stored.
   precedence), and their tests read them. The version is pinned so test
   runs are comparable; moving to a newer Wazuh release is a separate
   step that re-pins the commit and digests and re-runs those tests.
+- Re-pinned from `v4.14.9` on 2026-11-11. Only
+  `0040-auditd_decoders.xml` differs: 8 expressions moved to PCRE2 and
+  stop at the `\x1d` separator of the enriched audit format (`key`,
+  `op`, `list`, `res`, `ses`; none touches `a0..a7`). No Corvus code
+  or test reads that file (only the `*_rules.xml` files and
+  `local_rules.xml`, identical in both versions); Corvus consumes the
+  manager's decoded output. Measured on 106,970 real SYSCALL records
+  from the lab: the old and the new `key` expression give the same
+  value on every record, and it matches what the 4.14.9 manager
+  decoded. `LOGIN`, `CONFIG_CHANGE`, `ANOM_PROMISCUOUS` and
+  `MAC_STATUS` records are not covered by that measurement.
 
 ## Checksums
 

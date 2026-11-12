@@ -169,7 +169,7 @@ def test_dataset_pins_are_well_formed() -> None:
 def test_wazuh_ruleset_is_pinned_to_one_release_commit() -> None:
     wazuh = [d for d in fetch.DATASETS if d["name"] == "wazuh-ruleset"][0]
     assert wazuh["kind"] == "release_asset"
-    assert wazuh["rev"] == "v4.14.9"
+    assert wazuh["rev"] == "v4.14.10"
     assert re.fullmatch(r"[0-9a-f]{40}", fetch.WAZUH_RULESET_COMMIT)
     assets = [dict(a) for a in wazuh["assets"]]  # type: ignore[union-attr]
     # the five files the learning modules read, plus the license that
