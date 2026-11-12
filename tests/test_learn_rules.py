@@ -77,6 +77,7 @@ def rule_count(test_url: str) -> int:
 # Lifecycle ---------------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_add_candidate_forces_experimental(rules_db: str) -> None:
     import uuid as uuid_module
@@ -114,6 +115,7 @@ def test_add_candidate_forces_experimental(rules_db: str) -> None:
     assert get_rule(rules_db, row["id"]) == row
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_same_submission_twice_gets_distinct_ids(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -148,6 +150,7 @@ def test_same_submission_twice_gets_distinct_ids(rules_db: str) -> None:
     assert get_rule(rules_db, first["id"])["lineage"]["version"] == 1
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_proposal_reusing_stored_id_gets_fresh_id(rules_db: str) -> None:
     import yaml
@@ -208,6 +211,7 @@ def test_failed_verifier_cannot_be_stored(rules_db: str) -> None:
     assert rule_count(rules_db) == 0
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_mismatched_caller_verdict_is_ignored(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -223,6 +227,7 @@ def test_mismatched_caller_verdict_is_ignored(rules_db: str) -> None:
     assert row["lineage"]["backtest"]["target_matched"] == sorted(GOLDEN_MATCHED)
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_experimental_text_still_evaluates_in_shadow(rules_db: str) -> None:
     import yaml
@@ -248,6 +253,7 @@ def test_experimental_text_still_evaluates_in_shadow(rules_db: str) -> None:
     assert pairs[0][0].rule_id == row["lineage"]["sigma_rule_id"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_transitions_need_approver_and_reason(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -291,6 +297,7 @@ def test_transitions_need_approver_and_reason(rules_db: str) -> None:
         )
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_list_orders_newest_first(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -323,6 +330,7 @@ def test_list_orders_newest_first(rules_db: str) -> None:
     assert get_rule(rules_db, 999999) is None
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_native_id_range_and_race_refusal(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -380,6 +388,7 @@ GOLDEN_MATCHED = [
 ]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_swapped_detection_text_rejected(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -399,6 +408,7 @@ def test_swapped_detection_text_rejected(rules_db: str) -> None:
     assert rule_count(rules_db) == 0
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_cited_uid_outside_match_rejected(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -416,6 +426,7 @@ def test_cited_uid_outside_match_rejected(rules_db: str) -> None:
     assert rule_count(rules_db) == 0
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_lineage_records_sigma_hash(rules_db: str) -> None:
     import hashlib
@@ -440,6 +451,7 @@ def test_lineage_records_sigma_hash(rules_db: str) -> None:
 # Versioning ----------------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_supersede_bumps_version(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -478,6 +490,7 @@ def test_supersede_bumps_version(rules_db: str) -> None:
     assert kept["status"] == "candidate"
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_supersede_unknown_id_rejected(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -499,6 +512,7 @@ def test_supersede_unknown_id_rejected(rules_db: str) -> None:
 # Concurrent transitions ----------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_concurrent_transition_one_wins(rules_db: str) -> None:
     import threading
@@ -565,6 +579,7 @@ def test_concurrent_transition_one_wins(rules_db: str) -> None:
 # Approver allow-list -------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_approver_allow_list(rules_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -596,6 +611,7 @@ def test_approver_allow_list(rules_db: str, monkeypatch: pytest.MonkeyPatch) -> 
 # CLI ---------------------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_cli_backtest_accepts_and_rejects(
     rules_db: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -678,6 +694,7 @@ def _seed_incident(test_url: str, uids: list[str]) -> int:
     return int(row[0])
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_candidate_without_incident_is_refused(rules_db: str) -> None:
     with pytest.raises(ValueError):
@@ -725,6 +742,7 @@ def test_forged_self_hashed_verdict_with_invented_uids_rejected(
     assert rule_count(rules_db) == 0
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_caller_verdict_is_informational_only(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -737,6 +755,7 @@ def test_caller_verdict_is_informational_only(rules_db: str) -> None:
     assert row["lineage"]["backtest"]["codes"] == ["accepted"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_two_texts_cannot_share_a_verdict(rules_db: str) -> None:
     import hashlib
@@ -784,6 +803,7 @@ def test_two_texts_cannot_share_a_verdict(rules_db: str) -> None:
 # Versioning ----------------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_double_supersede_of_same_parent_fails(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -824,6 +844,7 @@ def test_double_supersede_of_same_parent_fails(rules_db: str) -> None:
     assert sorted(row["version"] for row in list_rules(rules_db)) == [1, 2]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_concurrent_supersede_of_same_parent_one_wins(rules_db: str) -> None:
     import threading
@@ -876,6 +897,7 @@ def test_concurrent_supersede_of_same_parent_one_wins(rules_db: str) -> None:
     assert sorted(row["version"] for row in list_rules(rules_db)) == [1, 2]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_supersede_archived_or_stale_revision_fails(rules_db: str) -> None:
     incident_id = _seed_incident(rules_db, GOLDEN_UIDS)
@@ -911,6 +933,7 @@ def test_supersede_archived_or_stale_revision_fails(rules_db: str) -> None:
 # Attribution -----------------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_attribution_picks_latest_active_revision(rules_db: str) -> None:
     from corvus.live.poll import load_stored_rules
@@ -952,6 +975,7 @@ def test_attribution_picks_latest_active_revision(rules_db: str) -> None:
 # Approver --------------------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_approver_recorded_stripped(
     rules_db: str, monkeypatch: pytest.MonkeyPatch
@@ -978,6 +1002,7 @@ def test_approver_recorded_stripped(
         )
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_cli_add_list_show(
     rules_db: str,

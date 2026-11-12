@@ -61,4 +61,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: postgres-backed integration tests"]
+markers = [
+    "integration: postgres-backed integration tests",
+    "lab_data: needs the maintainer's lab replay stores under data/ (not publishable); skipped when data/replay-linux-chain1 is absent",
+]

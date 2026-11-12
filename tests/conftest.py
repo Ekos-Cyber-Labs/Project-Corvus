@@ -18,6 +18,27 @@ TEST_PORT = 55432
 TEST_DB_PREFIX = "corvus_test_"
 
 
+#: Marker ``lab_data`` tests read recorded lab runs (``data/replay-linux-*``,
+#: ``data/lab-*``) that cannot be published. They skip, with this reason,
+#: on a checkout that never had them; fetched public datasets are not
+#: covered by this (a missing public dataset is a setup error and fails).
+LAB_DATA_PROBE = "data/replay-linux-chain1"
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    if (config.rootpath / LAB_DATA_PROBE).is_dir():
+        return
+    skip = pytest.mark.skip(
+        reason=f"needs the maintainer's lab replay data ({LAB_DATA_PROBE}), "
+        "which is not published"
+    )
+    for item in items:
+        if item.get_closest_marker("lab_data"):
+            item.add_marker(skip)
+
+
 def _test_database_urls() -> tuple[str, str]:
     """Return (admin_url, test_url) or fail when DATABASE_URL is unsafe."""
     database_url = os.environ.get("DATABASE_URL")

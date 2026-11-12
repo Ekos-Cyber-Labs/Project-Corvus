@@ -89,6 +89,7 @@ def _attack():
 # Bundle ----------------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_export_bundle_golden(export_db: str, tmp_path: Path) -> None:
     row = _store_golden(export_db)
@@ -150,6 +151,7 @@ def test_export_bundle_golden(export_db: str, tmp_path: Path) -> None:
     assert "ssh " not in plan and "10." not in plan  # no manager address
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_export_refuses_edited_text_and_writes_nothing(
     export_db: str, tmp_path: Path
@@ -173,6 +175,7 @@ def test_export_refuses_edited_text_and_writes_nothing(
     assert not out.exists()
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_write_bundle_refuses_nonempty_dir(export_db: str, tmp_path: Path) -> None:
     row = _store_golden(export_db)
@@ -292,6 +295,7 @@ def test_subprocess_runner_happy_path() -> None:
 # CLI -----------------------------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_cli_export_and_logtest_agree(
     export_db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -348,6 +352,7 @@ def test_cli_export_and_logtest_agree(
     assert "CORVUS_WAZUH_LOGTEST_CMD" in bridge["command"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_export_bundle_with_xml_needy_literal_includes_targets(
     export_db: str, tmp_path: Path
@@ -426,6 +431,7 @@ def test_export_bundle_with_xml_needy_literal_includes_targets(
     assert not sudo_pattern.search("run a benign command now")
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_cli_logtest_garbage_answers_fails(
     export_db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

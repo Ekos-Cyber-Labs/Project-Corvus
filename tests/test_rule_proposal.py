@@ -78,6 +78,7 @@ def test_backtest_rejects_attacker_literal_in_selector() -> None:
     assert result.codes == ["attacker_literal"]
 
 
+@pytest.mark.lab_data
 def test_backtest_forbidden_tokens_default_off() -> None:
     result = backtest(GOLDEN, {"event_uids": GOLDEN_UIDS})
     assert result.accepted, result.codes
@@ -212,6 +213,7 @@ def test_search_filters_by_technique_and_logsource(tmp_path: Path) -> None:
     assert "22222222-2222-4222-8222-222222222222" not in content
 
 
+@pytest.mark.lab_data
 def test_backtest_tool_returns_only_codes_counts_uids(tmp_path: Path) -> None:
     import json as json_lib
 
@@ -548,6 +550,7 @@ level: low
 """
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_accepts_golden_and_stores_lineage(proposal_db: str) -> None:
     from corvus.learning.propose import proposal_attempts, propose_rule
@@ -594,6 +597,7 @@ def test_propose_accepts_golden_and_stores_lineage(proposal_db: str) -> None:
     assert sum(float(row[0]) for row in rows) > 0
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_exhausts_on_repeated_rejection(proposal_db: str) -> None:
     from corvus.learning.propose import proposal_attempts, propose_rule
@@ -617,6 +621,7 @@ def test_propose_exhausts_on_repeated_rejection(proposal_db: str) -> None:
     assert len(trail) == 6
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_rejects_exclusion_hiding_attacker(proposal_db: str) -> None:
     from corvus.learning.propose import propose_rule
@@ -635,6 +640,7 @@ def test_propose_rejects_exclusion_hiding_attacker(proposal_db: str) -> None:
     assert _rule_count(proposal_db) == 0
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_rejects_attacker_literal_rule(proposal_db: str) -> None:
     from corvus.learning.propose import propose_rule
@@ -655,6 +661,7 @@ def test_propose_rejects_attacker_literal_rule(proposal_db: str) -> None:
     assert _rule_count(proposal_db) == 0
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_rejected_unsafe_on_injection_echo(proposal_db: str) -> None:
     from corvus.learning.propose import propose_rule
@@ -694,6 +701,7 @@ def test_propose_rejected_unsafe_on_injection_echo(proposal_db: str) -> None:
     assert row is not None and row[0] == "security_injection_echo"
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_bounds_hostile_inputs(proposal_db: str) -> None:
     from corvus.learning.propose import propose_rule
@@ -730,6 +738,7 @@ def test_propose_bounds_hostile_inputs(proposal_db: str) -> None:
     assert len(_spend_rows(proposal_db, incident_id)) == 6
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_unknown_tool_and_repeat_is_bounded(proposal_db: str) -> None:
     from corvus.learning.propose import propose_rule
@@ -761,6 +770,7 @@ def test_propose_unknown_tool_and_repeat_is_bounded(proposal_db: str) -> None:
     assert len(_spend_rows(proposal_db, incident_id)) == 7
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_budget_stops_before_any_call(proposal_db: str) -> None:
     from corvus.learning.propose import propose_rule
@@ -780,6 +790,7 @@ def test_propose_budget_stops_before_any_call(proposal_db: str) -> None:
     assert _rule_count(proposal_db) == 0
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_propose_prompt_carries_no_raw_entities(proposal_db: str) -> None:
     from corvus.learning.propose import propose_rule
@@ -848,6 +859,7 @@ def _store_shadow_candidate(db: str) -> int:
     return int(shadow["id"])
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_shadow_rule_fires_with_marked_findings(proposal_db: str) -> None:
     from corvus.learning.shadow import evaluate_shadow, record_shadow_verdict
@@ -878,6 +890,7 @@ def test_shadow_rule_fires_with_marked_findings(proposal_db: str) -> None:
     assert counts["hits"] >= report.total_hits + 1
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_shadow_promotion_and_storage_guards(proposal_db: str) -> None:
     from corvus.learning.rules import add_candidate, transition_rule
@@ -913,6 +926,7 @@ def test_shadow_promotion_and_storage_guards(proposal_db: str) -> None:
     assert _rule_count(proposal_db) == 1
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_kill_switch_disables_shadow_evaluation(
     proposal_db: str, monkeypatch: pytest.MonkeyPatch
@@ -929,6 +943,7 @@ def test_kill_switch_disables_shadow_evaluation(
     assert quiet.findings == []
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_learning_proof_end_to_end(proposal_db: str) -> None:
     from corvus.learning.proof import run_proof
@@ -947,6 +962,7 @@ def test_learning_proof_end_to_end(proposal_db: str) -> None:
     assert stored["lineage"]["backtest"]["codes"] == ["accepted"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_chain1_pipeline_detect_correlate(proposal_db: str, tmp_path: Path) -> None:
     import os
@@ -998,6 +1014,7 @@ def test_chain1_pipeline_detect_correlate(proposal_db: str, tmp_path: Path) -> N
         assert incident["event_uids"], "incidents carry reachable event uids"
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_cli_approve_and_rollback(
     proposal_db: str,
@@ -1064,6 +1081,7 @@ def test_cli_approve_and_rollback(
         )
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_cli_prove(
     proposal_db: str,
@@ -1079,6 +1097,7 @@ def test_cli_prove(
     assert "spend rows" in out
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_loop_history_passes_strict_provider_validation(proposal_db: str) -> None:
     """Two tool turns plus final answer against a provider-strict transport.
@@ -1162,6 +1181,7 @@ def test_strict_validator_rejects_broken_histories() -> None:
         validate_openai_history([system, user, plain_final, tool])
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_model_error_carries_cause_without_secrets(proposal_db: str) -> None:
     from corvus.learning.propose import ModelTransportError, propose_rule
@@ -1226,6 +1246,7 @@ def test_unknown_rule_tool_is_bounded_error(tmp_path: Path) -> None:
     assert "11111111" in answers[1]["content"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_searches_forever_still_reaches_backtest(proposal_db: str) -> None:
     """Endless searching cannot starve the reserved backtest budget."""
@@ -1258,6 +1279,7 @@ def test_searches_forever_still_reaches_backtest(proposal_db: str) -> None:
     assert sum("search budget exhausted" in text for text in texts) == 1
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_batched_turn_never_exceeds_cap(proposal_db: str) -> None:
     """One turn with 6 searches executes 4 and refuses 2 with observations."""
@@ -1294,6 +1316,7 @@ def test_batched_turn_never_exceeds_cap(proposal_db: str) -> None:
     assert outcome.tool_calls_used == 5
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_final_before_backtest_gets_reserved_correction(
     proposal_db: str,
@@ -1330,6 +1353,7 @@ def test_final_before_backtest_gets_reserved_correction(
     assert "final" in correction[0]["content"].lower()
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_reserved_correction_works_at_turn_cap(proposal_db: str) -> None:
     """The reserved correction is issued even when the turn cap is hit."""
@@ -1354,6 +1378,7 @@ def test_reserved_correction_works_at_turn_cap(proposal_db: str) -> None:
     assert outcome.status == "accepted", outcome.errors
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_steer_message_fires_near_turn_budget(proposal_db: str) -> None:
     """Three turns left with no acceptance steers the model to backtest."""
@@ -1387,6 +1412,7 @@ def test_steer_message_fires_near_turn_budget(proposal_db: str) -> None:
     assert len(steers) == 1
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_reformatted_equivalent_yaml_accepted(proposal_db: str) -> None:
     """Formatting-only differences accept; the verified text is stored."""
@@ -1431,6 +1457,7 @@ def test_reformatted_equivalent_yaml_accepted(proposal_db: str) -> None:
     assert stripped_stored == stripped_golden
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_semantically_different_yaml_rejected_with_keys(
     proposal_db: str,
@@ -1472,6 +1499,7 @@ def test_semantically_different_yaml_rejected_with_keys(
     assert "level" in mismatches[0]["message"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_block_scalar_wrapper_rejected(proposal_db: str) -> None:
     """A different rule hiding YAML in a block scalar rejects with its keys."""

@@ -347,6 +347,7 @@ def test_timeout_helper_distinguishes_error() -> None:
 # Real-store integration ---------------------------------------------------
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_golden_rule_accepted_on_real_stores() -> None:
     result = backtest(GOLDEN, {"event_uids": GOLDEN_UIDS})
@@ -369,6 +370,7 @@ def test_golden_broad_variant_rejected() -> None:
     assert result.codes == ["over_broad_literal"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_baseline_firing_rule_rejected() -> None:
     or_rule = GOLDEN.replace(
@@ -382,6 +384,7 @@ def test_baseline_firing_rule_rejected() -> None:
     assert len(result.baseline_sample_uids) <= 10
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_single_exclusion_tolerated() -> None:
     single_not = GOLDEN.replace(
@@ -422,6 +425,7 @@ def injection_probe(field_lines: str) -> str:
     return probe_rule(f"{field_lines}  condition: sel_img and sel_evil\n")
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_attacker_split_across_all_list_rejected() -> None:
     body = (
@@ -439,6 +443,7 @@ def test_attacker_split_across_all_list_rejected() -> None:
     assert result.codes == ["attacker_literal"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_attacker_regex_dots_rejected() -> None:
     body = (
@@ -455,6 +460,7 @@ def test_attacker_regex_dots_rejected() -> None:
     assert result.codes == ["attacker_literal"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_attacker_charclass_rejected() -> None:
     body = (
@@ -471,6 +477,7 @@ def test_attacker_charclass_rejected() -> None:
     assert result.codes == ["attacker_literal"]
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_token_independent_rule_still_passes() -> None:
     body = (
@@ -555,6 +562,7 @@ def test_single_narrow_literal_exclusion_tolerated(
     assert result.codes[0] in ALL_CODES
 
 
+@pytest.mark.lab_data
 @pytest.mark.integration
 def test_host_window_target_on_real_chain() -> None:
     result = backtest(

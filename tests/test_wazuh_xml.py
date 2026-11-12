@@ -269,6 +269,7 @@ def test_shadow_level_follows_parents(
     assert rep.detail["levels"]["auditd"] == SHADOW_LEVEL == 2
 
 
+@pytest.mark.lab_data
 def test_real_parent_chains_and_real_sudo_lines() -> None:
     rep = tr(GOLDEN, 100010, "shadow")
     assert rep.ok, rep.reason
@@ -307,6 +308,7 @@ def test_mitre_ids_filtered_by_dictionary() -> None:
 # Real-record proof ----------------------------------------------------
 
 
+@pytest.mark.lab_data
 def test_sudo_pattern_fires_on_real_sudo_targets() -> None:
     rep = tr(GOLDEN, 100010, "shadow")
     assert rep.ok, rep.reason
@@ -317,6 +319,7 @@ def test_sudo_pattern_fires_on_real_sudo_targets() -> None:
         assert pattern.search(doc["data"]["command"]), uid
 
 
+@pytest.mark.lab_data
 def test_audit_pattern_fires_on_real_hex_record() -> None:
     rep = tr(GOLDEN, 100010, "shadow")
     assert rep.ok, rep.reason
@@ -329,6 +332,7 @@ def test_audit_pattern_fires_on_real_hex_record() -> None:
     assert pattern.search(blob)
 
 
+@pytest.mark.lab_data
 def test_audit_pattern_matches_lowercase_hex_variant() -> None:
     rep = tr(GOLDEN, 100010, "shadow")
     assert rep.ok, rep.reason
@@ -339,6 +343,7 @@ def test_audit_pattern_matches_lowercase_hex_variant() -> None:
     assert pattern.search(lowered)
 
 
+@pytest.mark.lab_data
 def test_audit_pattern_ignores_file_only_blob() -> None:
     rep = tr(GOLDEN, 100010, "shadow")
     assert rep.ok, rep.reason
@@ -347,6 +352,7 @@ def test_audit_pattern_ignores_file_only_blob() -> None:
     assert not pattern.search(doc["full_log"])
 
 
+@pytest.mark.lab_data
 def test_wildcard_rule_matches_both_hex_forms() -> None:
     detection = "  sel:\n    CommandLine|contains: '*authorized*keys*'\n"
     text = _rule_text(detection, "sel")
@@ -356,6 +362,7 @@ def test_wildcard_rule_matches_both_hex_forms() -> None:
     assert pattern.search(_chain_doc("lnx-6aada96a96a3c468")["full_log"])
 
 
+@pytest.mark.lab_data
 def test_real_baseline_lines_do_not_fire() -> None:
     import glob as glob_module
 
