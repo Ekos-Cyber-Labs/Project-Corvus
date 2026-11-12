@@ -27,6 +27,11 @@ Join rules:
   the same window (lateral movement). Two findings on different hosts
   that merely share a remote IP (both talking to the same external
   address) do not join.
+- Findings from an operator session (see :mod:`corvus.correlate.operator`,
+  off unless ``CORVUS_OPERATOR_SOURCES`` lists networks) join only each
+  other: their keys live in a separate space, so administration never
+  joins an attack. An incident made of them carries the
+  ``operator_session`` factor and an Informational floor.
 - Findings are processed in canonical ``(time, uid)`` order, so any
   arrival order yields the same incidents. Merging two incidents keeps
   the older key (``corr-<earliest finding uid>``).
@@ -34,13 +39,19 @@ Join rules:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, TypedDict
 
 from corvus.attack.dictionary import AttackDictionary, load_dictionary
 from corvus.correlate.identities import is_service_identity
+from corvus.correlate.operator import (
+    OPERATOR_SOURCES_ENV,
+    OperatorNetwork,
+    SessionCandidate,
+    mark_operator_findings,
+)
 from corvus.correlate.severity import primary_of, severity_floor
 from corvus.normalize.ocsf import (
     Authentication,
@@ -132,14 +143,21 @@ class _Signals:
     techniques: tuple[str, ...]
     referenced_uids: frozenset[str]
     unknown_tactics: tuple[str, ...] = ()
+    #: Operator login event uid when marked as an operator session.
+    operator_login: str | None = None
 
     @property
     def join_keys(self) -> frozenset[str]:
-        """Keys that can join this finding to an incident."""
-        keys = {f"host:{host}" for host in self.hosts}
-        keys |= {f"user:{user}" for user in self.users}
-        keys |= {f"ip:{ip}" for ip in self.device_ips | self.remote_ips}
-        keys |= {f"proc:{proc}" for proc in self.proc_keys}
+        """Keys that can join this finding to an incident.
+
+        Operator-session findings use a separate key space, so they
+        only ever join each other.
+        """
+        space = "op|" if self.operator_login is not None else ""
+        keys = {f"{space}host:{host}" for host in self.hosts}
+        keys |= {f"{space}user:{user}" for user in self.users}
+        keys |= {f"{space}ip:{ip}" for ip in self.device_ips | self.remote_ips}
+        keys |= {f"{space}proc:{proc}" for proc in self.proc_keys}
         return frozenset(keys)
 
 
@@ -459,6 +477,30 @@ def _success_detail(
     }
 
 
+def _title_hosts(members: Sequence[_Signals]) -> str:
+    """Name the incident's host for its title, deterministically.
+
+    Counts, per host, the member findings that name it. One host: that
+    host. Several with a unique top count: ``top and N other host(s)``.
+    A tie at the top: ``N hosts`` (no host is picked arbitrarily). No
+    host at all: ``unknown host``.
+    """
+    counts: dict[str, int] = {}
+    for member in members:
+        for host in member.hosts:
+            counts[host] = counts.get(host, 0) + 1
+    if not counts:
+        return "unknown host"
+    if len(counts) == 1:
+        return next(iter(counts))
+    top = max(counts.values())
+    leaders = sorted(host for host, n in counts.items() if n == top)
+    if len(leaders) > 1:
+        return f"{len(counts)} hosts"
+    others = len(counts) - 1
+    return f"{leaders[0]} and {others} other host{'s' if others != 1 else ''}"
+
+
 def _build_incident(
     cluster: _Cluster,
     attack: AttackDictionary,
@@ -537,17 +579,37 @@ def _build_incident(
             "finding_uids": sorted(skipped_uids),
             "contribution": "findings skipped without joining any incident",
         }
+    logins = sorted(
+        {m.operator_login for m in cluster.members if m.operator_login is not None}
+    )
+    if logins:
+        # Every member is marked (the key spaces never mix).
+        factors["operator_session"] = {
+            "fired": True,
+            "marked_findings": len(cluster.members),
+            "login_uids": logins,
+            "source": OPERATOR_SOURCES_ENV,
+            "computed_floor": floor,
+            "contribution": (
+                "administrative session from a listed operator network:"
+                " floor set to Informational, never joined to other findings"
+            ),
+        }
+        floor = 1
     breadth = len(primaries)
     score = round(float(floor) + SCORE_BREADTH_STEP * max(breadth - 1, 0), 2)
-    earliest = min(cluster.members, key=lambda member: (member.time, member.uid))
     most_advanced = factors["factor_1_attack_stage"]["most_advanced_tactic"]
-    if most_advanced is not None:
+    if logins:
+        display = "Operator session"
+    elif most_advanced is not None:
         display = attack.tactic_names.get(str(most_advanced), str(most_advanced))
     else:
         display = "Unclassified"
-    primary = sorted(earliest.hosts)[0] if earliest.hosts else "unknown host"
     count = len(cluster.members)
-    title = f"{display} on {primary} ({count} finding{'s' if count != 1 else ''})"
+    title = (
+        f"{display} on {_title_hosts(cluster.members)}"
+        f" ({count} finding{'s' if count != 1 else ''})"
+    )
     return Incident(
         correlation_key=cluster.key,
         title=title,
@@ -580,6 +642,7 @@ def correlate_findings(
     session_gap: timedelta = DEFAULT_SESSION_GAP,
     max_span: timedelta = DEFAULT_MAX_SPAN,
     auth_failure_threshold: int = DEFAULT_AUTH_FAILURE_THRESHOLD,
+    operator_sources: Sequence[OperatorNetwork] = (),
 ) -> list[Incident]:
     """Correlate findings into candidate incidents, deterministically.
 
@@ -604,6 +667,8 @@ def correlate_findings(
     Clusters are indexed by join key (each finding consults only the
     clusters sharing one of its keys), which keeps the exact same
     results as the old scan of every cluster at linear cost.
+    ``operator_sources`` (parsed ``CORVUS_OPERATOR_SOURCES``) enables
+    operator-session marking; empty, the output is unchanged.
     """
     from corvus.live.attribution import finding_muted, learned_refs_for_uids
 
@@ -636,6 +701,26 @@ def correlate_findings(
             skipped.append(finding.metadata.uid or "")
             continue
     ordered.sort(key=lambda signals: (signals.time, signals.uid))
+    marked = mark_operator_findings(
+        [
+            SessionCandidate(
+                uid=signals.uid,
+                time=signals.time,
+                hosts=signals.hosts,
+                users=signals.users,
+                remote_ips=signals.remote_ips,
+                techniques=signals.techniques,
+                referenced_uids=signals.referenced_uids,
+            )
+            for signals in ordered
+        ],
+        findings_by_uid,
+        events,
+        operator_sources,
+        gap_ms,
+    )
+    for signals in ordered:
+        signals.operator_login = marked.get(signals.uid)
     auth_index = _build_auth_index(events)
     clusters: list[_Cluster] = []
     by_key: dict[str, set[int]] = {}

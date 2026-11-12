@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import time as time_module
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -36,6 +37,7 @@ from corvus.correlate.correlate import (
     DEFAULT_MAX_SPAN,
     DEFAULT_SESSION_GAP,
 )
+from corvus.correlate.operator import OperatorNetwork, operator_sources_from_env
 from corvus.correlate.replay import (
     load_replay_events,
     load_replay_findings,
@@ -290,6 +292,7 @@ def run_poll_cycle(
         raise ValueError(f"archives_limit must be 1..200, got {archives_limit}")
     migrate(database_url)
     session_gap, max_span, auth_threshold = resolve_windows()
+    operator_sources = operator_sources_from_env()
     by_native, by_sigma = load_stored_rules(database_url)
     cycle_id = _record_cycle_start(database_url)
     report = PollCycleReport()
@@ -310,6 +313,7 @@ def run_poll_cycle(
             session_gap=session_gap,
             max_span=max_span,
             auth_threshold=auth_threshold,
+            operator_sources=operator_sources,
             by_native=by_native,
             by_sigma=by_sigma,
         )
@@ -338,6 +342,7 @@ def _run_poll_cycle_body(
     session_gap: timedelta,
     max_span: timedelta,
     auth_threshold: int,
+    operator_sources: Sequence[OperatorNetwork],
     by_native: dict[int, dict[str, Any]],
     by_sigma: dict[str, dict[str, Any]],
 ) -> PollCycleReport:
@@ -457,6 +462,7 @@ def _run_poll_cycle_body(
         session_gap=session_gap,
         max_span=max_span,
         auth_failure_threshold=auth_threshold,
+        operator_sources=operator_sources,
     )
     for incident in incidents:
         incident["learned_rules"] = learned_refs_for_uids(

@@ -215,6 +215,7 @@ guide, part 3). Restart Corvus after changing them.
 | `WAZUH_INDEXER_USER` | Yes | The read-only user from section 2. Never the admin account. |
 | `WAZUH_INDEXER_PASSWORD` | Yes | That user's password. Secret; never logged by the client. |
 | `WAZUH_INDEXER_CA` | With self-signed certs | Path to the CA bundle from section 3. When unset, the platform trust store is used. A set path that does not exist fails fast with `FileNotFoundError`. |
+| `CORVUS_OPERATOR_SOURCES` | No | Networks you administer the monitored hosts from (comma or space separated CIDRs or addresses, at most /16 for IPv4 and /48 for IPv6). Your own SSH sessions from them (login, PAM, sudo) are marked as operator sessions: kept as Informational audit incidents, never joined to attack incidents, never analyzed automatically. Activity mapping to any technique other than T1078, T1021 or T1548, or carrying an injection signal, is never marked. A malformed entry stops the poll with the entry's position. Unset: no marking. Setting or changing it re-splits stored incidents: a stored incident that loses members returns to pending with its analysis removed, and the split-off part is a new pending incident. |
 | `WAZUH_API_URL`, `WAZUH_API_USER`, `WAZUH_API_PASSWORD` | No | Declared in `corvus/settings.py` but **not read by any current code path** (checked across `corvus/`). They reserve names for a possible future manager-API integration. Leave them blank; Corvus does not need the Wazuh manager API. |
 
 Poll and sweep also need `DATABASE_URL` and `GLIMMER_BASE_URL` to be
@@ -372,6 +373,15 @@ This writes (refusals write nothing):
 - Raw logtest inputs with location and agent, `expected.json` (which
   lines must fire, from fresh Sigma matches), and `deploy_plan.txt`
   (the exact steps below for your rule).
+
+The default stores are the replay lab stores. For a rule learned
+from incidents read live from the indexer, pass the live store the
+rule came from: `--chain-dir <live-store>` (and `--baseline-dir` for
+the benign sample; the same store works, lines already bundled as
+targets are not repeated). Live stores keep no archive file and
+line, so each raw line comes from the event's stored `raw_data`;
+a target whose `full_log`, `location`, `decoder` or `agent` was
+truncated at ingest is refused.
 
 Deploy is a human step, on the manager, following the bundle's
 `deploy_plan.txt`:

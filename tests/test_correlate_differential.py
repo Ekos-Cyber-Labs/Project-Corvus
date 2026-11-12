@@ -105,13 +105,25 @@ def _oracle(
         factors["factor_4_success_vs_attempt"] = {**factor_4, **detail}
         breadth = len(primaries)
         score = round(float(floor) + SCORE_BREADTH_STEP * max(breadth - 1, 0), 2)
-        earliest = min(cluster.members, key=lambda member: (member.time, member.uid))
         most_advanced = factors["factor_1_attack_stage"]["most_advanced_tactic"]
         if most_advanced is not None:
             display = attack.tactic_names.get(str(most_advanced), str(most_advanced))
         else:
             display = "Unclassified"
-        primary = sorted(earliest.hosts)[0] if earliest.hosts else "unknown host"
+        per_host: dict[str, int] = {}
+        for member in cluster.members:
+            for host in member.hosts:
+                per_host[host] = per_host.get(host, 0) + 1
+        ranked = sorted(per_host.items(), key=lambda item: (-item[1], item[0]))
+        if not ranked:
+            primary = "unknown host"
+        elif len(ranked) == 1:
+            primary = ranked[0][0]
+        elif ranked[0][1] == ranked[1][1]:
+            primary = f"{len(ranked)} hosts"
+        else:
+            rest = len(ranked) - 1
+            primary = f"{ranked[0][0]} and {rest} other host{'s' if rest != 1 else ''}"
         count = len(cluster.members)
         incidents.append(
             {

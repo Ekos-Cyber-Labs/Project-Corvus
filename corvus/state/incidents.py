@@ -48,6 +48,15 @@ def upsert_incidents(database_url: str, incidents: Sequence[Mapping[str, Any]]) 
     level is kept: on conflict the stored value survives while it is
     still within the new ``[floor, floor + 1]`` range, otherwise it
     resets to the new floor (so the table CHECK always holds).
+
+    An incident that loses members (a stored event uid is missing from
+    the new ``event_uids``, as after re-correlating with a different
+    configuration) describes different activity than its model
+    analysis did: it returns to ``ai_status = 'pending'`` with no
+    verdict, summary or response, its severity drops back to the floor and its
+    ``incident_analyses`` rows are deleted, so the next analysis run
+    sees it as new. Analyst feedback rows are kept. Growing incidents
+    keep their analysis (the live poll appends events).
     """
     if not incidents:
         return 0
@@ -68,8 +77,22 @@ def upsert_incidents(database_url: str, incidents: Sequence[Mapping[str, Any]]) 
         )
         for incident in incidents
     ]
+    new_members = {
+        str(incident["correlation_key"]): {str(u) for u in incident["event_uids"]}
+        for incident in incidents
+    }
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, correlation_key, event_uids FROM incidents"
+                " WHERE correlation_key = ANY(%s) FOR UPDATE",
+                (list(new_members),),
+            )
+            shrunk = [
+                int(row[0])
+                for row in cur.fetchall()
+                if not {str(u) for u in (row[2] or [])} <= new_members[str(row[1])]
+            ]
             cur.executemany(
                 "INSERT INTO incidents (correlation_key, title, entity_keys, "
                 "techniques, event_uids, first_seen, last_seen, "
@@ -93,6 +116,18 @@ def upsert_incidents(database_url: str, incidents: Sequence[Mapping[str, Any]]) 
                 "updated_at = NOW()",
                 rows,
             )
+            if shrunk:
+                cur.execute(
+                    "UPDATE incidents SET ai_status = 'pending', verdict = NULL,"
+                    " summary = NULL, response = NULL, language = NULL,"
+                    " severity_id = severity_floor, updated_at = NOW()"
+                    " WHERE id = ANY(%s)",
+                    (shrunk,),
+                )
+                cur.execute(
+                    "DELETE FROM incident_analyses WHERE incident_id = ANY(%s)",
+                    (shrunk,),
+                )
         conn.commit()
     return len(rows)
 

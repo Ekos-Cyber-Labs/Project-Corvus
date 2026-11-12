@@ -206,3 +206,89 @@ def test_upsert_keeps_model_raised_severity_then_resets() -> None:
         assert _severity(test_url, key) == floor + 2
     finally:
         _drop_database(admin_url, name)
+
+
+def _analysis_state(test_url: str, key: str) -> tuple[str, str | None, int, int]:
+    """Return ai_status, verdict, severity_id and the analysis row count."""
+    with psycopg.connect(test_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT i.ai_status, i.verdict, i.severity_id,"
+                " (SELECT COUNT(*) FROM incident_analyses a"
+                " WHERE a.incident_id = i.id)"
+                " FROM incidents i WHERE correlation_key = %s",
+                (key,),
+            )
+            row = cur.fetchone()
+    assert row is not None
+    return str(row[0]), row[1], int(row[2]), int(row[3])
+
+
+def _mark_analyzed(test_url: str, key: str, severity_id: int) -> None:
+    with psycopg.connect(test_url, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE incidents SET ai_status = 'done', verdict = 'malicious',"
+                " summary = 's', response = 'r', language = 'en', severity_id = %s"
+                " WHERE correlation_key = %s RETURNING id",
+                (severity_id, key),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            for stage in ("triage", "analysis"):
+                cur.execute(
+                    "INSERT INTO incident_analyses (incident_id, stage, status)"
+                    " VALUES (%s, %s, 'resolved')",
+                    (row[0], stage),
+                )
+
+
+@pytest.mark.integration
+def test_upsert_returns_shrunk_incidents_to_pending() -> None:
+    """Losing members voids the analysis; growing keeps it."""
+    admin_url, test_url = _test_database_urls()
+    name = _create_database(admin_url, test_url)
+    try:
+        migrate(test_url)
+        incidents = _incidents()
+        upsert_incidents(test_url, incidents)
+        target = max(incidents, key=lambda i: len(i["event_uids"]))
+        other = next(i for i in incidents if i is not target)
+        key, floor = target["correlation_key"], target["severity_floor"]
+        assert len(target["event_uids"]) >= 2
+        for incident in incidents:
+            _mark_analyzed(
+                test_url, incident["correlation_key"], incident["severity_floor"] + 1
+            )
+
+        # Same members (or more): the analysis stands.
+        grown = [dict(i) for i in incidents]
+        grown[incidents.index(target)]["event_uids"] = [
+            *target["event_uids"],
+            "f-new",
+        ]
+        upsert_incidents(test_url, grown)
+        assert _analysis_state(test_url, key) == ("done", "malicious", floor + 1, 2)
+
+        # One member moved away: back to pending, analysis rows gone.
+        shrunk = dict(target)
+        shrunk["event_uids"] = target["event_uids"][:-1]
+        upsert_incidents(test_url, [shrunk, other])
+        assert _analysis_state(test_url, key) == ("pending", None, floor, 0)
+        with psycopg.connect(test_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT summary, response, language FROM incidents"
+                    " WHERE correlation_key = %s",
+                    (key,),
+                )
+                assert cur.fetchone() == (None, None, None)
+        other_key = other["correlation_key"]
+        assert _analysis_state(test_url, other_key) == (
+            "done",
+            "malicious",
+            other["severity_floor"] + 1,
+            2,
+        )
+    finally:
+        _drop_database(admin_url, name)

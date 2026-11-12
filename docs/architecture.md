@@ -206,7 +206,9 @@ local rule id range 100000-120000) and validated with
    the decoded `command` field, auditd matching `full_log`), the RAW
    `full_log` lines of the backtest target events plus a documented
    baseline sample (every plausible-match same-decoder line plus a
-   capped context sample, resolved through replay provenance),
+   capped context sample, resolved through replay provenance, or,
+   for a live store, from each event's stored `raw_data`; a line
+   truncated at ingest is refused as a target),
    `expected.json` with the Sigma engine's own must-fire flags, and
    a plain-text deploy plan.
 3. The operator pastes the group into `local_rules.xml`, runs
@@ -428,7 +430,10 @@ or model inputs. Details: `datasets/README.md`.
   mapper, writes events and findings into a live replay-format store
   (`--store`, default `data/live`; provenance is the index name plus
   the document id instead of a file and line), correlates the store
-  into incidents and upserts them. Findings come from each alert's
+  into incidents and upserts them (by correlation key; an incident
+  that loses members, as after a correlation setting changes, returns
+  to pending with its model analysis removed, while one that only
+  grows keeps it). Findings come from each alert's
   own rule block; the Sigma engine over live events stays out of this
   path. Bounded per cycle: page size (`--page-size`, max 1000), max
   documents (`--max-docs`), backoff with jitter on indexer errors, a
@@ -442,6 +447,18 @@ or model inputs. Details: `datasets/README.md`.
   `CORRELATION_MAX_SPAN_HOURS` /
   `CORRELATION_AUTH_FAILURE_THRESHOLD` (else the correlate
   defaults), so the poll never requires model settings to run.
+  Operator sessions (`corvus/correlate/operator.py`, off unless
+  `CORVUS_OPERATOR_SOURCES` lists the networks the operator
+  administers from): a successful login from a listed network opens
+  a session for its host and user; inside it, findings naming only
+  that host and user, with remote IPs only from the list, mapping
+  only to T1078, T1021 or T1548 (or to no technique) and carrying no
+  injection signal are marked. A login for the same host and user
+  from an unlisted address in the window voids the session. Marked
+  findings join only each other, so administration never joins an
+  attack; an incident made of them gets the `operator_session`
+  factor, an Informational floor and an "Operator session" title,
+  and the sweep never analyzes it automatically.
   Learned-rule attribution (`corvus/live/attribution.py`): a finding
   is a learned-rule finding ONLY when its alert carries a Corvus
   group (`corvus_shadow`, `corvus_active` or `corvus_<sigma id>`) —

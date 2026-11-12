@@ -506,6 +506,42 @@ def test_mp_title_pluralization() -> None:
     assert double["title"] == "Discovery on web01 (2 findings)"
 
 
+def test_mp_title_names_host_with_most_findings() -> None:
+    """The first finding's host no longer names a cross-host incident."""
+    attack = _mp_attack()
+    members = [
+        _mp_make_finding("h1", 0, ["T1083"], host="wazuh01"),
+        _mp_make_finding("h2", 1, ["T1083"], host="web01"),
+        _mp_make_finding("h3", 2, ["T1083"], host="web01"),
+        _mp_make_finding("h4", 3, ["T1083"], host="web01"),
+        _mp_make_finding("h5", 4, ["T1083"], host="db01"),
+    ]
+    (incident,) = correlate_findings(members, {}, attack)
+    assert incident["entity_keys"]["hosts"] == ["db01", "wazuh01", "web01"]
+    assert incident["title"] == "Discovery on web01 and 2 other hosts (5 findings)"
+    (one_other,) = correlate_findings(members[:3], {}, attack)
+    assert one_other["title"] == "Discovery on web01 and 1 other host (3 findings)"
+
+
+def test_mp_title_tie_counts_hosts() -> None:
+    """A tie at the top names no single host."""
+    attack = _mp_attack()
+    members = [
+        _mp_make_finding("t1", 0, ["T1083"], host="wazuh01"),
+        _mp_make_finding("t2", 1, ["T1083"], host="web01"),
+    ]
+    (incident,) = correlate_findings(members, {}, attack)
+    assert incident["title"] == "Discovery on 2 hosts (2 findings)"
+
+
+def test_mp_title_without_host() -> None:
+    attack = _mp_attack()
+    (incident,) = correlate_findings(
+        [_mp_make_finding("n1", 0, ["T1083"], host=None)], {}, attack
+    )
+    assert incident["title"] == "Discovery on unknown host (1 finding)"
+
+
 def test_mp_score_breadth_three_exact() -> None:
     """Kills: breadth step changed (score must be floor + 0.1/extra, 2dp)."""
     attack = _mp_attack()

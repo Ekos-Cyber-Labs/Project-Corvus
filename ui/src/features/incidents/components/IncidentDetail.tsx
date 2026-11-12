@@ -44,6 +44,7 @@ const FACTOR_NAMES: Record<string, string> = {
   learned_rule_muting: "Learned rule muting",
   attack_unknown_tactics: "Unknown tactics",
   unresolved_findings: "Unresolved findings",
+  operator_session: "Operator session",
 };
 function factorLabel(name: string): string {
   return FACTOR_NAMES[name] ?? name;

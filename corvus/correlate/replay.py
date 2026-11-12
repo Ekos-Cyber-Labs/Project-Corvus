@@ -14,6 +14,7 @@ is the caller's job (see :mod:`corvus.state.incidents`).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +24,7 @@ from pydantic import TypeAdapter
 
 from corvus.adapters.replay.schema import events_dir, findings_dir
 from corvus.adapters.siem import MAX_QUERY_LIMIT
+from corvus.correlate.operator import OperatorNetwork, operator_sources_from_env
 from corvus.normalize.ocsf import DetectionFinding, OcsfEvent
 
 if TYPE_CHECKING:
@@ -144,12 +146,14 @@ def correlate_replay_store(
     attack_path: str | Path = "data/attack/enterprise.json",
     settings: Settings | None = None,
     attack: AttackDictionary | None = None,
+    operator_sources: Sequence[OperatorNetwork] | None = None,
 ) -> list[Incident]:
     """Correlate every replay finding into candidate incidents.
 
     The Authentication context window is the findings' time range
     padded below by the session gap, so factor 4 sees failures just
-    before the first finding of each incident.
+    before the first finding of each incident. ``operator_sources``
+    defaults to ``CORVUS_OPERATOR_SOURCES`` (unset: no marking).
     """
     from corvus.attack import load_dictionary
     from corvus.correlate import correlate_findings
@@ -179,4 +183,9 @@ def correlate_replay_store(
         session_gap=session_gap,
         max_span=max_span,
         auth_failure_threshold=threshold,
+        operator_sources=(
+            operator_sources
+            if operator_sources is not None
+            else operator_sources_from_env()
+        ),
     )

@@ -245,6 +245,8 @@ class Candidate:
     severity_floor: int
     event_count: int
     has_injection: bool
+    #: Made only of operator-session findings (``operator_session`` factor).
+    operator_session: bool = False
 
 
 def decide(
@@ -262,8 +264,12 @@ def decide(
     ``min_floor``, or when it carries an injection signal and
     ``always_analyze_injection`` is on; the caller ranks candidates
     (floor descending, event count descending) and counts analyses,
-    so reaching ``max_analyses`` yields ``skipped_policy``.
+    so reaching ``max_analyses`` yields ``skipped_policy``. An
+    operator-session incident is never analyzed automatically
+    (``skipped_policy`` / ``operator_session``), whatever the policy.
     """
+    if incident.operator_session:
+        return "skipped_policy", "operator_session"
     if spent_usd >= policy.spend_cap_usd:
         return "skipped_budget", "over_spend_cap"
     qualifies = incident.severity_floor >= policy.min_floor or (
@@ -295,7 +301,8 @@ def _pending_candidates(database_url: str, before: dict[int, int]) -> list[Candi
                 "SELECT i.id, i.severity_floor,"
                 " COALESCE(jsonb_array_length(i.event_uids), 0),"
                 " EXISTS(SELECT 1 FROM incident_signals s"
-                " WHERE s.incident_id = i.id AND s.kind = 'injection')"
+                " WHERE s.incident_id = i.id AND s.kind = 'injection'),"
+                " COALESCE(i.severity_factors ? 'operator_session', false)"
                 " FROM incidents i WHERE i.ai_status = 'pending'"
             )
             rows = cur.fetchall() or []
@@ -311,6 +318,7 @@ def _pending_candidates(database_url: str, before: dict[int, int]) -> list[Candi
                     severity_floor=int(row[1]),
                     event_count=count,
                     has_injection=bool(row[3]),
+                    operator_session=bool(row[4]),
                 )
             )
     out.sort(key=lambda c: (-c.severity_floor, -c.event_count, c.incident_id))
