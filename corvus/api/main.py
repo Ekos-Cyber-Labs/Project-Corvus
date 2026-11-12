@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
-from corvus.adapters.wazuh.client import _tls_context
+from corvus.adapters.wazuh.client import IndexerError, ReadOnlyIndexerClient
 from corvus.settings import get_settings
 
 app = FastAPI(title="corvus-api")
@@ -125,16 +126,32 @@ def check_endpoint(name: str, base_url: str | None) -> dict[str, Any]:
         return {"reachable": False, "detail": type(exc).__name__}
 
 
-def check_wazuh_indexer(base_url: str | None) -> dict[str, Any]:
-    """Probe the Wazuh indexer root without sending credentials.
+#: Index pattern the read probe searches: the alerts the sweep reads.
+WAZUH_PROBE_INDEX = "wazuh-alerts-4.x-*"
 
-    GETs the base URL only (no path suffix: ``/models`` is a model
-    endpoint path and 404s on an indexer). TLS verifies against the
+
+def check_wazuh_indexer(
+    base_url: str | None,
+    username: str | None = None,
+    password: str | None = None,
+    *,
+    transport: Any = None,
+) -> dict[str, Any]:
+    """Probe the Wazuh indexer with the sweep's read credentials.
+
+    Runs one zero-hit search (``size: 0``) on
+    :data:`WAZUH_PROBE_INDEX` through the same read-only client the
+    sweep uses, so a pass means reachable, authenticated and allowed to
+    read alerts. Only ``scheme://host[:port]`` of ``base_url`` is used
+    (userinfo, path and query are dropped). TLS verifies against the
     ``WAZUH_INDEXER_CA`` bundle when set and the default store
-    otherwise; verification is never disabled. Any HTTP answer below
-    500 — including 401 — counts as reachable: the endpoint is alive,
-    only the (unsent) credentials would be refused. Every failure
-    reports the exception class only, never the message or any URL.
+    otherwise; verification is never disabled, and only ``https`` is
+    accepted. ``auth`` is ``"ok"`` on success, ``"rejected"`` on HTTP
+    401/403 (the indexer answered but refused the credentials: never
+    reported as connected) and ``"missing"`` when the user or password
+    is unset (nothing is sent). Every failure reports an HTTP status,
+    a fixed text or an exception class name only, never a message,
+    a URL or a credential.
     """
     if not base_url:
         return {"reachable": False, "detail": "wazuh_indexer URL is not set"}
@@ -150,25 +167,42 @@ def check_wazuh_indexer(base_url: str | None) -> dict[str, Any]:
         probe = f"{scheme}://{host}{port}"
     except Exception:
         return {"reachable": False, "detail": "invalid wazuh_indexer URL"}
-    try:
-        ca_path = os.environ.get("WAZUH_INDEXER_CA")
-        verify: Any = True
-        if ca_path:
-            from pathlib import Path
-
-            if not Path(ca_path).is_file():
-                return {"reachable": False, "detail": "FileNotFoundError"}
-            verify = _tls_context(ca_path)
-    except Exception as exc:
-        return {"reachable": False, "detail": type(exc).__name__}
-    try:
-        response = httpx2.get(probe, timeout=3.0, verify=verify)
+    if scheme != "https":
+        return {"reachable": False, "detail": "wazuh_indexer URL must use https"}
+    if not username or not password:
         return {
-            "reachable": response.status_code < 500,
-            "detail": f"HTTP {response.status_code}",
+            "reachable": False,
+            "detail": "wazuh_indexer credentials are not set",
+            "auth": "missing",
         }
+    try:
+        client = ReadOnlyIndexerClient(
+            probe,
+            username,
+            password,
+            ca_path=os.environ.get("WAZUH_INDEXER_CA") or None,
+            timeout=httpx2.Timeout(3.0),
+            max_retries=0,
+            transport=transport,
+        )
     except Exception as exc:
         return {"reachable": False, "detail": type(exc).__name__}
+    try:
+        with client:
+            client.search(WAZUH_PROBE_INDEX, {"size": 0, "track_total_hits": False})
+    except IndexerError as exc:
+        if exc.status in (401, 403):
+            return {
+                "reachable": True,
+                "detail": f"HTTP {exc.status}",
+                "auth": "rejected",
+            }
+        if exc.status is not None:
+            return {"reachable": False, "detail": f"HTTP {exc.status}"}
+        return {"reachable": False, "detail": exc.transport or "IndexerError"}
+    except Exception as exc:
+        return {"reachable": False, "detail": type(exc).__name__}
+    return {"reachable": True, "detail": "HTTP 200", "auth": "ok"}
 
 
 def _misconfigured(detail: str = "invalid configuration") -> dict[str, Any]:
@@ -1054,10 +1088,16 @@ def _redacted_address(url: str | None) -> str | None:
         return None
 
 
-def _connection_state(url: str | None, reachable: bool) -> str:
+def _connection_state(url: str | None, check: Mapping[str, Any]) -> str:
+    """Map one check to a settings state; rejected credentials never pass."""
     if not url:
         return "not_configured"
-    return "connected" if reachable else "unreachable"
+    auth = check.get("auth")
+    if auth == "missing":
+        return "no_credentials"
+    if auth == "rejected":
+        return "auth_failed"
+    return "connected" if check.get("reachable") is True else "unreachable"
 
 
 def _sweep_tables_exist(cur: Any) -> bool:
@@ -1391,7 +1431,11 @@ def _endpoint_entry(name: str, url: str | None, kind: str) -> dict[str, Any]:
         check = check_database(url)
         display = _redacted_address(url)
     elif kind == "wazuh":
-        check = check_wazuh_indexer(url)
+        check = check_wazuh_indexer(
+            url,
+            os.environ.get("WAZUH_INDEXER_USER"),
+            os.environ.get("WAZUH_INDEXER_PASSWORD"),
+        )
         display = _redacted_address(url)
     else:
         check = check_endpoint(name, url)
@@ -1399,7 +1443,7 @@ def _endpoint_entry(name: str, url: str | None, kind: str) -> dict[str, Any]:
     return {
         "name": name,
         "address": display,
-        "state": _connection_state(url, bool(check.get("reachable"))),
+        "state": _connection_state(url, check),
     }
 
 

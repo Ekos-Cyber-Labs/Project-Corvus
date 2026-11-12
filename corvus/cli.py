@@ -496,7 +496,10 @@ def build_parser() -> argparse.ArgumentParser:
     export_wazuh.add_argument(
         "--data-dir",
         default="data",
-        help="Dataset root for provenance files (default: %(default)s).",
+        help=(
+            "Dataset root for replay provenance files; live stores read each"
+            " event's stored raw_data instead (default: %(default)s)."
+        ),
     )
     export_wazuh.add_argument(
         "--ruleset-dir",

@@ -59,6 +59,31 @@ describe("SettingsPage", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("input[type=checkbox]:disabled")).toBeNull();
   });
+  it("never shows rejected or missing indexer credentials as connected", async () => {
+    for (const [state, label, hint] of [
+      ["auth_failed", "Credentials rejected", /refused the read user/],
+      ["no_credentials", "No credentials", /Set the indexer read user/],
+    ] as const) {
+      vi.stubGlobal("fetch", async (input: unknown) => {
+        const path = String(input).split("?")[0];
+        if (path === "/api/settings") {
+          const view = settingsView();
+          view.connections = [{ name: "wazuh_indexer", address: "https://wazuh.example.com:9200", state }];
+          return { ok: true, status: 200, json: async () => view };
+        }
+        if (path === "/api/sweep/status") return { ok: true, status: 200, json: async () => sweepStatus() };
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+      });
+      window.location.hash = "#/settings";
+      const { unmount } = render(<App />);
+      expect(await screen.findByText(label)).toBeTruthy();
+      expect(screen.getByText(hint)).toBeTruthy();
+      expect(screen.queryByText("Connected")).toBeNull();
+      expect(screen.queryByText("Not configured")).toBeNull();
+      unmount();
+      vi.unstubAllGlobals();
+    }
+  });
   it("leaks no secrets in the connections card", async () => {
     stubSettings();
     window.location.hash = "#/settings";

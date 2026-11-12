@@ -15,14 +15,21 @@ const CONNECTION_LABELS: Record<string, { title: string; note?: string }> = {
 };
 function connectionClass(state: string): string {
   if (state === "connected") return pageStyles.connected;
-  if (state === "unreachable") return pageStyles.unreachable;
+  if (state === "unreachable" || state === "auth_failed") return pageStyles.unreachable;
   return pageStyles.unknown;
 }
 function connectionText(state: string): string {
   if (state === "connected") return "Connected";
   if (state === "unreachable") return "Unreachable";
+  if (state === "auth_failed") return "Credentials rejected";
+  if (state === "no_credentials") return "No credentials";
   return "Not configured";
 }
+const WAZUH_HINTS: Record<string, string> = {
+  unreachable: "Start the SSH tunnel or check the address; see docs/wazuh.md",
+  auth_failed: "The indexer answered but refused the read user; check the user and its read role (docs/wazuh.md)",
+  no_credentials: "Set the indexer read user in the Corvus environment; see docs/wazuh.md",
+};
 export function SettingsPage() {
   const { settings, sweep, state, retry } = useSettingsPage();
   const { choice, setTheme } = useTheme();
@@ -68,7 +75,7 @@ export function SettingsPage() {
                     <span title={mask(c.name)}>{CONNECTION_LABELS[c.name]?.title ?? c.name}</span>
                     <span className="mono">{c.address ? mask(c.address) : "—"}</span>
                     <span className={connectionClass(c.state)}>{connectionText(c.state)}</span>
-                    {c.name === "wazuh_indexer" && c.state === "unreachable" ? <span className={`muted ${pageStyles.hint}`}>Start the SSH tunnel or check the address; see docs/wazuh.md</span> : null}
+                    {c.name === "wazuh_indexer" && Object.hasOwn(WAZUH_HINTS, c.state) ? <span className={`muted ${pageStyles.hint}`}>{WAZUH_HINTS[c.state]}</span> : null}
                   </li>
                 ))}
               </ul>

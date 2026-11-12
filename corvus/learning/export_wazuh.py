@@ -18,14 +18,22 @@ rule entirely in memory (a refusal writes nothing anywhere):
   from :envvar:`CORVUS_WAZUH_LOGTEST_CMD`.
 
 Line selection (documented, deterministic): every bundled line
-resolves through the replay provenance ``(file, line)`` numbers.
+resolves through the store's provenance. A replay store names a
+dataset ``(file, line)`` and the line is read from that archive file
+under ``data_dir``; a live store (:mod:`corvus.live.store`) names the
+indexer ``(index, doc_id)`` and the line is the event's stored
+``raw_data`` (the Wazuh document as mapped). A ``raw_data`` whose
+``full_log``, ``location``, ``decoder`` or ``agent`` was truncated
+at ingest is refused for a target and counted as skipped in the
+baseline: a capped line would not be the line Wazuh sees.
 Targets are the rule's backtest target events (chain store). The
 baseline sample holds every mapped baseline line from the
 process-execution decoders (``sudo``, ``auditd``) holding a rule
 literal in plain or hex form (the plausible-match set, uncapped so
 nothing plausible is silently dropped), plus the first
 ``BASELINE_CONTEXT_CAP`` other mapped lines of those decoders in
-``(file, line)`` order as must-not-fire context. Unmapped raw lines
+``(file, line)`` order (live stores: events file, then row order) as
+must-not-fire context. Unmapped raw lines
 carry no Sigma verdict and are excluded on purpose. Counts land in
 ``expected.json`` so a blown-up plausible set is visible.
 """
@@ -35,7 +43,7 @@ from __future__ import annotations
 import gzip
 import json
 import tempfile
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,7 +60,10 @@ __all__ = [
     "XML_NAME",
     "BundleLine",
     "ExportError",
+    "RawSource",
     "build_bundle",
+    "load_provenance",
+    "load_sources",
     "read_raw_doc",
     "sigma_matches",
     "write_bundle",
@@ -75,8 +86,29 @@ BASELINE_CONTEXT_CAP = 200
 MANAGER_RULES_PATH = "/var/ossec/etc/rules/local_rules.xml"
 
 
+#: ``raw_data`` paths a bundle line is built from; truncation of any
+#: of them (``unmapped["wazuh.raw_data_truncated"]``) disqualifies it.
+_BUNDLE_RAW_PATHS = ("$.full_log", "$.location", "$.decoder", "$.agent")
+
+
 class ExportError(RuntimeError):
     """The bundle cannot be built (nothing is written)."""
+
+
+@dataclass(frozen=True)
+class RawSource:
+    """Where one raw line lives: a dataset file line or an indexer doc."""
+
+    file: str | None = None
+    line: int | None = None
+    index: str | None = None
+    doc_id: str | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        """Return the ``expected.json`` ``source`` object."""
+        if self.file is not None:
+            return {"file": self.file, "line": self.line}
+        return {"index": self.index, "doc_id": self.doc_id}
 
 
 @dataclass(frozen=True)
@@ -89,8 +121,7 @@ class BundleLine:
     location: str
     agent: Mapping[str, Any]
     log: str
-    source_file: str
-    source_line: int
+    source: RawSource
     must_fire: bool
 
 
@@ -135,17 +166,133 @@ def read_raw_doc(data_dir: str | Path, file: str, line: int) -> dict[str, Any]:
     return doc
 
 
-def load_provenance(replay_dir: str | Path) -> dict[str, tuple[str, int]]:
-    """Map every event uid in a replay store to ``(file, line)``."""
+def _read_parquet_rows(
+    path: Path, columns: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Read one store Parquet file; raise :class:`ExportError` if broken."""
     import pyarrow.parquet as pq
 
-    index: dict[str, tuple[str, int]] = {}
-    for path in sorted(Path(replay_dir, "provenance").glob("*.parquet")):
-        for row in pq.read_table(path).to_pylist():
+    try:
+        rows: list[dict[str, Any]] = pq.read_table(path, columns=columns).to_pylist()
+    except Exception as exc:
+        raise ExportError(f"cannot read store file {path.name}: {exc}") from None
+    return rows
+
+
+def load_sources(store_dir: str | Path) -> dict[str, RawSource]:
+    """Map every uid in a replay or live store to its :class:`RawSource`.
+
+    Replay rows carry ``file`` + ``line``; live rows carry ``index`` +
+    ``doc_id``. A row naming neither raises :class:`ExportError`.
+    """
+    sources: dict[str, RawSource] = {}
+    for path in sorted(Path(store_dir, "provenance").glob("*.parquet")):
+        for row in _read_parquet_rows(path):
             uid = row.get("uid")
-            if isinstance(uid, str) and uid:
-                index[uid] = (str(row.get("file")), int(row.get("line")))
-    return index
+            if not isinstance(uid, str) or not uid:
+                continue
+            file, line = row.get("file"), row.get("line")
+            index, doc_id = row.get("index"), row.get("doc_id")
+            if (
+                isinstance(file, str)
+                and file
+                and isinstance(line, int)
+                and not isinstance(line, bool)
+            ):
+                sources[uid] = RawSource(file=file, line=line)
+            elif (
+                isinstance(index, str) and index and isinstance(doc_id, str) and doc_id
+            ):
+                sources[uid] = RawSource(index=index, doc_id=doc_id)
+            else:
+                raise ExportError(
+                    f"provenance for {uid} names neither a file line"
+                    " nor an indexer document"
+                )
+    return sources
+
+
+def load_provenance(replay_dir: str | Path) -> dict[str, tuple[str, int]]:
+    """Map every file-backed uid in a replay store to ``(file, line)``."""
+    return {
+        uid: (source.file, source.line)
+        for uid, source in load_sources(replay_dir).items()
+        if source.file is not None and source.line is not None
+    }
+
+
+def _raw_doc_from_event(uid: str, event_json: Any) -> dict[str, Any]:
+    """Return the Wazuh document kept in one stored event's ``raw_data``.
+
+    Raises :class:`ExportError` when the record is not JSON, carries
+    no ``raw_data`` object, or had a bundle field truncated at ingest.
+    """
+    try:
+        event = json.loads(event_json) if isinstance(event_json, str) else None
+    except ValueError, RecursionError:
+        event = None
+    if not isinstance(event, dict):
+        raise ExportError(f"stored event {uid} is not a JSON object")
+    raw = event.get("raw_data")
+    try:
+        doc = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError, RecursionError:
+        doc = None
+    if not isinstance(doc, dict):
+        raise ExportError(f"stored event {uid} has no raw_data document")
+    unmapped = event.get("unmapped")
+    truncated = (
+        unmapped.get("wazuh.raw_data_truncated") if isinstance(unmapped, dict) else None
+    )
+    if isinstance(truncated, dict):
+        for path in sorted(str(key) for key in truncated):
+            if any(
+                path == prefix or path.startswith((f"{prefix}.", f"{prefix}["))
+                for prefix in _BUNDLE_RAW_PATHS
+            ):
+                raise ExportError(
+                    f"raw_data of {uid} was truncated at ingest ({path});"
+                    " the full line is only in the indexer"
+                )
+    return doc
+
+
+def _iter_stored_raw(
+    store_dir: str | Path, uids: Collection[str]
+) -> Iterator[tuple[str, dict[str, Any] | ExportError]]:
+    """Yield ``(uid, doc or error)`` for ``uids`` in stored-events order."""
+    for path in sorted(Path(store_dir, "events").glob("*.parquet")):
+        for row in _read_parquet_rows(path, ["uid", "event_json"]):
+            uid = row.get("uid")
+            if not isinstance(uid, str) or uid not in uids:
+                continue
+            try:
+                yield uid, _raw_doc_from_event(uid, row.get("event_json"))
+            except ExportError as exc:
+                yield uid, exc
+
+
+def _resolve_docs(
+    store_dir: str | Path,
+    data_dir: str | Path,
+    sources: Mapping[str, RawSource],
+    uids: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    """Return the raw document of every uid; raise :class:`ExportError`."""
+    docs: dict[str, dict[str, Any]] = {}
+    from_store = {uid for uid in uids if sources[uid].file is None}
+    for uid, found in _iter_stored_raw(store_dir, from_store):
+        if isinstance(found, ExportError):
+            raise found
+        docs[uid] = found
+    missing = sorted(from_store - set(docs))
+    if missing:
+        raise ExportError(f"target event {missing[0]} has no stored record")
+    for uid in uids:
+        source = sources[uid]
+        if source.file is not None and source.line is not None:
+            docs[uid] = read_raw_doc(data_dir, source.file, source.line)
+    return docs
 
 
 def sigma_matches(
@@ -207,8 +354,7 @@ def _bundle_line(
     key: int,
     uid: str,
     doc: Mapping[str, Any],
-    source_file: str,
-    source_line: int,
+    source: RawSource,
     matched: set[str],
 ) -> BundleLine:
     """Build one bundle line; raise :class:`ExportError` when rawless."""
@@ -232,23 +378,31 @@ def _bundle_line(
         location=location,
         agent=dict(agent),
         log=log,
-        source_file=source_file,
-        source_line=source_line,
+        source=source,
         must_fire=uid in matched,
     )
 
 
-def _iter_baseline_docs(baseline_dir: str | Path, data_dir: str | Path) -> Any:
-    """Yield ``(file, line, doc)`` over baseline source files, once each."""
-    seen: set[str] = set()
-    for path in sorted(Path(baseline_dir, "provenance").glob("*.parquet")):
-        import pyarrow.parquet as pq
+def _iter_baseline_docs(
+    baseline_dir: str | Path,
+    data_dir: str | Path,
+    sources: Mapping[str, RawSource],
+) -> Iterator[tuple[str, RawSource, dict[str, Any] | None]]:
+    """Yield ``(uid, source, doc)`` over every mapped baseline line.
 
-        for row in pq.read_table(path, columns=["file"]).to_pylist():
-            file = str(row.get("file"))
-            if file not in seen:
-                seen.add(file)
-    for file in sorted(seen):
+    File-backed lines come first (each archive file read once, in
+    ``(file, line)`` order; unmapped or non-JSON lines are skipped).
+    Indexer-backed lines follow in stored-events order; ``doc`` is
+    ``None`` when their ``raw_data`` is unusable (counted as skipped).
+    """
+    by_location: dict[tuple[str, int], str] = {}
+    from_store: set[str] = set()
+    for uid, source in sources.items():
+        if source.file is not None and source.line is not None:
+            by_location[(source.file, source.line)] = uid
+        else:
+            from_store.add(uid)
+    for file in sorted({file for file, _ in by_location}):
         base = Path(data_dir).resolve()
         candidate = (base / file).resolve()
         try:
@@ -263,14 +417,17 @@ def _iter_baseline_docs(baseline_dir: str | Path, data_dir: str | Path) -> Any:
             raise ExportError(f"cannot read archive file {file!r}: {exc}") from None
         with handle:
             for lineno, text in enumerate(handle, start=1):
-                if not text.strip():
-                    continue
+                mapped = by_location.get((file, lineno))
+                if mapped is None or not text.strip():
+                    continue  # unmapped lines carry no Sigma verdict
                 try:
                     doc = json.loads(text)
                 except ValueError:
                     continue
                 if isinstance(doc, dict):
-                    yield file, lineno, doc
+                    yield mapped, sources[mapped], doc
+    for uid, found in _iter_stored_raw(baseline_dir, from_store):
+        yield uid, sources[uid], None if isinstance(found, ExportError) else found
 
 
 def render_deploy_plan(
@@ -385,37 +542,41 @@ def build_bundle(
         raise ExportError(f"{report.code}: {report.reason}")
     assert report.native_rule_ids is not None
     matched = sigma_matches(str(row.get("sigma_text") or ""), chain_dir, baseline_dir)
-    chain_prov = load_provenance(chain_dir)
-    lines: list[BundleLine] = []
-    key = 0
-    for uid in _target_uids(row):
-        if uid not in chain_prov:
-            raise ExportError(f"target event {uid} is not in the chain store")
-        source_file, source_line = chain_prov[uid]
-        doc = read_raw_doc(data_dir, source_file, source_line)
-        lines.append(_bundle_line(key, uid, doc, source_file, source_line, matched))
-        key += 1
+    chain_sources = load_sources(chain_dir)
+    targets = _target_uids(row)
+    for uid in targets:
+        if uid not in chain_sources:
+            raise ExportError(
+                f"target event {uid} is not in the chain store {str(chain_dir)!r}"
+                " (pass the store the rule was learned from)"
+            )
     # Every other chain event the Sigma engine matches is a
     # must-fire line too, even when the proposal did not cite it.
-    for uid in sorted(set(matched) & set(chain_prov) - {e.event_uid for e in lines}):
-        source_file, source_line = chain_prov[uid]
-        doc = read_raw_doc(data_dir, source_file, source_line)
-        lines.append(_bundle_line(key, uid, doc, source_file, source_line, matched))
-        key += 1
-    baseline_prov = load_provenance(baseline_dir)
-    by_location = {(f, n): uid for uid, (f, n) in baseline_prov.items()}
+    targets += sorted(set(matched) & set(chain_sources) - set(targets))
+    docs = _resolve_docs(chain_dir, data_dir, chain_sources, targets)
+    lines = [
+        _bundle_line(key, uid, docs[uid], chain_sources[uid], matched)
+        for key, uid in enumerate(targets)
+    ]
+    key = len(lines)
+    baseline_sources = load_sources(baseline_dir)
     terms = _screening_terms(report)
     plausible: list[BundleLine] = []
     context: list[BundleLine] = []
     malformed = 0
-    for file, lineno, doc in _iter_baseline_docs(baseline_dir, data_dir):
+    for baseline_uid, source, maybe_doc in _iter_baseline_docs(
+        baseline_dir, data_dir, baseline_sources
+    ):
+        if baseline_uid in docs:
+            continue  # already bundled as a target (same store passed twice)
+        if maybe_doc is None:
+            malformed += 1
+            continue
+        doc = maybe_doc
         decoder = doc.get("decoder")
         name = decoder.get("name") if isinstance(decoder, dict) else None
         if name not in TARGET_DECODERS:
             continue
-        baseline_uid = by_location.get((file, lineno))
-        if baseline_uid is None:
-            continue  # unmapped lines carry no Sigma verdict
         blob = doc.get("full_log")
         lowered = blob.lower() if isinstance(blob, str) else ""
         try:
@@ -423,8 +584,7 @@ def build_bundle(
                 key + len(plausible) + len(context),
                 baseline_uid,
                 doc,
-                file,
-                lineno,
+                source,
                 matched,
             )
         except ExportError:
@@ -446,8 +606,7 @@ def build_bundle(
                 location=entry.location,
                 agent=entry.agent,
                 log=entry.log,
-                source_file=entry.source_file,
-                source_line=entry.source_line,
+                source=entry.source,
                 must_fire=entry.must_fire,
             )
         )
@@ -498,7 +657,7 @@ def build_bundle(
                 "event_uid": entry.event_uid,
                 "decoder": entry.decoder,
                 "must_fire": entry.must_fire,
-                "source": {"file": entry.source_file, "line": entry.source_line},
+                "source": entry.source.as_json(),
             }
             for entry in renumbered
         ],

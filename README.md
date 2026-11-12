@@ -404,7 +404,11 @@ console at `http://127.0.0.1:8000/`:
   connection (database, Wazuh indexer, triage model, reasoning
   model) as connected, unreachable, or not configured — addresses
   only (`scheme://host[:port]`), secrets never shown, nothing
-  editable. Change policy on the host and restart.
+  editable. Change policy on the host and restart. The Wazuh
+  indexer check runs one zero-hit search on `wazuh-alerts-4.x-*`
+  with the sweep's read user, so it also reports credentials
+  rejected (HTTP 401/403) or not set; only a successful read counts
+  as connected.
 
 ### 9. Rules: propose, backtest, approve to shadow, export, logtest
 

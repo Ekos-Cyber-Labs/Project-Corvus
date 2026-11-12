@@ -81,8 +81,17 @@ class IndexerError(Exception):
 
     Messages name only the operation, the index pattern or endpoint
     kind, and the HTTP status: never credentials, never request bodies
-    (they can carry entity values), never response bodies.
+    (they can carry entity values), never response bodies. ``status``
+    carries the HTTP status and ``transport`` the transport exception
+    class name, when known, so callers branch without parsing text.
     """
+
+    def __init__(
+        self, message: str, *, status: int | None = None, transport: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.transport = transport
 
 
 #: Read operations the client may perform (anything else is refused).
@@ -215,7 +224,8 @@ class ReadOnlyIndexerClient:
             except httpx2.TransportError as exc:
                 raise IndexerError(
                     f"wazuh indexer {label} failed on {target or 'point in time'}: "
-                    f"transport error ({type(exc).__name__})"
+                    f"transport error ({type(exc).__name__})",
+                    transport=type(exc).__name__,
                 ) from None
             try:
                 status = response.status_code
@@ -227,12 +237,14 @@ class ReadOnlyIndexerClient:
                     raise IndexerError(
                         f"wazuh indexer {label} failed on "
                         f"{target or 'point in time'}: HTTP {status} "
-                        f"(retry limit reached)"
+                        f"(retry limit reached)",
+                        status=status,
                     )
                 if status >= 400:
                     raise IndexerError(
                         f"wazuh indexer {label} failed on "
-                        f"{target or 'point in time'}: HTTP {status}"
+                        f"{target or 'point in time'}: HTTP {status}",
+                        status=status,
                     )
                 parsed = response.json()
             except IndexerError:
@@ -253,7 +265,8 @@ class ReadOnlyIndexerClient:
             return parsed
         raise IndexerError(
             f"wazuh indexer {label} failed on {target or 'point in time'}: "
-            f"HTTP {last_status} (retry limit reached)"
+            f"HTTP {last_status} (retry limit reached)",
+            status=last_status,
         )
 
     def _backoff_s(self, status: int, response: httpx2.Response, attempt: int) -> float:

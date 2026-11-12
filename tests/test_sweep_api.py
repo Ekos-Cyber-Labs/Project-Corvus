@@ -8,6 +8,7 @@ for secrets, passwords, userinfo ``@`` in URLs, and env secret values.
 
 from __future__ import annotations
 
+import json
 import shutil
 import socket
 import ssl
@@ -555,7 +556,7 @@ def _wazuh_issue_cert(workdir: Path, ca_key: Path, ca_crt: Path) -> tuple[Path, 
 
 
 class _RootStatusStub:
-    """Minimal TLS stub answering GET / with a fixed status, no auth."""
+    """Minimal TLS stub answering every request with a fixed status."""
 
     def __init__(self, certfile: str, keyfile: str, status: int) -> None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -563,7 +564,8 @@ class _RootStatusStub:
         self._context = context
         self._status = status
         self.seen_auth = False
-        self.seen_paths: list[str] = []
+        self.seen_requests: list[tuple[str, str]] = []
+        self.seen_bodies: list[bytes] = []
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind(("127.0.0.1", 0))
@@ -603,13 +605,27 @@ class _RootStatusStub:
             if not chunk:
                 return
             request += chunk
-        lines = request.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
-        target = lines[0].split(" ", 2)[1]
+        head, body = request.split(b"\r\n\r\n", 1)
+        lines = head.decode("latin-1").split("\r\n")
+        method, target = lines[0].split(" ", 2)[:2]
+        length = 0
+        for line in lines[1:]:
+            name, _, value = line.partition(":")
+            if name.strip().lower() == "content-length":
+                length = int(value.strip())
+        while len(body) < length:
+            chunk = tls.recv(4096)
+            if not chunk:
+                break
+            body += chunk
         self.seen_auth = self.seen_auth or any(
             line.lower().startswith("authorization:") for line in lines[1:]
         )
-        self.seen_paths.append(target.split("?", 1)[0])
-        reason = {200: "OK", 401: "Unauthorized"}.get(self._status, "Error")
+        self.seen_requests.append((method, target.split("?", 1)[0]))
+        self.seen_bodies.append(body)
+        reason = {200: "OK", 401: "Unauthorized", 403: "Forbidden"}.get(
+            self._status, "Error"
+        )
         raw = b"{}"
         tls.sendall(
             f"HTTP/1.1 {self._status} {reason}\r\nContent-Type: application/json\r\n"
@@ -618,18 +634,24 @@ class _RootStatusStub:
         )
 
 
-@WAZUH_TLS
-def test_wazuh_indexer_root_probe_with_lab_ca(
-    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def _wazuh_stub(tmp_path: Path, status: int) -> tuple[_RootStatusStub, Path]:
     ca_key, ca_crt = _wazuh_make_ca(tmp_path)
     srv_key, srv_crt = _wazuh_issue_cert(tmp_path, ca_key, ca_crt)
-    stub = _RootStatusStub(str(srv_crt), str(srv_key), 200).start()
+    return _RootStatusStub(str(srv_crt), str(srv_key), status).start(), ca_crt
+
+
+@WAZUH_TLS
+def test_wazuh_indexer_probe_reads_with_credentials(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub, ca_crt = _wazuh_stub(tmp_path, 200)
     try:
         client = _client(sweep_api_db, monkeypatch)
         monkeypatch.setenv(
             "WAZUH_INDEXER_URL", f"https://wzxu:wzpz9-secret@127.0.0.1:{stub.port}"
         )
+        monkeypatch.setenv("WAZUH_INDEXER_USER", "corvus-reader")
+        monkeypatch.setenv("WAZUH_INDEXER_PASSWORD", "reader-pw-must-not-leak")
         monkeypatch.setenv("WAZUH_INDEXER_CA", str(ca_crt))
         response = client.get("/api/settings")
         assert response.status_code == 200
@@ -637,26 +659,59 @@ def test_wazuh_indexer_root_probe_with_lab_ca(
         entry = {e["name"]: e for e in body["connections"]}["wazuh_indexer"]
         assert entry["state"] == "connected"
         assert entry["address"] == f"https://127.0.0.1:{stub.port}"
-        assert not stub.seen_auth
-        assert stub.seen_paths == ["/"]
-        assert "wzpz9-secret" not in response.text
-        assert "wzxu" not in response.text
+        assert stub.seen_auth
+        # One zero-hit search on the alerts pattern the sweep reads.
+        assert stub.seen_requests == [("POST", "/wazuh-alerts-4.x-*/_search")]
+        assert json.loads(stub.seen_bodies[0])["size"] == 0
+        for secret in ("wzpz9-secret", "wzxu", "corvus-reader", "reader-pw-must"):
+            assert secret not in response.text
     finally:
         stub.stop()
 
 
 @WAZUH_TLS
-def test_wazuh_indexer_401_counts_as_reachable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("status", [401, 403])
+def test_wazuh_indexer_rejected_credentials_are_not_connected(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int
 ) -> None:
-    ca_key, ca_crt = _wazuh_make_ca(tmp_path)
-    srv_key, srv_crt = _wazuh_issue_cert(tmp_path, ca_key, ca_crt)
-    stub = _RootStatusStub(str(srv_crt), str(srv_key), 401).start()
+    stub, ca_crt = _wazuh_stub(tmp_path, status)
     try:
         monkeypatch.setenv("WAZUH_INDEXER_CA", str(ca_crt))
-        result = check_wazuh_indexer(f"https://127.0.0.1:{stub.port}")
-        assert result == {"reachable": True, "detail": "HTTP 401"}
-        assert not stub.seen_auth
+        result = check_wazuh_indexer(
+            f"https://127.0.0.1:{stub.port}", "corvus-reader", "wrong-pw"
+        )
+        assert result == {
+            "reachable": True,
+            "detail": f"HTTP {status}",
+            "auth": "rejected",
+        }
+        assert stub.seen_auth
+        client = _client(sweep_api_db, monkeypatch)
+        monkeypatch.setenv("WAZUH_INDEXER_URL", f"https://127.0.0.1:{stub.port}")
+        monkeypatch.setenv("WAZUH_INDEXER_USER", "corvus-reader")
+        monkeypatch.setenv("WAZUH_INDEXER_PASSWORD", "wrong-pw")
+        body = client.get("/api/settings").json()
+        entry = {e["name"]: e for e in body["connections"]}["wazuh_indexer"]
+        assert entry["state"] == "auth_failed"
+    finally:
+        stub.stop()
+
+
+@WAZUH_TLS
+def test_wazuh_indexer_without_credentials_sends_nothing(
+    sweep_api_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub, ca_crt = _wazuh_stub(tmp_path, 200)
+    try:
+        client = _client(sweep_api_db, monkeypatch)
+        monkeypatch.setenv("WAZUH_INDEXER_URL", f"https://127.0.0.1:{stub.port}")
+        monkeypatch.setenv("WAZUH_INDEXER_CA", str(ca_crt))
+        monkeypatch.delenv("WAZUH_INDEXER_USER", raising=False)
+        monkeypatch.setenv("WAZUH_INDEXER_PASSWORD", "")
+        body = client.get("/api/settings").json()
+        entry = {e["name"]: e for e in body["connections"]}["wazuh_indexer"]
+        assert entry["state"] == "no_credentials"
+        assert stub.seen_requests == []
     finally:
         stub.stop()
 
@@ -665,18 +720,18 @@ def test_wazuh_indexer_401_counts_as_reachable(
 def test_wazuh_indexer_fails_closed_without_ca(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ca_key, ca_crt = _wazuh_make_ca(tmp_path)
-    srv_key, srv_crt = _wazuh_issue_cert(tmp_path, ca_key, ca_crt)
-    stub = _RootStatusStub(str(srv_crt), str(srv_key), 200).start()
+    stub, _ca_crt = _wazuh_stub(tmp_path, 200)
     try:
         monkeypatch.delenv("WAZUH_INDEXER_CA", raising=False)
         url = f"https://wzxu:wzpz9-secret@127.0.0.1:{stub.port}"
-        result = check_wazuh_indexer(url)
+        result = check_wazuh_indexer(url, "corvus-reader", "reader-pw")
         assert result["reachable"] is False
+        assert "auth" not in result
         detail = str(result["detail"])
         assert detail and detail.isidentifier()
         assert "wzpz9-secret" not in detail
         assert "wzxu" not in detail
+        assert not stub.seen_auth
     finally:
         stub.stop()
 
@@ -689,10 +744,17 @@ def test_wazuh_indexer_refused_and_missing_ca(
     closed = probe.getsockname()[1]
     probe.close()
     monkeypatch.delenv("WAZUH_INDEXER_CA", raising=False)
-    refused = check_wazuh_indexer(f"https://127.0.0.1:{closed}")
+    refused = check_wazuh_indexer(f"https://127.0.0.1:{closed}", "u", "p")
     assert refused["reachable"] is False
     assert str(refused["detail"]) and str(refused["detail"]).isidentifier()
     monkeypatch.setenv("WAZUH_INDEXER_CA", str(tmp_path / "absent-ca.pem"))
-    missing = check_wazuh_indexer(f"https://127.0.0.1:{closed}")
+    missing = check_wazuh_indexer(f"https://127.0.0.1:{closed}", "u", "p")
     assert missing == {"reachable": False, "detail": "FileNotFoundError"}
     assert check_wazuh_indexer(None)["reachable"] is False
+    plain = check_wazuh_indexer(f"http://127.0.0.1:{closed}", "u", "p")
+    assert plain == {"reachable": False, "detail": "wazuh_indexer URL must use https"}
+    assert check_wazuh_indexer(f"https://127.0.0.1:{closed}") == {
+        "reachable": False,
+        "detail": "wazuh_indexer credentials are not set",
+        "auth": "missing",
+    }
